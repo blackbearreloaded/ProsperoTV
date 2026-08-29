@@ -43,7 +43,8 @@ typedef enum iptv_stream_result {
 typedef enum iptv_stream_video_codec {
     IPTV_STREAM_VIDEO_UNKNOWN = 0,
     IPTV_STREAM_VIDEO_H264 = 1,
-    IPTV_STREAM_VIDEO_HEVC = 2
+    IPTV_STREAM_VIDEO_HEVC = 2,
+    IPTV_STREAM_VIDEO_VP9 = 3
 } iptv_stream_video_codec_t;
 
 typedef enum iptv_stream_chroma_format {

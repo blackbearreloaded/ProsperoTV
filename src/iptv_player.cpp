@@ -9,6 +9,7 @@
 #include "iptv_input.h"
 #include "iptv_native_backend.h"
 #include "iptv_stream.h"
+#include "iptv_webm.h"
 
 #include <cstddef>
 #include <cstdint>
@@ -192,6 +193,22 @@ bool UrlLooksLikeHls(const char *url)
     return false;
 }
 
+bool UrlLooksLikeWebm(const char *url)
+{
+    if (!url)
+        return false;
+    const char *end = url;
+    while (*end && *end != '?' && *end != '#')
+        ++end;
+    if (end - url < 5)
+        return false;
+    const char *extension = end - 5;
+    return extension[0] == '.' && static_cast<char>(extension[1] | 0x20) == 'w' &&
+           static_cast<char>(extension[2] | 0x20) == 'e' &&
+           static_cast<char>(extension[3] | 0x20) == 'b' &&
+           static_cast<char>(extension[4] | 0x20) == 'm';
+}
+
 bool BufferLooksLikeHls(const std::uint8_t *data, std::size_t bytes)
 {
     if (!data)
@@ -207,6 +224,12 @@ bool BufferLooksLikeHls(const std::uint8_t *data, std::size_t bytes)
     static constexpr char kHeader[] = "#EXTM3U";
     return bytes - at >= sizeof(kHeader) - 1u &&
            std::memcmp(data + at, kHeader, sizeof(kHeader) - 1u) == 0;
+}
+
+bool BufferLooksLikeWebm(const std::uint8_t *data, std::size_t bytes)
+{
+    static constexpr std::uint8_t kEbml[] = {0x1a, 0x45, 0xdf, 0xa3};
+    return data && bytes >= sizeof(kEbml) && std::memcmp(data, kEbml, sizeof(kEbml)) == 0;
 }
 
 int ReadInitialProbe(iptv::http::StreamRequest *request, std::uint8_t *buffer, std::size_t capacity)
@@ -276,6 +299,10 @@ int AdapterOpen(void *context, const iptv_stream_format_t *format)
     {
         config.codec = IPTV_NATIVE_CODEC_HEVC_MAIN8;
     }
+    else if (format->video_codec == IPTV_STREAM_VIDEO_VP9)
+    {
+        config.codec = IPTV_NATIVE_CODEC_VP9_PROFILE0;
+    }
     else
     {
         return -1;
@@ -333,6 +360,24 @@ void AdapterClose(void *context)
     adapter->initialized = false;
 }
 
+std::uint32_t Vp9LevelForDimensions(std::uint32_t width, std::uint32_t height)
+{
+    if (width <= 1920u && height <= 1080u)
+        return 41u;
+    if (width <= 2560u && height <= 1440u)
+        return 50u;
+    if (width <= 3840u && height <= 2160u)
+        return 51u;
+    return 0u;
+}
+
+enum class RunnerMode
+{
+    none,
+    transport_stream,
+    webm
+};
+
 class StreamRunner
 {
   public:
@@ -372,12 +417,89 @@ class StreamRunner
             return false;
         }
         active_ = true;
+        mode_ = RunnerMode::transport_stream;
         return true;
+    }
+
+    bool StartWebm()
+    {
+        if (Close() != 0)
+            return false;
+        if (iptv_native_backend_init(&adapter_.backend) != 0)
+            return false;
+        adapter_.initialized = true;
+        iptv_stream_init(&session_);
+        session_.telemetry.state = IPTV_STREAM_STATE_OPEN;
+        session_.telemetry.last_result = IPTV_STREAM_OK;
+        active_ = true;
+        mode_ = RunnerMode::webm;
+        webm_finished_ = false;
+        return true;
+    }
+
+    bool IsWebm() const
+    {
+        return active_ && mode_ == RunnerMode::webm;
     }
 
     int Push(const void *data, std::size_t bytes)
     {
-        return active_ ? iptv_stream_push(&session_, data, bytes) : IPTV_STREAM_INVALID_STATE;
+        return active_ && mode_ == RunnerMode::transport_stream
+                   ? iptv_stream_push(&session_, data, bytes)
+                   : IPTV_STREAM_INVALID_STATE;
+    }
+
+    int PushWebm(const iptv_webm_video_info_t &video, const iptv_webm_block_t &block)
+    {
+        if (!active_ || mode_ != RunnerMode::webm || !block.data || block.bytes == 0)
+            return IPTV_STREAM_INVALID_STATE;
+        if (!adapter_.opened)
+        {
+            const std::uint32_t level =
+                Vp9LevelForDimensions(video.pixel_width, video.pixel_height);
+            if (!level)
+                return FailWebm(IPTV_STREAM_UNSUPPORTED_FORMAT, "unsupported VP9 WebM dimensions");
+
+            iptv_stream_format_t format{};
+            format.video_codec = IPTV_STREAM_VIDEO_VP9;
+            format.video_stream_type = UINT32_C(0x56503930); // "VP90"
+            format.video_profile = video.profile;
+            format.video_level = level;
+            format.coded_width = video.pixel_width;
+            format.coded_height = video.pixel_height;
+            format.visible_width = video.pixel_width;
+            format.visible_height = video.pixel_height;
+            format.video_bit_depth = 8u;
+            format.video_chroma_format = IPTV_STREAM_CHROMA_420;
+            const int opened = AdapterOpen(&adapter_, &format);
+            if (opened != 0)
+                return FailWebm(IPTV_STREAM_NATIVE_UNAVAILABLE, "native VP9 backend open failed");
+            session_.telemetry.format = format;
+            session_.telemetry.backend_open = 1u;
+            session_.telemetry.state = IPTV_STREAM_STATE_READY;
+        }
+
+        const int submitted = AdapterVideo(&adapter_, block.data, block.bytes, block.pts_us);
+        if (submitted != 0)
+        {
+            ++session_.telemetry.video_submit_errors;
+            return FailWebm(IPTV_STREAM_NATIVE_ERROR, "native VP9 submit failed");
+        }
+        ++session_.telemetry.video_access_units;
+        session_.telemetry.video_bytes += block.bytes;
+        session_.telemetry.last_video_pts_us = block.pts_us;
+        session_.telemetry.state = IPTV_STREAM_STATE_PLAYING;
+        return IPTV_STREAM_OK;
+    }
+
+    void RecordWebmFailure(int result)
+    {
+        if (result >= 0 || session_.telemetry.last_error[0])
+            return;
+        char message[IPTV_STREAM_ERROR_TEXT_BYTES]{};
+        std::snprintf(message, sizeof(message), "WebM: %s",
+                      iptv_webm_result_name(static_cast<iptv_webm_result_t>(result)));
+        FailWebm(IPTV_STREAM_UNSUPPORTED_FORMAT, message);
     }
 
     bool StopRequested()
@@ -439,19 +561,54 @@ class StreamRunner
 
     int Finish()
     {
-        return active_ ? iptv_stream_stop(&session_) : IPTV_STREAM_INVALID_STATE;
+        if (!active_)
+            return IPTV_STREAM_INVALID_STATE;
+        if (mode_ == RunnerMode::transport_stream)
+            return iptv_stream_stop(&session_);
+        if (mode_ != RunnerMode::webm)
+            return IPTV_STREAM_INVALID_STATE;
+        if (webm_finished_)
+            return session_.telemetry.last_result;
+
+        const int drained = adapter_.opened ? AdapterDrain(&adapter_) : -1;
+        ++session_.telemetry.stop_count;
+        webm_finished_ = true;
+        if (drained != 0 || !HasPresentedVideo())
+            return FailWebm(IPTV_STREAM_NATIVE_ERROR, "native VP9 drain failed");
+        session_.telemetry.last_result = IPTV_STREAM_OK;
+        session_.telemetry.state = IPTV_STREAM_STATE_STOPPED;
+        return IPTV_STREAM_OK;
     }
 
     int Close()
     {
         if (active_)
         {
-            const int stop_result = iptv_stream_stop(&session_);
-            const int cleanup_result = iptv_stream_cleanup(&session_);
-            ++player_cleanup_count_;
-            (void)stop_result;
-            RecordCleanupResult(cleanup_result);
+            if (mode_ == RunnerMode::transport_stream)
+            {
+                const int stop_result = iptv_stream_stop(&session_);
+                const int cleanup_result = iptv_stream_cleanup(&session_);
+                ++player_cleanup_count_;
+                (void)stop_result;
+                RecordCleanupResult(cleanup_result);
+            }
+            else if (mode_ == RunnerMode::webm)
+            {
+                const int stop_result = Finish();
+                (void)stop_result;
+                if (adapter_.initialized)
+                    AdapterClose(&adapter_);
+                iptv_native_telemetry_t native{};
+                const int cleanup_result =
+                    NativeTelemetry(&native) ? native.cleanup_result : IPTV_STREAM_NATIVE_ERROR;
+                ++session_.telemetry.cleanup_count;
+                session_.telemetry.last_cleanup_result = cleanup_result;
+                session_.telemetry.backend_open = 0u;
+                ++player_cleanup_count_;
+                RecordCleanupResult(cleanup_result);
+            }
             active_ = false;
+            mode_ = RunnerMode::none;
         }
         if (adapter_.initialized)
             AdapterClose(&adapter_);
@@ -480,6 +637,16 @@ class StreamRunner
     }
 
   private:
+    int FailWebm(int result, const char *message)
+    {
+        session_.telemetry.last_result = result;
+        session_.telemetry.state = IPTV_STREAM_STATE_ERROR;
+        ++session_.telemetry.error_count;
+        std::snprintf(session_.telemetry.last_error, sizeof(session_.telemetry.last_error), "%s",
+                      message ? message : "VP9 WebM playback failed");
+        return result;
+    }
+
     void RecordCleanupResult(int result)
     {
         if (player_cleanup_result_ == 0 && result != 0)
@@ -489,6 +656,8 @@ class StreamRunner
     NativeAdapter adapter_{};
     iptv_stream_session_t session_{};
     bool active_ = false;
+    RunnerMode mode_ = RunnerMode::none;
+    bool webm_finished_ = false;
     std::uint64_t stop_deadline_usec_ = 0;
     std::uint64_t player_cleanup_count_ = 0;
     int player_cleanup_result_ = 0;
@@ -543,6 +712,74 @@ FeedResult FeedRequest(iptv::http::StreamRequest *request, StreamRunner *runner,
         }
     }
     return FeedResult::stopped;
+}
+
+int SubmitWebmVideo(void *context, const iptv_webm_video_info_t *video,
+                    const iptv_webm_block_t *block)
+{
+    auto *runner = static_cast<StreamRunner *>(context);
+    return runner && video && block && runner->PushWebm(*video, *block) == IPTV_STREAM_OK ? 0 : -1;
+}
+
+int RunWebm(iptv::http::StreamRequest *request, StreamRunner *runner,
+            const std::uint8_t *initial_data, std::size_t initial_bytes, std::uint8_t *read_buffer)
+{
+    if (!request || !runner || !initial_data || !initial_bytes || !read_buffer)
+        return -1;
+
+    iptv_webm_parser_t parser{};
+    iptv_webm_init(&parser);
+    iptv_webm_limits_t limits{};
+    iptv_webm_default_limits(&limits);
+    int result = iptv_webm_open(&parser, &limits, SubmitWebmVideo, runner);
+    if (result == IPTV_WEBM_OK)
+        result = iptv_webm_push(&parser, initial_data, initial_bytes);
+
+    unsigned read_failures = 0;
+    std::uint64_t last_presented = runner->PresentedFrames();
+    std::uint64_t last_progress = MonotonicUsec();
+    while (result == IPTV_WEBM_OK && !runner->StopRequested())
+    {
+        const int read = iptv::http::ReadStream(request, read_buffer, kReadBytes);
+        if (read == 0)
+        {
+            result = iptv_webm_finish(&parser);
+            if (result == IPTV_WEBM_OK)
+                result = runner->Finish();
+            break;
+        }
+        if (read < 0)
+        {
+            if (++read_failures >= 3u)
+                result = IPTV_WEBM_TRUNCATED;
+            else
+                sceKernelUsleep(100000u);
+            continue;
+        }
+        read_failures = 0;
+        result = iptv_webm_push(&parser, read_buffer, static_cast<std::size_t>(read));
+        const std::uint64_t presented = runner->PresentedFrames();
+        const std::uint64_t now = MonotonicUsec();
+        if (presented > last_presented)
+        {
+            last_presented = presented;
+            last_progress = now;
+        }
+        else if (last_progress != 0 && now >= last_progress &&
+                 now - last_progress >= kVideoProgressTimeoutUsec)
+        {
+            result = IPTV_WEBM_CALLBACK_ERROR;
+        }
+    }
+    if (result == IPTV_WEBM_OK && runner->StopRequested())
+        result = 1;
+    runner->RecordWebmFailure(result);
+    const int cleanup = iptv_webm_cleanup(&parser);
+    if (cleanup != IPTV_WEBM_OK && result == IPTV_WEBM_OK)
+        result = cleanup;
+    if (result != IPTV_WEBM_OK)
+        return result;
+    return runner->HasPresentedVideo() ? 0 : -1;
 }
 
 bool WaitForRefresh(StreamRunner *runner, std::uint32_t milliseconds)
@@ -792,7 +1029,7 @@ int RunDirect(const char *url, StreamRunner *runner, std::uint8_t *read_buffer, 
     {
         iptv::http::StreamRequest request{};
         const auto status = iptv::http::OpenStream(
-            url, "video/mp2t, application/vnd.apple.mpegurl, */*", &request, headers);
+            url, "video/mp2t, video/webm, application/vnd.apple.mpegurl, */*", &request, headers);
         if (status != iptv::http::Status::ok)
         {
             if (attempt == 2u)
@@ -814,6 +1051,24 @@ int RunDirect(const char *url, StreamRunner *runner, std::uint8_t *read_buffer, 
         {
             iptv::http::CloseStream(&request);
             return RunHls(request.effective_url, runner, read_buffer, playlist_data, headers);
+        }
+        if (UrlLooksLikeWebm(request.effective_url) ||
+            BufferLooksLikeWebm(read_buffer, static_cast<std::size_t>(first)))
+        {
+            if ((attempt != 0u || !runner->IsWebm()) && !runner->StartWebm())
+            {
+                iptv::http::CloseStream(&request);
+                return -1;
+            }
+            const int webm = RunWebm(&request, runner, read_buffer, static_cast<std::size_t>(first),
+                                     read_buffer);
+            iptv::http::CloseStream(&request);
+            if (webm >= 0)
+                return webm;
+            if (attempt == 2u)
+                return webm;
+            sceKernelUsleep(100000u);
+            continue;
         }
         const int pushed = runner->Push(read_buffer, static_cast<std::size_t>(first));
         FeedResult fed = pushed == IPTV_STREAM_REOPEN_REQUIRED ? FeedResult::reopen
@@ -875,7 +1130,7 @@ static int RunPlayer(const char *url, const char *channel_name, const char *user
     else
     {
         runner->SetStopAfter(stop_after_ms);
-        if (!runner->Start())
+        if (!(UrlLooksLikeWebm(url) ? runner->StartWebm() : runner->Start()))
         {
             Notify("IPTV: decoder session initialization failed");
         }
