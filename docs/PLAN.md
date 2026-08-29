@@ -108,7 +108,8 @@ Status: active
 - Acceptance criteria: `A1`, `A2`, and the startup subset of `A3`.
 - Required evidence: exact hashes; title-specific ShadowMount and klog slice;
   rendered screenshot; clean title close; service health.
-- Candidate commit: `c0a3d7f` (initial frozen implementation).
+- Candidate commit: `799eafa` (loader-safe native implementation; executable
+  `PT_LOAD` is `0x3fa430`, below the firmware-6.02 `0x400000` boundary).
 - Validation-record commit: pending.
 
 ## G2: Native H.264/HEVC playback
