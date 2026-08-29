@@ -559,6 +559,9 @@ struct ProgramHeader
 void write_program_header(std::span<std::uint8_t> output, std::size_t index,
                           const ProgramHeader &header)
 {
+    if (header.type == kProgramLoad && header.alignment > 1)
+        require(header.offset % header.alignment == header.address % header.alignment,
+                "PT_LOAD file offset is not congruent with its virtual address");
     const std::size_t at = 0x40 + index * 0x38;
     write_u32(output, at, header.type);
     write_u32(output, at + 4, header.flags);
@@ -620,6 +623,7 @@ Bytes write_executable(const Image &image, std::span<const Stub> stubs, const Op
     std::uint64_t ro_start = std::numeric_limits<std::uint64_t>::max();
     std::uint64_t ro_end = 0;
     std::uint64_t relro_start = std::numeric_limits<std::uint64_t>::max();
+    std::uint64_t relro_file_start = std::numeric_limits<std::uint64_t>::max();
     std::uint64_t relro_content_end = 0;
     std::uint64_t data_start = dynamic_source.address;
     std::uint64_t data_end = data_start + 8;
@@ -651,6 +655,8 @@ Bytes write_executable(const Image &image, std::span<const Stub> stubs, const Op
         else if (relro_section(input.name))
         {
             relro_start = std::min(relro_start, input.address);
+            if (!input.no_bits())
+                relro_file_start = std::min(relro_file_start, input.file_offset);
             relro_content_end = std::max(relro_content_end, end);
         }
         else if (input.writable() || input.no_bits())
@@ -668,6 +674,8 @@ Bytes write_executable(const Image &image, std::span<const Stub> stubs, const Op
     }
     require(relro_start != std::numeric_limits<std::uint64_t>::max(),
             "LLVM-linked image has no GOT/RELRO region");
+    require(relro_file_start != std::numeric_limits<std::uint64_t>::max(),
+            "LLVM-linked image has no stored GOT/RELRO region");
     if (ro_start == std::numeric_limits<std::uint64_t>::max())
     {
         ro_start = align_up(text_end, kPage);
@@ -838,7 +846,7 @@ Bytes write_executable(const Image &image, std::span<const Stub> stubs, const Op
             continue;
         copy_bytes(output, input.file_offset, input.data);
     }
-    const std::uint64_t relro_file = got.file_offset;
+    const std::uint64_t relro_file = relro_file_start;
     copy_bytes(output, relro_file + process_address - relro_start, process_parameters);
     copy_bytes(output, relro_file + blocks_address - relro_start, blocks.data);
     copy_bytes(output, dynamic_file_at(string_address), dynamic_strings);
