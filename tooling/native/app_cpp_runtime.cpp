@@ -15,6 +15,22 @@ extern "C"
     void *malloc(std::size_t size);
     void free(void *address);
     int posix_memalign(void **address, std::size_t alignment, std::size_t size);
+
+    // The clean-room runtime intentionally supplies only the loader-facing
+    // heap contract. Provide calloc in the executable so third-party static
+    // code such as robin_hood never depends on an unpopulated facade callback.
+    void *calloc(std::size_t count, std::size_t size)
+    {
+        if (size != 0 && count > static_cast<std::size_t>(-1) / size)
+            return nullptr;
+        const std::size_t total = count * size;
+        auto *address = static_cast<unsigned char *>(malloc(total == 0 ? 1 : total));
+        if (!address)
+            return nullptr;
+        for (std::size_t i = 0; i < total; ++i)
+            address[i] = 0;
+        return address;
+    }
 }
 
 namespace
