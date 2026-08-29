@@ -108,7 +108,7 @@ Status: active
 - Acceptance criteria: `A1`, `A2`, and the startup subset of `A3`.
 - Required evidence: exact hashes; title-specific ShadowMount and klog slice;
   rendered screenshot; clean title close; service health.
-- Candidate commit: `6c0a458` (initial frozen implementation).
+- Candidate commit: `c0a3d7f` (initial frozen implementation).
 - Validation-record commit: pending.
 
 ## G2: Native H.264/HEVC playback
