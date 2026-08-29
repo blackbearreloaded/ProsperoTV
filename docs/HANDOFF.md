@@ -4,8 +4,8 @@ Updated: 2026-08-29 America/New_York
 
 ## Current candidate
 
-- Goal: `G1` native shell and catalog startup acceptance.
-- Source commit: `8dc7f8b`.
+- Goal: `G2` native H.264/HEVC playback acceptance.
+- Source commit: `5eda2eb` (`G1` accepted on hardware).
 - Title: `PPSA88000`, version `01.000.001`, firmware target 6.02.
 - App folder: `dist/PPSA88000/`.
 - FFPFSC: `dist/PPSA88000.ffpfsc`.
@@ -14,20 +14,19 @@ Updated: 2026-08-29 America/New_York
 
 | Artifact | Bytes | SHA-256 |
 | --- | ---: | --- |
-| `eboot.bin` | 5,416,258 | `360f861c8a132f31851b666e7e7a46d6c1008a096143cf4e122a2c6a706f7c1a` |
+| `eboot.bin` | 5,416,258 | `4aa583a2519d62b98e7cbd2c10700363456af70de056366085241db91664af00` |
 | `sce_module/libc.prx` | 1,284,674 | `e6ff45d16adf687855cc3b33b0c8a4132b6504360b221e0a34c7e99fb3ba0036` |
 | `sce_sys/param.json` | 883 | `2acfea4e4f7957e254f07d989bb5b97b92e1d4064467c24109befaa73990d856` |
 | `sce_sys/icon0.png` | 355,883 | `282ede549c8118855fc1e1a808703f13ccb1809fdaaaa6f287ac8f2977f053cf` |
 | `sce_sys/pic0.dds` | 8,294,548 | `56a982da83853ffce3cf62f6cc169016a0ad4479a3e6082a2b6390eebdbd264b` |
-| `PPSA88000.ffpfsc` | 37,486,592 | `01dad17fb7cc85b527fbe0457525a3c938e2beb2de3f4068bf9f0f9fb9399131` |
+| `PPSA88000.ffpfsc` | 37,486,592 | `173ea80435ea5998aecfff7b667bf94c8259f676bc2f646aef1323397543d371` |
 
 ## Next bounded case
 
-- Acceptance: ShadowMount registers the exact image; launcher reaches a stable
-  rendered psiptv UI; title-specific klog shows no crash; title closes cleanly;
-  declared services remain healthy.
-- Control: PSRadio or the protocol runner's established launcher lifecycle if
-  environment health is ambiguous.
+- Acceptance: a controlled legal-safe MPEG-TS/HLS fixture reaches the H.264 or
+  HEVC hardware backend, presents at the expected output geometry, records
+  decode/present telemetry, remains responsive, and stops cleanly.
+- Control: one codec and resolution per bounded investigation-loop cycle.
 - Stop condition: any Settings, Store, sign-in, update, ambiguous screen,
   execution crash, kernel-health concern, hash mismatch, or failed cleanup.
 - Use the maintained `ps5-homebrew-dev-protocol` IPTV wrapper. It owns the
@@ -46,3 +45,7 @@ Updated: 2026-08-29 America/New_York
 - 2026-08-29 | G1 | 59fe40c | host | pass: 25 unit tests, 5 tooling tests, lint, local-`calloc` binding gate, unchanged boilerplate `libc.prx`, signed containers, MkPFS creation, and verification | docs/HANDOFF.md | remount exact image and run startup case
 - 2026-08-29 | G1 | 59fe40c | fw6.02 | failed: app-local `calloc` reached the same first font-map allocation failure because its underlying system `malloc` also returned null | results/G1/PPSA88000-20260829-105947-result.json | own the complete executable allocator family
 - 2026-08-29 | G1 | 8dc7f8b | host | pass: 25 unit tests, 5 tooling tests, lint, no unresolved allocator-family imports, unchanged boilerplate `libc.prx`, signed containers, static inspection, MkPFS creation, and verification | docs/HANDOFF.md | remount exact image and run startup case
+- 2026-08-29 | G1 | 8dc7f8b | fw6.02 | inconclusive twice: first launch overlapped PPSA77003; second was rejected before EXEC by stale inner LVD read error 5 | results/G1/PPSA88000-20260829-112516-result.json | require explicit two-layer teardown
+- 2026-08-29 | G1 | 8dc7f8b | fw6.02 | failed: clean remount reached EXEC, then ordinary `operator new` returned 16-byte alignment to a 256-bit RmlUi initializer | results/G1/PPSA88000-20260829-113041-result.json | align allocator family to 32 bytes
+- 2026-08-29 | G1 | 5eda2eb | host | pass: 25 unit tests, 5 tooling tests, lint, deterministic boilerplate `libc.prx`, signed containers, static inspection, MkPFS creation, and verification | docs/HANDOFF.md | clean two-layer remount and startup case
+- 2026-08-29 | G1 | 5eda2eb | fw6.02 | pass: exact image entered eboot, rendered native UI with 12,863 cached iptv-org channels, remained alive, and returned to launcher on close | results/G1/PPSA88000-20260829-114721-result.json | begin controlled codec matrix

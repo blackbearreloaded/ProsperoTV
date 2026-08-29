@@ -2,11 +2,9 @@
 
 Status date: 2026-08-29
 
-psiptv has a coherent native application, catalog cache, MPEG-TS/HLS playback
-path, and hardware decoder/presenter backend. It is an integration build, not
-yet a release: the current source still marks stream hardware acceptance as
-unvalidated, and the latest combined application requires a complete PS5
-investigation-loop run.
+psiptv has a hardware-proven native shell and local iptv-org catalog cache plus
+an integrated MPEG-TS/HLS playback and hardware decoder/presenter path. It is
+not yet a release: controlled H.264, HEVC, and VP9 playback acceptance remains.
 
 ## Implemented
 
@@ -49,18 +47,14 @@ adding Profile 2 to the mode table.
 
 ### Hardware acceptance
 
-The mode tables and presenter geometry reflect hardware investigation results,
-but this integrated `PPSA88000` application has not completed its final
-console acceptance pass. The loader now reaches `_start`. Hardware confirmed
-that both required libc dependencies load, but system allocation entry points
-return null under the clean-room boilerplate heap contract. A local `calloc`
-probe confirmed that its underlying system `malloc` fails identically.
-Candidate `8dc7f8b` therefore gives the executable one page-backed allocator
-family with pooled small-object reuse, aligned allocations, and releasable
-large mappings while preserving the boilerplate-generated `libc.prx`
-byte-for-byte. Startup must be rerun, followed by catalog refresh, launcher
-return, repeated channel changes, H.264/HEVC at each geometry, audio/video
-pacing, cancellation, and cleanup on the target console.
+Candidate `5eda2eb` passed the G1 investigation-loop startup case. The exact
+FFPFSC entered `eboot.bin`, rendered the native browser with 12,863 channels
+from the cached iptv-org catalog, remained alive through observation, and
+returned to the launcher on close. Its executable-owned allocator family uses
+32-byte default alignment for the target compiler's AVX initialization stores,
+while the generated boilerplate `libc.prx` remains byte-identical. Controlled
+channel changes, H.264/HEVC at each geometry, audio/video pacing,
+cancellation, and decoder cleanup still require target evidence.
 
 Testing must use the shared PS5 lock and the repository's investigation-loop
 protocol. A crash or black screen requires evidence collection before another
@@ -88,18 +82,15 @@ possible optimization if measurements show startup latency or memory pressure.
 
 ## Next completion gates
 
-1. Run host tests and a clean `make app`, recording the exact artifact digest.
-2. Acquire the shared console lock and execute the investigation-loop startup
-   and launcher-discovery checks for `PPSA88000`.
-3. Validate cached startup and background refresh from a clean `/download0`,
-   then validate relaunch using only the saved SQLite cache.
-4. Exercise H.264 and HEVC at 1080p, 1440p, and 2160p, confirming decoded and
+1. Validate background refresh from a clean `/download0`, then validate a
+   relaunch using only the saved SQLite cache.
+2. Exercise H.264 and HEVC at 1080p, 1440p, and 2160p, confirming decoded and
    presented counts, output-class switching, pacing, audio, stop, and cleanup.
-5. Add a bounded VP9 delivery/container adapter and validate Profile 0 at all
+3. Add a bounded VP9 delivery/container adapter and validate Profile 0 at all
    three configured geometries.
-6. Add and validate the 10-bit AGC presentation path before exposing VP9
+4. Add and validate the 10-bit AGC presentation path before exposing VP9
    Profile 2.
-7. Run long-duration alternate-URL, channel-change, and cancellation tests.
+5. Run long-duration alternate-URL, channel-change, and cancellation tests.
 
 Release readiness requires all applicable gates to pass on hardware without a
 startup crash, resource leak across repeated playback, or stale ShadowMount

@@ -88,15 +88,15 @@ Status: active
 
 | Goal | Outcome | Dependencies | Status |
 | --- | --- | --- | --- |
-| `G1` | Stable native shell, catalog cache, and launcher lifecycle | None | active |
-| `G2` | Complete H.264/HEVC IPTV path and resolution matrix | `G1` | planned |
+| `G1` | Stable native shell, catalog cache, and launcher lifecycle | None | complete |
+| `G2` | Complete H.264/HEVC IPTV path and resolution matrix | `G1` | active |
 | `G3` | Resilience, channel switching, and repeated-run stability | `G2` | planned |
 | `G4` | End-to-end VP9 Profile 0 delivery | `G2` | planned |
 | `G5` | Redistributable VP9 Profile 2/10-bit presentation | `G4` | deferred |
 
 ## G1: Native shell and catalog
 
-- Status: active
+- Status: complete
 - Objective: prove launcher discovery, startup UI, clean first-run catalog
   refresh, cache-first relaunch, controller basics, and deterministic teardown.
 - Requirements advanced: `R1`-`R5`, `R10`, `N1`, `N3`, `N4`.
@@ -108,15 +108,15 @@ Status: active
 - Acceptance criteria: `A1`, `A2`, and the startup subset of `A3`.
 - Required evidence: exact hashes; title-specific ShadowMount and klog slice;
   rendered screenshot; clean title close; service health.
-- Candidate commit: `8dc7f8b` (all `PT_LOAD` addresses are page-congruent, the
+- Candidate commit: `5eda2eb` (all `PT_LOAD` addresses are page-congruent, the
   executable preserves the boilerplate's separate packaged-libc facade and
-  Sony libc implementation dependencies, and app code owns the coherent
+  Sony libc implementation dependencies, and app code owns a 32-byte-aligned
   page-backed allocator family without modifying `libc.prx`).
 - Validation-record commit: pending.
 
 ## G2: Native H.264/HEVC playback
 
-- Status: planned
+- Status: active
 - Objective: prove the IPTV stream adapter, native decoder, audio, pacing, and
   1080p/1440p/2160p output geometry with controlled legal-safe fixtures.
 - Requirements advanced: `R6`-`R8`, `R10`, `N2`-`N4`.
