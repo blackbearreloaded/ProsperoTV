@@ -693,8 +693,16 @@ Bytes write_executable(const Image &image, std::span<const Stub> stubs, const Op
 
     std::vector<Import> imports;
     std::vector<const Stub *> module_order;
+    // PSRadio loads this facade first for the C++ runtime contract, while its
+    // ordinary libc imports resolve against libSceLibcInternal.sprx. Keeping a
+    // provider with no exports prevents application imports from accidentally
+    // binding to the facade.
+    const Stub libc_facade{
+        "libSceLibcInternal.prx", "libSceLibcInternal", "libSceLibcInternal", {}};
     for (const std::string &needed : image.needed)
     {
+        if (needed == "libSceLibcInternal.sprx")
+            module_order.push_back(&libc_facade);
         const auto provider = std::find_if(stubs.begin(), stubs.end(), [&](const Stub &candidate)
                                            { return candidate.soname == needed; });
         require(provider != stubs.end(), "public SDK stub directory lacks needed module " + needed);

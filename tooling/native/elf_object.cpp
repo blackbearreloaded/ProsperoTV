@@ -147,6 +147,12 @@ std::vector<Symbol> read_symbols(std::span<const std::uint8_t> data, const Parse
 
 std::string normalized_soname(std::string name)
 {
+    // The packaged clean-room libc facade and Sony's implementation are two
+    // distinct runtime modules. The application needs both, exactly as the
+    // working PSRadio executable does, so keep the implementation's SPRX
+    // identity intact. Other public-SDK SPRX stubs describe system PRX modules.
+    if (name == "libSceLibcInternal.sprx")
+        return name;
     constexpr std::string_view suffix = ".sprx";
     if (name.ends_with(suffix))
         name.replace(name.size() - suffix.size(), suffix.size(), ".prx");

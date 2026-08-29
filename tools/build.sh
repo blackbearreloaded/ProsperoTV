@@ -303,6 +303,17 @@ done
     --stub-dir "$sdk_root/target/lib" "${builder_stub_args[@]}" --module-sdk "$module_sdk" \
     --companion-sdk "$companion_sdk" --file-name eboot.elf
 
+# The packaged libc is a loader/runtime facade, not the implementation of the
+# application's C allocation API. Match PSRadio's proven dependency graph and
+# fail the build if the native writer ever collapses these modules again.
+dynamic_dependencies=$("$readelf_tool" --dynamic --wide "$build/eboot.elf")
+for dependency in libSceLibcInternal.prx libSceLibcInternal.sprx; do
+    if ! grep -Fq "[$dependency]" <<<"$dynamic_dependencies"; then
+        echo "native executable is missing required dependency: $dependency" >&2
+        exit 2
+    fi
+done
+
 # Report the executable footprint. PT_LOAD congruence is enforced by the native
 # module writer before it emits the file.
 executable_size_hex=$(
