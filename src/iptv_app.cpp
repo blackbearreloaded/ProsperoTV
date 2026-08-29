@@ -25,6 +25,7 @@
 extern "C" int scePthreadCreate(void **thread, const void *attributes, void *(*entry)(void *),
                                 void *argument, const char *name);
 extern "C" int scePthreadDetach(void *thread);
+extern "C" int scePthreadJoin(void *thread, void **result);
 
 namespace
 {
@@ -217,6 +218,8 @@ bool IptvApp::Initialize(Rml::ElementDocument *document)
     catalog_ = {};
     user_state_ = {};
     catalog_loaded_ = false;
+    error_retries_playback_ = false;
+    playback_retry_channel_id_.clear();
     play_requested_ = false;
     play_request_ = {};
     refresh_queued_ = false;
@@ -308,8 +311,12 @@ void IptvApp::Shutdown()
         ime_ready_ = false;
     }
     while (refresh_thread_ && !refresh_complete_.load(std::memory_order_acquire))
+    {
+        iptv::http::CancelActivePlaylistRequest();
         SDL_Delay(10);
-    refresh_thread_ = nullptr;
+    }
+    while (refresh_thread_ && !JoinRefreshThread())
+        SDL_Delay(10);
     refresh_queued_ = false;
     refresh_complete_.store(false, std::memory_order_relaxed);
     shutdown_requested_.store(false, std::memory_order_relaxed);
@@ -335,8 +342,56 @@ bool IptvApp::TakePlayRequest(IptvPlayRequest *request)
     return true;
 }
 
+void IptvApp::ReportPlaybackFailure(const char *channel_id, const char *channel_name, int result,
+                                    unsigned attempts)
+{
+    if (!document_ || result >= 0)
+        return;
+    char message[240]{};
+    std::snprintf(message, sizeof(message),
+                  "Unable to play %.120s after %u stream attempt%s (error %d). Try the channel "
+                  "again or select another source.",
+                  channel_name && *channel_name ? channel_name : "this channel", attempts,
+                  attempts == 1u ? "" : "s", result);
+    playback_retry_channel_id_ = channel_id ? channel_id : "";
+    error_retries_playback_ = FindChannelById(playback_retry_channel_id_) != nullptr;
+    SetStatusState("Playback failed", false, true);
+    ShowCatalogError(true, "Channel playback failed", message);
+    SetText(document_, "error-action-label",
+            error_retries_playback_ ? "Retry channel" : "Reload catalog");
+    focus_target_ = FocusTarget::Error;
+    RefreshFocus();
+}
+
+bool IptvApp::JoinRefreshThread()
+{
+    if (!refresh_thread_)
+        return true;
+    void *result = nullptr;
+    const int join_result = scePthreadJoin(refresh_thread_, &result);
+    if (join_result != 0)
+    {
+        if (!refresh_complete_.load(std::memory_order_acquire))
+            return false;
+        const int detach_result = scePthreadDetach(refresh_thread_);
+        std::fprintf(stderr, "[psiptv] refresh join failed: %d; detach fallback: %d\n", join_result,
+                     detach_result);
+    }
+    refresh_thread_ = nullptr;
+    return true;
+}
+
+void IptvApp::DismissPlaybackError()
+{
+    error_retries_playback_ = false;
+    playback_retry_channel_id_.clear();
+    ShowCatalogError(false, "", "");
+}
+
 void IptvApp::SetScreen(Screen screen)
 {
+    if (error_retries_playback_)
+        DismissPlaybackError();
     screen_ = screen;
     focus_slot_ = 0;
     switch (screen_)
@@ -375,7 +430,15 @@ bool IptvApp::HandleInput(const IptvInputEvent &event)
         return true;
     if (event.key == IptvInputKey::Circle)
     {
-        if (search_query_[0])
+        if (error_retries_playback_)
+        {
+            DismissPlaybackError();
+            focus_target_ = filtered_count_ ? FocusTarget::Channel : FocusTarget::Group;
+            focus_slot_ = filtered_count_ ? 0 : selected_group_;
+            RefreshCatalogUi();
+            RefreshFocus();
+        }
+        else if (search_query_[0])
         {
             iptv_ime_cancel();
             ApplySearch("");
@@ -462,7 +525,19 @@ bool IptvApp::HandleInput(const IptvInputEvent &event)
         {
             if (focus_target_ == FocusTarget::Error)
             {
-                RequestRefresh();
+                if (error_retries_playback_)
+                {
+                    const iptv::Channel *channel = FindChannelById(playback_retry_channel_id_);
+                    if (channel)
+                    {
+                        DismissPlaybackError();
+                        QueuePlay(*channel);
+                    }
+                }
+                else
+                {
+                    RequestRefresh();
+                }
             }
             else if (focus_target_ == FocusTarget::Group)
             {
@@ -595,7 +670,16 @@ bool IptvApp::HandleInput(const IptvInputEvent &event)
                  (event.key == IptvInputKey::Left || event.key == IptvInputKey::Up ||
                   event.key == IptvInputKey::Right || event.key == IptvInputKey::Down))
         {
-            RequestRefresh();
+            if (error_retries_playback_)
+            {
+                DismissPlaybackError();
+                focus_target_ = filtered_count_ ? FocusTarget::Channel : FocusTarget::Group;
+                focus_slot_ = filtered_count_ ? 0 : selected_group_;
+            }
+            else
+            {
+                RequestRefresh();
+            }
         }
         if (focus_target_ == FocusTarget::Channel && focus_slot_ < available)
             selected_slot_ = CatalogIndexAt(page_offset_ + focus_slot_);
@@ -818,6 +902,8 @@ void IptvApp::SetStatusState(const char *label, bool warning, bool error)
 
 void IptvApp::ShowCatalogError(bool visible, const char *title, const char *message)
 {
+    if (!error_retries_playback_)
+        SetText(document_, "error-action-label", "Retry");
     SetVisible(document_, "error-region", visible);
     SetVisible(document_, "live-status-region", !visible);
     if (visible)
@@ -1002,7 +1088,8 @@ void IptvApp::RequestRefresh()
                   "thread."
                 : "Downloading and parsing the bounded M3U response off the UI thread.");
     RefreshSourceUi();
-    ShowCatalogError(false, "", "");
+    if (!error_retries_playback_)
+        ShowCatalogError(false, "", "");
 
     pthread_attr_t attributes;
     const int attr_result = pthread_attr_init(&attributes);
@@ -1034,7 +1121,6 @@ void IptvApp::RequestRefresh()
         return;
     }
     refresh_thread_ = thread;
-    scePthreadDetach(thread);
 }
 
 void *IptvApp::RefreshThreadEntry(void *argument)
@@ -1087,7 +1173,8 @@ void IptvApp::ConsumeRefresh()
     if (!refresh_thread_ || !refresh_complete_.load(std::memory_order_acquire))
         return;
 
-    refresh_thread_ = nullptr;
+    if (!JoinRefreshThread())
+        return;
     refresh_complete_.store(false, std::memory_order_relaxed);
 
     const bool success = pending_network_status_ == iptv::http::Status::ok &&
@@ -1101,12 +1188,20 @@ void IptvApp::ConsumeRefresh()
         catalog_loaded_ = true;
         page_offset_ = focus_slot_ = 0;
         RebuildFilteredChannels();
+        if (error_retries_playback_ && !FindChannelById(playback_retry_channel_id_))
+        {
+            DismissPlaybackError();
+            focus_target_ = filtered_count_ ? FocusTarget::Channel : FocusTarget::Group;
+            focus_slot_ = filtered_count_ ? 0 : selected_group_;
+        }
         RefreshCatalogUi();
-        ShowCatalogError(false, "", "");
+        if (!error_retries_playback_)
+            ShowCatalogError(false, "", "");
         source_health_[source_index] =
             pending_cache_saved_ ? SourceHealth::Ready : SourceHealth::Stale;
-        SetStatusState(pending_cache_saved_ ? "Catalog ready" : "Catalog not cached",
-                       !pending_cache_saved_, false);
+        if (!error_retries_playback_)
+            SetStatusState(pending_cache_saved_ ? "Catalog ready" : "Catalog not cached",
+                           !pending_cache_saved_, false);
         SetText(document_, "source-status-label",
                 custom ? (pending_cache_saved_ ? "Custom playlist ready"
                                                : "Custom playlist loaded in memory")
@@ -1119,10 +1214,14 @@ void IptvApp::ConsumeRefresh()
             static_cast<unsigned>(pending_report_.skipped),
             pending_cache_saved_ ? "" : " Cache write failed; this catalog lasts until exit.");
         SetText(document_, "source-status-detail", detail);
-        SetText(document_, "preview-status-title",
-                pending_cache_saved_ ? "Catalog ready" : "Catalog loaded");
-        SetText(document_, "preview-status-message", detail);
-        if (screen_ == Screen::LiveTv && focus_target_ == FocusTarget::Error)
+        if (!error_retries_playback_)
+        {
+            SetText(document_, "preview-status-title",
+                    pending_cache_saved_ ? "Catalog ready" : "Catalog loaded");
+            SetText(document_, "preview-status-message", detail);
+        }
+        if (!error_retries_playback_ && screen_ == Screen::LiveTv &&
+            focus_target_ == FocusTarget::Error)
         {
             focus_target_ = filtered_count_ ? FocusTarget::Channel : FocusTarget::Group;
             focus_slot_ = filtered_count_ ? 0 : selected_group_;

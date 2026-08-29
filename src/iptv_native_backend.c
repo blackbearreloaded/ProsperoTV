@@ -728,6 +728,55 @@ static int32_t initialize_audio(backend_state_t *state)
     return state->audio_decoder < 0 ? state->audio_decoder : 0;
 }
 
+static int32_t release_audio(backend_state_t *state)
+{
+    int32_t first_result = 0;
+    int32_t result;
+
+    if (state->audio_sink.handle >= 0)
+    {
+        result = sceAudioOutClose(state->audio_sink.handle);
+        if (first_result == 0 && result != 0)
+            first_result = result;
+        state->audio_sink.handle = -1;
+    }
+    if (state->audio_decoder >= 0)
+    {
+        result = sceAudiodecDeleteDecoder(state->audio_decoder);
+        if (first_result == 0 && result != 0)
+            first_result = result;
+        state->audio_decoder = -1;
+    }
+    if (state->audio_library_initialized)
+    {
+        result = sceAudiodecTermLibrary(AUDIODEC_AAC);
+        if (first_result == 0 && result != 0)
+            first_result = result;
+        state->audio_library_initialized = 0;
+    }
+    if (state->audio_module_loaded)
+    {
+        result = sceSysmoduleUnloadModule(AUDIO_MODULE_ID);
+        if (first_result == 0 && result != 0)
+            first_result = result;
+        state->audio_module_loaded = 0;
+    }
+    state->audio_sink.pending = 0;
+    return first_result;
+}
+
+static int32_t disable_audio_internal(backend_state_t *state, int32_t result)
+{
+    const int32_t cleanup_result = release_audio(state);
+
+    state->telemetry.last_audio_result = result;
+    state->telemetry.audio_disabled = 1;
+    if (state->telemetry.cleanup_result == 0 && cleanup_result != 0)
+        state->telemetry.cleanup_result = cleanup_result;
+    state->config.enable_audio = 0;
+    return cleanup_result;
+}
+
 static int32_t pace_before_present(backend_state_t *state, uint64_t pts_us)
 {
     uint64_t now = monotonic_us();
@@ -957,7 +1006,11 @@ int32_t iptv_native_backend_open(iptv_native_backend_t *backend,
 
     result = initialize_video(state);
     if (result == 0 && config->enable_audio)
-        result = initialize_audio(state);
+    {
+        const int32_t audio_result = initialize_audio(state);
+        if (audio_result != 0)
+            disable_audio_internal(state, audio_result);
+    }
     if (result != 0)
     {
         state->telemetry.last_native_result = result;
@@ -1239,20 +1292,27 @@ int32_t iptv_native_backend_submit_audio(iptv_native_backend_t *backend, const v
 
     if (!state || state->magic != BACKEND_MAGIC || !adts_frame)
         return IPTV_NATIVE_E_ARGUMENT;
-    if (state->state != IPTV_NATIVE_STATE_OPEN || !state->config.enable_audio ||
-        state->audio_decoder < 0 || state->drain_started)
+    if (state->state != IPTV_NATIVE_STATE_OPEN || state->drain_started)
         return IPTV_NATIVE_E_STATE;
+    if (!state->config.enable_audio || state->audio_decoder < 0)
+        return 0;
     if (atomic_load_explicit(&state->stop_requested, memory_order_relaxed))
         return IPTV_NATIVE_E_CANCELLED;
     if (frame_bytes < 7 || frame_bytes > AUDIO_FRAME_MAX_BYTES || adts[0] != 0xffu ||
         (adts[1] & 0xf6u) != 0xf0u)
-        return IPTV_NATIVE_E_AUDIO_FRAME;
+    {
+        disable_audio_internal(state, IPTV_NATIVE_E_AUDIO_FRAME);
+        return 0;
+    }
     declared_bytes =
         ((size_t)(adts[3] & 3u) << 11) | ((size_t)adts[4] << 3) | ((size_t)adts[5] >> 5);
     channels = adts_channels(adts, frame_bytes);
     if (declared_bytes != frame_bytes || adts_core_rate(adts, frame_bytes) == 0 || channels == 0 ||
         channels > 2)
-        return IPTV_NATIVE_E_AUDIO_FRAME;
+    {
+        disable_audio_internal(state, IPTV_NATIVE_E_AUDIO_FRAME);
+        return 0;
+    }
 
     state->audio_au.address = (void *)adts_frame;
     state->audio_au.length = (uint32_t)frame_bytes;
@@ -1296,11 +1356,21 @@ int32_t iptv_native_backend_submit_audio(iptv_native_backend_t *backend, const v
     return 0;
 
 failed:
-    state->telemetry.last_native_result = result;
-    state->telemetry.last_result = result;
-    state->state = IPTV_NATIVE_STATE_ERROR;
-    state->telemetry.state = state->state;
-    return result;
+    disable_audio_internal(state, result);
+    return 0;
+}
+
+int32_t iptv_native_backend_disable_audio(iptv_native_backend_t *backend)
+{
+    backend_state_t *state = state_from(backend);
+
+    if (!state || state->magic != BACKEND_MAGIC)
+        return IPTV_NATIVE_E_ARGUMENT;
+    if (state->state != IPTV_NATIVE_STATE_OPEN || state->drain_started)
+        return IPTV_NATIVE_E_STATE;
+    if (!state->config.enable_audio)
+        return 0;
+    return disable_audio_internal(state, IPTV_NATIVE_E_AUDIO_FRAME);
 }
 
 void iptv_native_backend_request_stop(iptv_native_backend_t *backend)
@@ -1459,15 +1529,16 @@ int32_t iptv_native_backend_get_telemetry(const iptv_native_backend_t *backend,
 int32_t iptv_native_backend_close(iptv_native_backend_t *backend)
 {
     backend_state_t *state = state_from(backend);
-    int32_t first_result = 0;
+    int32_t first_result;
     int32_t result;
 
     if (!state || state->magic != BACKEND_MAGIC)
         return IPTV_NATIVE_E_ARGUMENT;
     if (state->state == IPTV_NATIVE_STATE_CLOSED || state->state == IPTV_NATIVE_STATE_IDLE)
         return 0;
+    first_result = state->telemetry.cleanup_result;
     result = iptv_native_backend_drain(backend);
-    if (result != 0)
+    if (first_result == 0 && result != 0)
         first_result = result;
     state->state = IPTV_NATIVE_STATE_STOPPING;
     state->telemetry.state = state->state;
@@ -1476,34 +1547,9 @@ int32_t iptv_native_backend_close(iptv_native_backend_t *backend)
     if (first_result == 0 && result != 0)
         first_result = result;
 
-    if (state->audio_sink.handle >= 0)
-    {
-        result = sceAudioOutClose(state->audio_sink.handle);
-        if (first_result == 0 && result != 0)
-            first_result = result;
-        state->audio_sink.handle = -1;
-    }
-    if (state->audio_decoder >= 0)
-    {
-        result = sceAudiodecDeleteDecoder(state->audio_decoder);
-        if (first_result == 0 && result != 0)
-            first_result = result;
-        state->audio_decoder = -1;
-    }
-    if (state->audio_library_initialized)
-    {
-        result = sceAudiodecTermLibrary(AUDIODEC_AAC);
-        if (first_result == 0 && result != 0)
-            first_result = result;
-        state->audio_library_initialized = 0;
-    }
-    if (state->audio_module_loaded)
-    {
-        result = sceSysmoduleUnloadModule(AUDIO_MODULE_ID);
-        if (first_result == 0 && result != 0)
-            first_result = result;
-        state->audio_module_loaded = 0;
-    }
+    result = release_audio(state);
+    if (first_result == 0 && result != 0)
+        first_result = result;
 
     if (state->decoder)
     {

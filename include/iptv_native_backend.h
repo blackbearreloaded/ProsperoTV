@@ -81,6 +81,8 @@ typedef struct iptv_native_telemetry {
     uint64_t decoded_audio_frames;
     uint64_t audio_output_grains;
     uint64_t audio_output_errors;
+    int32_t last_audio_result;
+    uint32_t audio_disabled;
     uint64_t decode_total_us;
     uint64_t decode_max_us;
     uint64_t present_total_us;
@@ -122,6 +124,7 @@ int32_t iptv_native_backend_submit_audio(iptv_native_backend_t *backend,
                                          const void *adts_frame,
                                          size_t frame_bytes,
                                          uint64_t pts_us);
+int32_t iptv_native_backend_disable_audio(iptv_native_backend_t *backend);
 void iptv_native_backend_request_stop(iptv_native_backend_t *backend);
 int iptv_native_backend_stop_requested(const iptv_native_backend_t *backend);
 int32_t iptv_native_backend_drain(iptv_native_backend_t *backend);

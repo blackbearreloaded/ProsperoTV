@@ -15,6 +15,7 @@
 #include <cstdio>
 #include <cstring>
 #include <new>
+#include <time.h>
 
 extern "C" int sceKernelSendNotificationRequest(std::uint32_t device, void *request,
                                                 std::size_t size, int blocking);
@@ -26,7 +27,17 @@ namespace
 
 constexpr std::size_t kReadBytes = 64u * 1024u;
 constexpr std::size_t kPlaylistBytes = IPTV_HLS_DEFAULT_MAX_INPUT_BYTES;
+constexpr std::uint64_t kVideoProgressTimeoutUsec = UINT64_C(15000000);
 constexpr char kReceiptPath[] = "/download0/iptv-last-receipt.txt";
+
+std::uint64_t MonotonicUsec()
+{
+    timespec now{};
+    if (clock_gettime(CLOCK_MONOTONIC, &now) != 0)
+        return 0;
+    return static_cast<std::uint64_t>(now.tv_sec) * UINT64_C(1000000) +
+           static_cast<std::uint64_t>(now.tv_nsec) / UINT64_C(1000);
+}
 
 struct NotificationRequest
 {
@@ -71,56 +82,60 @@ void SaveReceipt(int result, const iptv_stream_telemetry_t &stream,
     std::FILE *file = std::fopen(temporary, "wb");
     if (!file)
         return;
-    std::fprintf(file,
-                 "IPTV_RECEIPT_V1\n"
-                 "result=%d\n"
-                 "stream_state=%d\n"
-                 "stream_result=%d\n"
-                 "stream_error=%s\n"
-                 "codec=%u\nprofile=%u\nlevel=%u\n"
-                 "coded=%ux%u\nvisible=%ux%u\nbit_depth=%u\nchroma=%u\n"
-                 "video_access_units=%llu\naudio_frames=%llu\n"
-                 "native_state=%d\nnative_result=%d\nnative_cleanup=%d\n"
-                 "decoded_frames=%llu\npresented_frames=%llu\nhidden_decoded_frames=%llu\n"
-                 "buffered_video_access_units=%llu\ndrained_video_frames=%llu\n"
-                 "dropped_delayed_frames=%llu\ndecoder_flushes=%llu\n"
-                 "drain_flush_limit_hits=%llu\npending_video_timestamps=%u\n"
-                 "audio_decoded_frames=%llu\naudio_output_grains=%llu\n"
-                 "decoder_output_in_frame_pool=%u\nzero_copy_pointer_match=%u\n"
-                 "last_decoder_output=0x%llx\nlast_present_source=0x%llx\n"
-                 "first_frame_latency_us=%llu\ndecode_max_us=%llu\n"
-                 "present_max_us=%llu\npacing_resets=%llu\n"
-                 "pacing_waits=%llu\npacing_late_frames=%llu\n"
-                 "hardware_validated=%u\nstream_acceptance_validated=%u\n",
-                 result, static_cast<int>(stream.state), stream.last_result, stream.last_error,
-                 stream.format.video_codec, stream.format.video_profile, stream.format.video_level,
-                 stream.format.coded_width, stream.format.coded_height, stream.format.visible_width,
-                 stream.format.visible_height, stream.format.video_bit_depth,
-                 stream.format.video_chroma_format,
-                 static_cast<unsigned long long>(stream.video_access_units),
-                 static_cast<unsigned long long>(stream.audio_frames),
-                 static_cast<int>(native.state), native.last_result, native.cleanup_result,
-                 static_cast<unsigned long long>(native.decoded_frames),
-                 static_cast<unsigned long long>(native.presented_frames),
-                 static_cast<unsigned long long>(native.hidden_decoded_frames),
-                 static_cast<unsigned long long>(native.buffered_video_access_units),
-                 static_cast<unsigned long long>(native.drained_video_frames),
-                 static_cast<unsigned long long>(native.dropped_delayed_frames),
-                 static_cast<unsigned long long>(native.decoder_flushes),
-                 static_cast<unsigned long long>(native.drain_flush_limit_hits),
-                 native.pending_video_timestamps,
-                 static_cast<unsigned long long>(native.decoded_audio_frames),
-                 static_cast<unsigned long long>(native.audio_output_grains),
-                 native.decoder_output_in_frame_pool, native.zero_copy_pointer_match,
-                 static_cast<unsigned long long>(native.last_decoder_output),
-                 static_cast<unsigned long long>(native.last_present_source),
-                 static_cast<unsigned long long>(native.first_frame_latency_us),
-                 static_cast<unsigned long long>(native.decode_max_us),
-                 static_cast<unsigned long long>(native.present_max_us),
-                 static_cast<unsigned long long>(native.pacing_resets),
-                 static_cast<unsigned long long>(native.pacing_waits),
-                 static_cast<unsigned long long>(native.pacing_late_frames),
-                 native.hardware_validated, native.stream_acceptance_validated);
+    std::fprintf(
+        file,
+        "IPTV_RECEIPT_V1\n"
+        "result=%d\n"
+        "stream_state=%d\n"
+        "stream_result=%d\n"
+        "stream_error=%s\n"
+        "stream_audio_disabled=%u\n"
+        "stream_audio_warning=%s\n"
+        "codec=%u\nprofile=%u\nlevel=%u\n"
+        "coded=%ux%u\nvisible=%ux%u\nbit_depth=%u\nchroma=%u\n"
+        "video_access_units=%llu\naudio_frames=%llu\n"
+        "native_state=%d\nnative_result=%d\nnative_cleanup=%d\n"
+        "decoded_frames=%llu\npresented_frames=%llu\nhidden_decoded_frames=%llu\n"
+        "buffered_video_access_units=%llu\ndrained_video_frames=%llu\n"
+        "dropped_delayed_frames=%llu\ndecoder_flushes=%llu\n"
+        "drain_flush_limit_hits=%llu\npending_video_timestamps=%u\n"
+        "audio_decoded_frames=%llu\naudio_output_grains=%llu\n"
+        "native_audio_disabled=%u\nnative_audio_result=%d\n"
+        "decoder_output_in_frame_pool=%u\nzero_copy_pointer_match=%u\n"
+        "last_decoder_output=0x%llx\nlast_present_source=0x%llx\n"
+        "first_frame_latency_us=%llu\ndecode_max_us=%llu\n"
+        "present_max_us=%llu\npacing_resets=%llu\n"
+        "pacing_waits=%llu\npacing_late_frames=%llu\n"
+        "hardware_validated=%u\nstream_acceptance_validated=%u\n",
+        result, static_cast<int>(stream.state), stream.last_result, stream.last_error,
+        stream.audio_disabled, stream.audio_warning, stream.format.video_codec,
+        stream.format.video_profile, stream.format.video_level, stream.format.coded_width,
+        stream.format.coded_height, stream.format.visible_width, stream.format.visible_height,
+        stream.format.video_bit_depth, stream.format.video_chroma_format,
+        static_cast<unsigned long long>(stream.video_access_units),
+        static_cast<unsigned long long>(stream.audio_frames), static_cast<int>(native.state),
+        native.last_result, native.cleanup_result,
+        static_cast<unsigned long long>(native.decoded_frames),
+        static_cast<unsigned long long>(native.presented_frames),
+        static_cast<unsigned long long>(native.hidden_decoded_frames),
+        static_cast<unsigned long long>(native.buffered_video_access_units),
+        static_cast<unsigned long long>(native.drained_video_frames),
+        static_cast<unsigned long long>(native.dropped_delayed_frames),
+        static_cast<unsigned long long>(native.decoder_flushes),
+        static_cast<unsigned long long>(native.drain_flush_limit_hits),
+        native.pending_video_timestamps,
+        static_cast<unsigned long long>(native.decoded_audio_frames),
+        static_cast<unsigned long long>(native.audio_output_grains), native.audio_disabled,
+        native.last_audio_result, native.decoder_output_in_frame_pool,
+        native.zero_copy_pointer_match, static_cast<unsigned long long>(native.last_decoder_output),
+        static_cast<unsigned long long>(native.last_present_source),
+        static_cast<unsigned long long>(native.first_frame_latency_us),
+        static_cast<unsigned long long>(native.decode_max_us),
+        static_cast<unsigned long long>(native.present_max_us),
+        static_cast<unsigned long long>(native.pacing_resets),
+        static_cast<unsigned long long>(native.pacing_waits),
+        static_cast<unsigned long long>(native.pacing_late_frames), native.hardware_validated,
+        native.stream_acceptance_validated);
     const int write_result = std::ferror(file) ? -1 : std::fflush(file);
     const int close_result = std::fclose(file);
     if (write_result != 0 || close_result != 0)
@@ -289,6 +304,12 @@ int AdapterAudio(void *context, const std::uint8_t *data, std::size_t bytes, std
                : -1;
 }
 
+int AdapterDisableAudio(void *context)
+{
+    auto *adapter = static_cast<NativeAdapter *>(context);
+    return adapter && adapter->opened ? iptv_native_backend_disable_audio(&adapter->backend) : 0;
+}
+
 int AdapterDrain(void *context)
 {
     auto *adapter = static_cast<NativeAdapter *>(context);
@@ -321,6 +342,7 @@ class StreamRunner
         backend.open = AdapterOpen;
         backend.submit_video = AdapterVideo;
         backend.submit_audio = AdapterAudio;
+        backend.disable_audio = AdapterDisableAudio;
         backend.drain = AdapterDrain;
         backend.close = AdapterClose;
         backend.hardware_validated = 0;
@@ -369,6 +391,22 @@ class StreamRunner
         return telemetry && iptv_native_backend_get_telemetry(&adapter_.backend, telemetry) == 0;
     }
 
+    bool HasPresentedVideo() const
+    {
+        return PresentedFrames() != 0;
+    }
+
+    std::uint64_t PresentedFrames() const
+    {
+        iptv_native_telemetry_t telemetry{};
+        return NativeTelemetry(&telemetry) ? telemetry.presented_frames : 0;
+    }
+
+    int Finish()
+    {
+        return active_ ? iptv_stream_stop(&session_) : IPTV_STREAM_INVALID_STATE;
+    }
+
     void Close()
     {
         if (active_)
@@ -406,6 +444,8 @@ FeedResult FeedRequest(iptv::http::StreamRequest *request, StreamRunner *runner,
     if (!request || !runner || !buffer || !buffer_bytes)
         return FeedResult::failed;
     unsigned read_failures = 0;
+    std::uint64_t last_presented = runner->PresentedFrames();
+    std::uint64_t last_progress = MonotonicUsec();
     while (!runner->StopRequested())
     {
         const int read = iptv::http::ReadStream(request, buffer, buffer_bytes);
@@ -424,6 +464,18 @@ FeedResult FeedRequest(iptv::http::StreamRequest *request, StreamRunner *runner,
             return FeedResult::reopen;
         if (pushed != IPTV_STREAM_OK)
             return FeedResult::failed;
+        const std::uint64_t presented = runner->PresentedFrames();
+        const std::uint64_t now = MonotonicUsec();
+        if (presented > last_presented)
+        {
+            last_presented = presented;
+            last_progress = now;
+        }
+        else if (last_progress != 0 && now >= last_progress &&
+                 now - last_progress >= kVideoProgressTimeoutUsec)
+        {
+            return FeedResult::failed;
+        }
     }
     return FeedResult::stopped;
 }
@@ -499,6 +551,8 @@ int RunHlsMedia(const char *source_url, StreamRunner *runner, std::uint8_t *read
     bool have_sequence = false;
     bool have_discontinuity_sequence = false;
     bool session_has_data = false;
+    unsigned stale_refreshes = 0;
+    std::uint64_t last_presented = runner->PresentedFrames();
     for (;;)
     {
         if (runner->StopRequested())
@@ -529,6 +583,7 @@ int RunHlsMedia(const char *source_url, StreamRunner *runner, std::uint8_t *read
                 have_sequence = false;
                 have_discontinuity_sequence = false;
                 session_has_data = false;
+                last_presented = 0;
             }
         }
 
@@ -552,6 +607,7 @@ int RunHlsMedia(const char *source_url, StreamRunner *runner, std::uint8_t *read
                     return -1;
                 }
                 session_has_data = false;
+                last_presented = 0;
             }
             result = OpenAndFeedSegment(segment.url, runner, read_buffer, headers);
             if (result != 0)
@@ -565,8 +621,23 @@ int RunHlsMedia(const char *source_url, StreamRunner *runner, std::uint8_t *read
 
         if (!playlist->is_live)
         {
-            return 0;
+            const int finished = runner->Finish();
+            return finished == IPTV_STREAM_OK && runner->HasPresentedVideo() ? 0 : -1;
         }
+        const std::uint64_t presented = runner->PresentedFrames();
+        if (presented > last_presented)
+        {
+            stale_refreshes = 0;
+            last_presented = presented;
+        }
+        else if (presented < last_presented)
+        {
+            // A segment retry reopened the stream session and reset native telemetry.
+            stale_refreshes = 0;
+            last_presented = presented;
+        }
+        else if (++stale_refreshes >= 6u)
+            return -1;
         std::uint32_t refresh_ms = playlist->target_duration_ms / 2u;
         if (refresh_ms < 500u)
             refresh_ms = 500u;
@@ -687,8 +758,14 @@ int RunDirect(const char *url, StreamRunner *runner, std::uint8_t *read_buffer, 
         iptv::http::CloseStream(&request);
         if (fed == FeedResult::stopped)
             return 1;
+        if (fed == FeedResult::ok)
+        {
+            const int finished = runner->Finish();
+            if (finished == IPTV_STREAM_OK && runner->HasPresentedVideo())
+                return 0;
+        }
         if (attempt == 2u || !runner->Start())
-            return fed == FeedResult::ok ? 0 : -1;
+            return -1;
         sceKernelUsleep(100000u);
     }
     return -1;

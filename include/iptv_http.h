@@ -80,6 +80,7 @@ Status ResolveRedirectUrl(const char* base_url, const char* location,
 
 Status NetworkInit();
 void NetworkShutdown();
+void CancelActivePlaylistRequest();
 
 // Writes at most max_bytes into buffer and always NUL-terminates it on return.
 // buffer_capacity must be at least max_bytes + 1. No storage is allocated here.

@@ -53,6 +53,8 @@ public:
     void Poll();
     bool HandleInput(const IptvInputEvent& event);
     bool TakePlayRequest(IptvPlayRequest* request);
+    void ReportPlaybackFailure(const char* channel_id, const char* channel_name, int result,
+                               unsigned attempts);
     void Shutdown();
 
 private:
@@ -122,6 +124,8 @@ private:
     iptv::CatalogState catalog_{};
     iptv::UserState user_state_{};
     bool catalog_loaded_ = false;
+    bool error_retries_playback_ = false;
+    std::string playback_retry_channel_id_;
     bool play_requested_ = false;
     IptvPlayRequest play_request_{};
 
@@ -137,6 +141,8 @@ private:
     void ApplyCustomSourceUrl(const char* url);
     void RequestRefresh();
     void ConsumeRefresh();
+    bool JoinRefreshThread();
+    void DismissPlaybackError();
     void RebuildFilteredChannels();
     void ApplySearch(const char* query);
     const iptv::Channel* FindChannelById(const std::string& channel_id) const;

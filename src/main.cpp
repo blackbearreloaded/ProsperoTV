@@ -863,7 +863,8 @@ bool LoadFonts()
     return true;
 }
 
-bool RunLauncher(IptvPlayRequest *play_request)
+bool RunLauncher(IptvPlayRequest *play_request, const char *failed_channel_id,
+                 const char *failed_channel_name, int playback_result, unsigned playback_attempts)
 {
     if (!play_request)
         return false;
@@ -930,6 +931,9 @@ bool RunLauncher(IptvPlayRequest *play_request)
         document->Show();
         input_ready = iptv_input_init();
         running = input_ready && app.Initialize(document);
+        if (running && playback_result < 0)
+            app.ReportPlaybackFailure(failed_channel_id, failed_channel_name, playback_result,
+                                      playback_attempts);
     }
     if (!running)
         LauncherFailure(document ? "input or app initialization" : "RmlUi document");
@@ -1083,22 +1087,41 @@ int main()
 
     (void)RunAutotestIfPresent();
 
+    std::string failed_channel_id;
+    std::string failed_channel_name;
+    int playback_result = 0;
+    unsigned playback_attempts = 0;
     for (;;)
     {
         IptvPlayRequest request;
-        if (!RunLauncher(&request))
+        if (!RunLauncher(&request, failed_channel_id.c_str(), failed_channel_name.c_str(),
+                         playback_result, playback_attempts))
             KeepProcessAlive();
 
         // SDL and AGC must never own VideoOut at the same time.
         sceKernelUsleep(100000);
+        playback_result = -1;
+        playback_attempts = 0;
         for (const std::string &url : request.urls)
         {
-            const int result = iptv_player_run_with_headers(
+            ++playback_attempts;
+            playback_result = iptv_player_run_with_headers(
                 url.c_str(), request.channel_name.c_str(),
                 request.user_agent.empty() ? nullptr : request.user_agent.c_str(),
                 request.referrer.empty() ? nullptr : request.referrer.c_str());
-            if (result >= 0)
+            if (playback_result >= 0)
                 break;
+        }
+        if (playback_result < 0)
+        {
+            failed_channel_id = request.channel_id;
+            failed_channel_name = request.channel_name;
+        }
+        else
+        {
+            failed_channel_id.clear();
+            failed_channel_name.clear();
+            playback_attempts = 0;
         }
         sceKernelUsleep(100000);
     }

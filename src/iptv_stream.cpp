@@ -101,6 +101,7 @@ struct impl_t
     bool video_sps;
     bool video_pps;
     bool video_vps;
+    bool audio_disabled;
 
     uint8_t packet[kPacketBufferBytes];
     size_t packet_bytes;
@@ -247,6 +248,21 @@ static void update_buffered(iptv_stream_session_t *session, const impl_t *impl)
     session->telemetry.buffered_bytes = value;
     if (value > session->telemetry.buffered_bytes_max)
         session->telemetry.buffered_bytes_max = value;
+}
+
+static int disable_audio(iptv_stream_session_t *session, impl_t *impl, const char *warning)
+{
+    if (impl->backend_open && impl->backend.disable_audio)
+        (void)impl->backend.disable_audio(impl->backend.context);
+    impl->audio_disabled = true;
+    impl->audio_es.size = 0;
+    marker_clear(&impl->audio_markers);
+    session->telemetry.audio_disabled = 1;
+    std::strncpy(session->telemetry.audio_warning, warning ? warning : "audio disabled",
+                 IPTV_STREAM_ERROR_TEXT_BYTES - 1u);
+    session->telemetry.audio_warning[IPTV_STREAM_ERROR_TEXT_BYTES - 1u] = '\0';
+    update_buffered(session, impl);
+    return IPTV_STREAM_OK;
 }
 
 static uint32_t crc32_mpeg(const uint8_t *data, size_t bytes)
@@ -618,6 +634,8 @@ static int maybe_activate(iptv_stream_session_t *session, impl_t *impl)
     if (result != 0)
         return fail(session, IPTV_STREAM_NATIVE_ERROR, "native backend open failed");
     impl->backend_open = true;
+    if (impl->audio_disabled)
+        (void)impl->backend.disable_audio(impl->backend.context);
     impl->backend_ever_opened = true;
     session->telemetry.backend_open = 1;
     session->telemetry.hardware_validated = impl->backend.hardware_validated;
@@ -626,12 +644,11 @@ static int maybe_activate(iptv_stream_session_t *session, impl_t *impl)
     return IPTV_STREAM_OK;
 }
 
-static bool same_program_format(const iptv_stream_format_t *a, const iptv_stream_format_t *b)
+static bool same_video_program(const iptv_stream_format_t *a, const iptv_stream_format_t *b)
 {
     return a->program_number == b->program_number && a->pmt_pid == b->pmt_pid &&
-           a->pcr_pid == b->pcr_pid && a->video_pid == b->video_pid &&
-           a->audio_pid == b->audio_pid && a->video_stream_type == b->video_stream_type &&
-           a->audio_stream_type == b->audio_stream_type && a->video_codec == b->video_codec;
+           a->video_pid == b->video_pid && a->video_stream_type == b->video_stream_type &&
+           a->video_codec == b->video_codec;
 }
 
 static int parse_pat_section(iptv_stream_session_t *session, impl_t *impl, const uint8_t *section,
@@ -728,12 +745,14 @@ static int parse_pmt_section(iptv_stream_session_t *session, impl_t *impl, const
     next.video_bit_depth = 8;
     next.video_chroma_format = IPTV_STREAM_CHROMA_420;
 
-    const bool same = impl->pmt_seen && same_program_format(&impl->format, &next);
-    if (impl->pmt_seen && !same)
+    const bool same_video = impl->pmt_seen && same_video_program(&impl->format, &next);
+    const bool same_audio = impl->pmt_seen && impl->format.audio_pid == next.audio_pid &&
+                            impl->format.audio_stream_type == next.audio_stream_type;
+    if (impl->pmt_seen && !same_video)
     {
         if (impl->backend_ever_opened)
             return fail(session, IPTV_STREAM_UNSUPPORTED_FORMAT,
-                        "PMT format changed after native backend open");
+                        "PMT video changed after native backend open");
         impl->video_sps = false;
         impl->video_pps = false;
         impl->video_vps = false;
@@ -743,8 +762,25 @@ static int parse_pmt_section(iptv_stream_session_t *session, impl_t *impl, const
         marker_clear(&impl->audio_markers);
         impl->video_pes = {};
         impl->audio_pes = {};
+        impl->audio_disabled = false;
+        session->telemetry.audio_disabled = 0;
+        session->telemetry.audio_warning[0] = '\0';
     }
-    if (same)
+    else if (impl->pmt_seen && !same_audio)
+    {
+        impl->audio_es.size = 0;
+        marker_clear(&impl->audio_markers);
+        impl->audio_pes = {};
+        if (impl->backend_ever_opened)
+            disable_audio(session, impl, "audio program changed; continuing with silent video");
+        else
+        {
+            impl->audio_disabled = false;
+            session->telemetry.audio_disabled = 0;
+            session->telemetry.audio_warning[0] = '\0';
+        }
+    }
+    if (same_video)
     {
         next.coded_width = impl->format.coded_width;
         next.coded_height = impl->format.coded_height;
@@ -752,6 +788,9 @@ static int parse_pmt_section(iptv_stream_session_t *session, impl_t *impl, const
         next.visible_height = impl->format.visible_height;
         next.video_profile = impl->format.video_profile;
         next.video_level = impl->format.video_level;
+    }
+    if (same_audio)
+    {
         next.audio_sample_rate = impl->format.audio_sample_rate;
         next.audio_channels = impl->format.audio_channels;
     }
@@ -1111,18 +1150,17 @@ static int process_audio(iptv_stream_session_t *session, impl_t *impl)
                                    (static_cast<size_t>(data[4]) << 3) | (data[5] >> 5);
         if (object_type != 2u || !kAdtsRates[rate_index] || channels < 1u || channels > 2u ||
             (data[6] & 3u) != 0u)
-            return fail(session, IPTV_STREAM_UNSUPPORTED_FORMAT,
-                        "AAC must be LC with one raw block and one or two channels");
+            return disable_audio(session, impl, "unsupported AAC; continuing with silent video");
         if (frame_bytes < header || frame_bytes > impl->audio_es.capacity)
-            return fail(session, IPTV_STREAM_MALFORMED_TS, "invalid ADTS frame length");
+            return disable_audio(session, impl,
+                                 "malformed AAC frame; continuing with silent video");
         if (frame_bytes > impl->audio_es.size)
             return IPTV_STREAM_OK;
 
         if (impl->format.audio_sample_rate &&
             (impl->format.audio_sample_rate != kAdtsRates[rate_index] ||
              impl->format.audio_channels != channels))
-            return fail(session, IPTV_STREAM_UNSUPPORTED_FORMAT,
-                        "AAC format changed during stream");
+            return disable_audio(session, impl, "AAC format changed; continuing with silent video");
         impl->format.audio_sample_rate = kAdtsRates[rate_index];
         impl->format.audio_channels = channels;
         session->telemetry.format = impl->format;
@@ -1140,7 +1178,8 @@ static int process_audio(iptv_stream_session_t *session, impl_t *impl)
             if (result != 0)
             {
                 ++session->telemetry.audio_submit_errors;
-                return fail(session, IPTV_STREAM_NATIVE_ERROR, "native audio submit failed");
+                return disable_audio(session, impl,
+                                     "native audio failed; continuing with silent video");
             }
         }
         ++session->telemetry.audio_frames;
@@ -1159,12 +1198,17 @@ static int process_audio(iptv_stream_session_t *session, impl_t *impl)
 static int append_es(iptv_stream_session_t *session, impl_t *impl, bool video, pes_t *pes,
                      const uint8_t *data, size_t bytes)
 {
+    if (!video && impl->audio_disabled)
+        return IPTV_STREAM_OK;
     buffer_t *buffer = video ? &impl->video_es : &impl->audio_es;
     marker_list_t *markers = video ? &impl->video_markers : &impl->audio_markers;
     if (!pes->marker_added)
     {
         if (!marker_add(markers, buffer->size, pes->pts_us))
         {
+            if (!video)
+                return disable_audio(session, impl,
+                                     "AAC timestamp overflow; continuing with silent video");
             ++session->telemetry.buffer_errors;
             return fail(session, IPTV_STREAM_BUFFER_LIMIT,
                         "too many PTS markers in one access unit");
@@ -1173,6 +1217,8 @@ static int append_es(iptv_stream_session_t *session, impl_t *impl, bool video, p
     }
     if (!buffer_append(buffer, data, bytes))
     {
+        if (!video)
+            return disable_audio(session, impl, "AAC buffer limit; continuing with silent video");
         ++session->telemetry.buffer_errors;
         return fail(session, IPTV_STREAM_BUFFER_LIMIT,
                     video ? "video access unit exceeds buffer limit"
@@ -1187,6 +1233,15 @@ static void reset_pes(pes_t *pes, bool video)
     *pes = {};
     pes->video = video;
     pes->pts_us = IPTV_STREAM_PTS_UNKNOWN;
+}
+
+static int reject_pes(iptv_stream_session_t *session, impl_t *impl, pes_t *pes, int result,
+                      const char *message)
+{
+    if (pes->video)
+        return fail(session, result, message);
+    reset_pes(pes, false);
+    return disable_audio(session, impl, "malformed audio PES; continuing with silent video");
 }
 
 static int complete_pes(iptv_stream_session_t *session, pes_t *pes)
@@ -1204,30 +1259,33 @@ static int parse_pes_header(iptv_stream_session_t *session, impl_t *impl, pes_t 
     const uint8_t *data = pes->header;
     if (pes->header_size < 9u || data[0] != 0 || data[1] != 0 || data[2] != 1u ||
         (data[6] & 0xc0u) != 0x80u)
-        return fail(session, IPTV_STREAM_MALFORMED_TS, "invalid PES header");
+        return reject_pes(session, impl, pes, IPTV_STREAM_MALFORMED_TS, "invalid PES header");
     if ((pes->video && (data[3] & 0xf0u) != 0xe0u) || (!pes->video && (data[3] & 0xe0u) != 0xc0u))
-        return fail(session, IPTV_STREAM_UNSUPPORTED_FORMAT, "PES stream id does not match PMT");
+        return reject_pes(session, impl, pes, IPTV_STREAM_UNSUPPORTED_FORMAT,
+                          "PES stream id does not match PMT");
     const uint32_t packet_length = static_cast<uint32_t>(data[4] << 8 | data[5]);
     if (!packet_length && !pes->video)
-        return fail(session, IPTV_STREAM_UNSUPPORTED_FORMAT,
-                    "zero-length audio PES is unsupported");
+        return reject_pes(session, impl, pes, IPTV_STREAM_UNSUPPORTED_FORMAT,
+                          "zero-length audio PES is unsupported");
     if (packet_length && 6u + packet_length < pes->header_size)
-        return fail(session, IPTV_STREAM_MALFORMED_TS, "PES header exceeds declared packet length");
+        return reject_pes(session, impl, pes, IPTV_STREAM_MALFORMED_TS,
+                          "PES header exceeds declared packet length");
     pes->unbounded = packet_length == 0;
     pes->expected_payload = pes->unbounded ? UINT64_MAX : 6u + packet_length - pes->header_size;
     if (!pes->unbounded && pes->expected_payload > impl->config.max_pes_bytes)
-        return fail(session, IPTV_STREAM_BUFFER_LIMIT, "PES payload exceeds configured limit");
+        return reject_pes(session, impl, pes, IPTV_STREAM_BUFFER_LIMIT,
+                          "PES payload exceeds configured limit");
 
     const uint8_t pts_flags = (data[7] >> 6) & 3u;
     if (pts_flags == 1u)
-        return fail(session, IPTV_STREAM_MALFORMED_TS, "invalid PES PTS flags");
+        return reject_pes(session, impl, pes, IPTV_STREAM_MALFORMED_TS, "invalid PES PTS flags");
     if (pts_flags >= 2u)
     {
         if (data[8] < 5u)
-            return fail(session, IPTV_STREAM_MALFORMED_TS, "truncated PES PTS");
+            return reject_pes(session, impl, pes, IPTV_STREAM_MALFORMED_TS, "truncated PES PTS");
         uint64_t raw = 0;
         if (!parse_pts_raw(data + 9u, &raw))
-            return fail(session, IPTV_STREAM_MALFORMED_TS, "invalid PES PTS");
+            return reject_pes(session, impl, pes, IPTV_STREAM_MALFORMED_TS, "invalid PES PTS");
         pes->pts_us = extend_pts(session, pes->video ? &impl->video_time : &impl->audio_time, raw);
     }
     pes->header_complete = true;
@@ -1254,8 +1312,8 @@ static int consume_pes(iptv_stream_session_t *session, impl_t *impl, pes_t *pes,
             {
                 pes->header_size = 9u + pes->header[8];
                 if (pes->header_size > kPesHeaderBytes)
-                    return fail(session, IPTV_STREAM_MALFORMED_TS,
-                                "PES optional header exceeds bounds");
+                    return reject_pes(session, impl, pes, IPTV_STREAM_MALFORMED_TS,
+                                      "PES optional header exceeds bounds");
                 if (pes->header_bytes < pes->header_size)
                     continue;
             }
@@ -1274,8 +1332,8 @@ static int consume_pes(iptv_stream_session_t *session, impl_t *impl, pes_t *pes,
                 take = static_cast<size_t>(remaining);
         }
         if (pes->payload_bytes + take > impl->config.max_pes_bytes)
-            return fail(session, IPTV_STREAM_BUFFER_LIMIT,
-                        "live PES payload exceeds configured limit");
+            return reject_pes(session, impl, pes, IPTV_STREAM_BUFFER_LIMIT,
+                              "live PES payload exceeds configured limit");
         const int result = append_es(session, impl, pes->video, pes, data, take);
         if (result != IPTV_STREAM_OK)
             return result;
@@ -1293,8 +1351,8 @@ static int consume_pes(iptv_stream_session_t *session, impl_t *impl, pes_t *pes,
                 --bytes;
             }
             if (bytes)
-                return fail(session, IPTV_STREAM_MALFORMED_TS,
-                            "bytes follow completed PES without a payload start");
+                return reject_pes(session, impl, pes, IPTV_STREAM_MALFORMED_TS,
+                                  "bytes follow completed PES without a payload start");
         }
     }
     return IPTV_STREAM_OK;
@@ -1401,7 +1459,8 @@ static int continuity_check(iptv_stream_session_t *session, impl_t *impl, uint16
 static bool relevant_pid(const impl_t *impl, uint16_t pid)
 {
     return pid == kPatPid || (impl->pat_seen && pid == impl->format.pmt_pid) ||
-           (impl->pmt_seen && (pid == impl->format.video_pid || pid == impl->format.audio_pid));
+           (impl->pmt_seen && (pid == impl->format.video_pid ||
+                               (!impl->audio_disabled && pid == impl->format.audio_pid)));
 }
 
 static int process_packet(iptv_stream_session_t *session, impl_t *impl, const uint8_t *packet)
@@ -1591,7 +1650,7 @@ int iptv_stream_open(iptv_stream_session_t *session, const iptv_stream_config_t 
                            session->telemetry.state != IPTV_STREAM_STATE_STOPPED))
         return IPTV_STREAM_INVALID_STATE;
     if (backend && (!backend->open || !backend->submit_video || !backend->submit_audio ||
-                    !backend->drain || !backend->close))
+                    !backend->disable_audio || !backend->drain || !backend->close))
         return IPTV_STREAM_INVALID_ARGUMENT;
 
     impl_t *impl = new (std::nothrow) impl_t{};

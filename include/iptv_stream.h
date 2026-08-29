@@ -12,7 +12,7 @@
 extern "C" {
 #endif
 
-#define IPTV_STREAM_API_VERSION UINT32_C(2)
+#define IPTV_STREAM_API_VERSION UINT32_C(3)
 #define IPTV_STREAM_TS_PACKET_BYTES 188u
 #define IPTV_STREAM_ERROR_TEXT_BYTES 96u
 #define IPTV_STREAM_DEFAULT_MAX_PES_BYTES UINT32_C(0x800000)
@@ -93,6 +93,7 @@ typedef struct iptv_stream_backend {
                         uint64_t pts_us);
     int (*submit_audio)(void *context, const uint8_t *data, size_t bytes,
                         uint64_t pts_us);
+    int (*disable_audio)(void *context);
     int (*drain)(void *context);
     void (*close)(void *context);
     uint32_t hardware_validated;
@@ -109,6 +110,8 @@ typedef struct iptv_stream_telemetry {
     uint32_t buffered_bytes_max;
     uint32_t backend_open;
     uint32_t hardware_validated;
+    uint32_t audio_disabled;
+    char audio_warning[IPTV_STREAM_ERROR_TEXT_BYTES];
 
     uint64_t packets;
     uint64_t pat_sections;

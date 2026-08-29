@@ -4,6 +4,7 @@
 
 #include "iptv_http.h"
 
+#include <atomic>
 #include <cctype>
 #include <cstring>
 #include <time.h>
@@ -447,6 +448,7 @@ extern "C"
     extern int sceHttpDeleteConnection(int connection_id);
     extern int sceHttpCreateRequestWithURL(int connection_id, int method, const char *url,
                                            std::uint64_t content_length);
+    extern int sceHttpAbortRequest(int request_id);
     extern int sceHttpDeleteRequest(int request_id);
     extern int sceHttpAddRequestHeader(int request_id, const char *name, const char *value,
                                        std::uint32_t mode);
@@ -465,11 +467,38 @@ int g_net_pool = -1;
 int g_ssl_context = -1;
 int g_http_context = -1;
 int g_http_template = -1;
+std::atomic_flag g_active_request_guard = ATOMIC_FLAG_INIT;
+int g_active_playlist_request = -1;
+
+void LockActiveRequest()
+{
+    while (g_active_request_guard.test_and_set(std::memory_order_acquire))
+    {
+    }
+}
+
+void UnlockActiveRequest()
+{
+    g_active_request_guard.clear(std::memory_order_release);
+}
+
+void TrackPlaylistRequest(int request)
+{
+    LockActiveRequest();
+    g_active_playlist_request = request;
+    UnlockActiveRequest();
+}
 
 void CloseRequest(int connection, int request)
 {
     if (request >= 0)
+    {
+        LockActiveRequest();
+        if (g_active_playlist_request == request)
+            g_active_playlist_request = -1;
         sceHttpDeleteRequest(request);
+        UnlockActiveRequest();
+    }
     if (connection >= 0)
         sceHttpDeleteConnection(connection);
 }
@@ -703,6 +732,15 @@ void NetworkShutdown()
     g_net_pool = -1;
 }
 
+void CancelActivePlaylistRequest()
+{
+    LockActiveRequest();
+    const int request = g_active_playlist_request;
+    if (request >= 0)
+        (void)sceHttpAbortRequest(request);
+    UnlockActiveRequest();
+}
+
 FetchResult GetM3u(const char *url, char *buffer, std::size_t buffer_capacity,
                    std::size_t max_bytes, const RequestHeaders *headers,
                    const RequestControl *control)
@@ -756,6 +794,12 @@ FetchResult GetM3uResolved(const char *url, char *buffer, std::size_t buffer_cap
             const int error = request;
             CloseRequest(connection, -1);
             return Failure(Status::request_failed, error);
+        }
+        TrackPlaylistRequest(request);
+        if (control && control->cancelled && control->cancelled(control->context))
+        {
+            CloseRequest(connection, request);
+            return Failure(Status::cancelled);
         }
         result = ConfigureRequest(request,
                                   "application/vnd.apple.mpegurl, application/x-mpegURL, "
@@ -960,6 +1004,10 @@ Status NetworkInit()
 }
 
 void NetworkShutdown()
+{
+}
+
+void CancelActivePlaylistRequest()
 {
 }
 
