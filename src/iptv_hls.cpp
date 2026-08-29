@@ -514,10 +514,10 @@ static bool parse_avc_detail(slice_t detail, iptv_hls_variant_t *variant)
         !parse_hex_byte({detail.data + 4u, 2u}, &variant->level))
         return false;
     variant->bit_depth = 8u;
-    const uint32_t max_level =
-        variant->width && variant->height && variant->width <= 1280u && variant->height <= 720u
-            ? 41u
-            : 51u;
+    const uint32_t max_level = !variant->width || !variant->height                   ? 52u
+                               : variant->width <= 1280u && variant->height <= 720u  ? 41u
+                               : variant->width <= 2560u && variant->height <= 1440u ? 51u
+                                                                                     : 52u;
     return (variant->profile == 66u || variant->profile == 77u || variant->profile == 100u) &&
            variant->level && variant->level <= max_level;
 }
@@ -551,7 +551,11 @@ static bool parse_hevc_detail(slice_t detail, iptv_hls_variant_t *variant)
         if (!next_component(&detail, &constraint) || constraint.size > 2u || !all_hex(constraint))
             return false;
     }
-    return variant->profile == 1u && variant->level && variant->level <= 123u &&
+    const uint32_t max_level = !variant->width || !variant->height                   ? 153u
+                               : variant->width <= 1920u && variant->height <= 1080u ? 123u
+                               : variant->width <= 2560u && variant->height <= 1440u ? 150u
+                                                                                     : 153u;
+    return variant->profile == 1u && variant->level && variant->level <= max_level &&
            !variant->high_tier;
 }
 

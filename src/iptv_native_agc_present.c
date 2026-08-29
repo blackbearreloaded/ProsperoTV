@@ -18,8 +18,6 @@
 #define FOUR_K_OUTPUT_HEIGHT 2160u
 #define BASE_FRAMEBUFFER_BYTES 0xa00000u
 #define FOUR_K_FRAMEBUFFER_BYTES 0x2000000u
-#define TV_SAFE_INSET_X 64u
-#define TV_SAFE_INSET_Y 36u
 #define FRAMEBUFFER_ALIGNMENT 0x200000u
 #define SHADER_MEMORY_BYTES 0x10000u
 #define DIRECT_MEMORY_TYPE 12
@@ -314,8 +312,6 @@ static int render_frame(int video, int buffer_index, void *target, uint8_t *memo
     uint32_t slot;
     size_t y_bytes = (size_t)pitch * surface_height;
     size_t uv_bytes = (size_t)pitch * ((surface_height + 1u) / 2u);
-    uint32_t inset_x = output_width * TV_SAFE_INSET_X / BASE_OUTPUT_WIDTH;
-    uint32_t inset_y = output_height * TV_SAFE_INSET_Y / BASE_OUTPUT_HEIGHT;
 
     if (!defaults || visible_width == 0 || visible_height == 0 || visible_width > pitch ||
         visible_height > surface_height || (pitch & 1u) != 0 || y_bytes > UINT32_MAX ||
@@ -359,9 +355,9 @@ static int render_frame(int video, int buffer_index, void *target, uint8_t *memo
     {                                                                                              \
         cx[cx_count++] = (agc_register_t){(register_offset), 0, (register_value)};                 \
     } while (0)
-    ADD_REG(0x10f, float_bits((output_width - inset_x * 2u) * .5f));
+    ADD_REG(0x10f, float_bits(output_width * .5f));
     ADD_REG(0x110, float_bits(output_width * .5f));
-    ADD_REG(0x111, float_bits((output_height - inset_y * 2u) * -.5f));
+    ADD_REG(0x111, float_bits(output_height * -.5f));
     ADD_REG(0x112, float_bits(output_height * .5f));
     ADD_REG(0x113, float_bits(1));
     ADD_REG(0x114, 0);

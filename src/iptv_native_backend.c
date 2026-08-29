@@ -52,7 +52,8 @@ typedef struct videodec2_decoder_config
     uint32_t pipeline_depth;
     uint64_t compute_queue, cpu_affinity;
     int32_t cpu_priority;
-    uint32_t optimize_progressive, check_memory_type, reserved;
+    uint8_t optimize_progressive, check_memory_type, reserved0, reserved1;
+    void *extra_config;
 } videodec2_decoder_config_t;
 
 typedef struct videodec2_decoder_memory
@@ -106,6 +107,18 @@ typedef struct videodec2_output
     uint32_t frame_format, pitch_bytes;
 } videodec2_output_t;
 
+_Static_assert(sizeof(videodec2_decoder_config_t) == 72, "unexpected Videodec2 config ABI");
+_Static_assert(offsetof(videodec2_decoder_config_t, optimize_progressive) == 60,
+               "unexpected Videodec2 flag offset");
+_Static_assert(offsetof(videodec2_decoder_config_t, extra_config) == 64,
+               "unexpected Videodec2 extra-config offset");
+_Static_assert(sizeof(videodec2_decoder_memory_t) == 72, "unexpected Videodec2 memory ABI");
+_Static_assert(sizeof(videodec2_compute_config_t) == 16, "unexpected Videodec2 compute config ABI");
+_Static_assert(sizeof(videodec2_compute_memory_t) == 24, "unexpected Videodec2 compute memory ABI");
+_Static_assert(sizeof(videodec2_input_t) == 48, "unexpected Videodec2 input ABI");
+_Static_assert(sizeof(videodec2_frame_t) == 32, "unexpected Videodec2 frame ABI");
+_Static_assert(sizeof(videodec2_output_t) == 56, "unexpected Videodec2 output ABI");
+
 typedef struct sce_audiodec_au_info
 {
     uint32_t size;
@@ -154,51 +167,37 @@ typedef struct native_video_mode
     uint32_t decoder_codec;
     uint32_t decoder_profile;
     uint32_t max_level;
-    uint32_t coded_width;
-    uint32_t coded_height;
     uint32_t decoder_max_width;
     uint32_t decoder_max_height;
-    uint32_t output_width;
-    uint32_t output_height;
-    uint32_t alternate_output_height;
-    uint32_t output_pitch;
-    uint32_t visible_width;
-    uint32_t visible_height;
 } native_video_mode_t;
 
 static const native_video_mode_t video_modes[] = {
     {IPTV_NATIVE_CODEC_H264, IPTV_NATIVE_H264_PROFILE_BASELINE, 1,
-     IPTV_NATIVE_H264_PROFILE_BASELINE, 41, 1280, 720, 1280, 720, 1280, 720, 0, 1280, 1280, 720},
+     IPTV_NATIVE_H264_PROFILE_BASELINE, 41, 1280, 720},
     {IPTV_NATIVE_CODEC_H264, IPTV_NATIVE_H264_PROFILE_MAIN, 1, IPTV_NATIVE_H264_PROFILE_MAIN, 41,
-     1280, 720, 1280, 720, 1280, 720, 0, 1280, 1280, 720},
+     1280, 720},
     {IPTV_NATIVE_CODEC_H264, IPTV_NATIVE_H264_PROFILE_HIGH, 1, IPTV_NATIVE_H264_PROFILE_HIGH, 41,
-     1280, 720, 1280, 720, 1280, 720, 0, 1280, 1280, 720},
+     1280, 720},
+    {IPTV_NATIVE_CODEC_H264, IPTV_NATIVE_H264_PROFILE_HIGH, 1, IPTV_NATIVE_H264_PROFILE_HIGH, 51,
+     1920, 1088},
+    {IPTV_NATIVE_CODEC_H264, IPTV_NATIVE_H264_PROFILE_HIGH, 1, IPTV_NATIVE_H264_PROFILE_HIGH, 51,
+     2560, 1440},
+    {IPTV_NATIVE_CODEC_H264, IPTV_NATIVE_H264_PROFILE_HIGH, 1, IPTV_NATIVE_H264_PROFILE_HIGH, 52,
+     3840, 2176},
     {IPTV_NATIVE_CODEC_HEVC_MAIN8, IPTV_NATIVE_HEVC_PROFILE_MAIN, 0x000ee049,
-     IPTV_NATIVE_HEVC_PROFILE_MAIN, 123, 1280, 720, 1280, 720, 1280, 720, 0, 1280, 1280, 720},
-    {IPTV_NATIVE_CODEC_H264, 0, 1, 100, 51, 1920, 1088, 1920, 1088, 1920, 1088, 0, 2048, 1920,
-     1080},
-    {IPTV_NATIVE_CODEC_H264, 0, 1, 100, 51, 2560, 1440, 2560, 1440, 2560, 1440, 0, 2560, 2560,
-     1440},
-    {IPTV_NATIVE_CODEC_H264, 0, 1, 100, 52, 3840, 2160, 3840, 2176, 3840, 2160, 2176, 3840, 3840,
-     2160},
-    {IPTV_NATIVE_CODEC_H264, 0, 1, 100, 52, 3840, 2176, 3840, 2176, 3840, 2160, 2176, 3840, 3840,
-     2160},
-    {IPTV_NATIVE_CODEC_HEVC_MAIN8, IPTV_NATIVE_HEVC_PROFILE_MAIN, 0x000ee049, 1, 123, 1920, 1080,
-     1920, 1088, 1920, 1088, 0, 2048, 1920, 1080},
-    {IPTV_NATIVE_CODEC_HEVC_MAIN8, IPTV_NATIVE_HEVC_PROFILE_MAIN, 0x000ee049, 1, 123, 1920, 1088,
-     1920, 1088, 1920, 1088, 0, 2048, 1920, 1080},
-    {IPTV_NATIVE_CODEC_HEVC_MAIN8, IPTV_NATIVE_HEVC_PROFILE_MAIN, 0x000ee049, 1, 150, 2560, 1440,
-     2560, 1440, 2560, 1440, 0, 2560, 2560, 1440},
-    {IPTV_NATIVE_CODEC_HEVC_MAIN8, IPTV_NATIVE_HEVC_PROFILE_MAIN, 0x000ee049, 1, 153, 3840, 2160,
-     3840, 2176, 3840, 2160, 2176, 3840, 3840, 2160},
-    {IPTV_NATIVE_CODEC_HEVC_MAIN8, IPTV_NATIVE_HEVC_PROFILE_MAIN, 0x000ee049, 1, 153, 3840, 2176,
-     3840, 2176, 3840, 2160, 2176, 3840, 3840, 2160},
+     IPTV_NATIVE_HEVC_PROFILE_MAIN, 123, 1280, 720},
+    {IPTV_NATIVE_CODEC_HEVC_MAIN8, IPTV_NATIVE_HEVC_PROFILE_MAIN, 0x000ee049,
+     IPTV_NATIVE_HEVC_PROFILE_MAIN, 123, 1920, 1088},
+    {IPTV_NATIVE_CODEC_HEVC_MAIN8, IPTV_NATIVE_HEVC_PROFILE_MAIN, 0x000ee049,
+     IPTV_NATIVE_HEVC_PROFILE_MAIN, 150, 2560, 1440},
+    {IPTV_NATIVE_CODEC_HEVC_MAIN8, IPTV_NATIVE_HEVC_PROFILE_MAIN, 0x000ee049,
+     IPTV_NATIVE_HEVC_PROFILE_MAIN, 153, 3840, 2176},
     {IPTV_NATIVE_CODEC_VP9_PROFILE0, IPTV_NATIVE_VP9_PROFILE_0, 0x00245bfd,
-     IPTV_NATIVE_VP9_PROFILE_0, 41, 1920, 1080, 1920, 1080, 1920, 1080, 0, 2048, 1920, 1080},
+     IPTV_NATIVE_VP9_PROFILE_0, 41, 1920, 1080},
     {IPTV_NATIVE_CODEC_VP9_PROFILE0, IPTV_NATIVE_VP9_PROFILE_0, 0x00245bfd,
-     IPTV_NATIVE_VP9_PROFILE_0, 50, 2560, 1440, 2560, 1440, 2560, 1440, 0, 2560, 2560, 1440},
+     IPTV_NATIVE_VP9_PROFILE_0, 50, 2560, 1440},
     {IPTV_NATIVE_CODEC_VP9_PROFILE0, IPTV_NATIVE_VP9_PROFILE_0, 0x00245bfd,
-     IPTV_NATIVE_VP9_PROFILE_0, 51, 3840, 2160, 3840, 2160, 3840, 2160, 0, 3840, 3840, 2160},
+     IPTV_NATIVE_VP9_PROFILE_0, 51, 3840, 2160},
 };
 
 typedef struct direct_allocation
@@ -397,25 +396,24 @@ static const native_video_mode_t *find_video_mode(const iptv_native_open_config_
 {
     size_t index;
 
+    if (!config->coded_width || !config->coded_height || !config->visible_width ||
+        !config->visible_height || config->visible_width > config->coded_width ||
+        config->visible_height > config->coded_height || !config->level)
+        return NULL;
     for (index = 0; index < sizeof(video_modes) / sizeof(video_modes[0]); ++index)
     {
         const native_video_mode_t *mode = &video_modes[index];
         if (mode->codec == config->codec &&
             (mode->accepted_profile == 0 || mode->accepted_profile == config->profile) &&
-            mode->coded_width == config->coded_width &&
-            mode->coded_height == config->coded_height &&
-            mode->visible_width == config->visible_width &&
-            mode->visible_height == config->visible_height)
+            config->level <= mode->max_level && config->coded_width <= mode->decoder_max_width &&
+            config->coded_height <= mode->decoder_max_height)
             return mode;
     }
     return NULL;
 }
 
-static int profile_supported(const iptv_native_open_config_t *config,
-                             const native_video_mode_t *mode)
+static int profile_supported(const iptv_native_open_config_t *config)
 {
-    if (config->level == 0 || config->level > mode->max_level)
-        return 0;
     if (config->codec == IPTV_NATIVE_CODEC_H264)
         return config->profile == 66 || config->profile == 77 || config->profile == 100;
     if (config->codec == IPTV_NATIVE_CODEC_HEVC_MAIN8)
@@ -842,7 +840,7 @@ static int32_t initialize_video(backend_state_t *state)
     decoder_config.max_width = (int32_t)state->mode->decoder_max_width;
     decoder_config.max_height = (int32_t)state->mode->decoder_max_height;
     decoder_config.max_dpb_frames = 4;
-    decoder_config.pipeline_depth = state->config.codec == IPTV_NATIVE_CODEC_VP9_PROFILE0 ? 3u : 1u;
+    decoder_config.pipeline_depth = 1u;
     decoder_config.compute_queue = (uint64_t)state->compute_queue;
     decoder_config.cpu_affinity = 0x3f;
     decoder_config.cpu_priority = 700;
@@ -937,7 +935,7 @@ int32_t iptv_native_backend_open(iptv_native_backend_t *backend,
         return IPTV_NATIVE_E_STATE;
     mode = find_video_mode(config);
     if (!mode || config->bit_depth != 8 || config->chroma_format != IPTV_NATIVE_CHROMA_420 ||
-        config->hdr != 0 || !profile_supported(config, mode))
+        config->hdr != 0 || !profile_supported(config))
     {
         state->telemetry.last_result = IPTV_NATIVE_E_UNSUPPORTED;
         return IPTV_NATIVE_E_UNSUPPORTED;
@@ -953,8 +951,8 @@ int32_t iptv_native_backend_open(iptv_native_backend_t *backend,
     state->telemetry.coded_height = config->coded_height;
     state->telemetry.visible_width = config->visible_width;
     state->telemetry.visible_height = config->visible_height;
-    state->telemetry.output_pitch = mode->output_pitch;
-    state->telemetry.output_surface_height = mode->output_height;
+    state->telemetry.output_pitch = 0;
+    state->telemetry.output_surface_height = 0;
     iptv_native_agc_present_set_cancelled(0);
 
     result = initialize_video(state);
@@ -985,22 +983,28 @@ static int32_t present_video_output(backend_state_t *state, const videodec2_fram
                                     const videodec2_output_t *output, int require_accepted,
                                     int from_drain)
 {
+    uint64_t required_bytes;
     uint64_t presentation_pts_us;
     int displayable;
     uint64_t started;
     uint64_t elapsed;
     int32_t result;
 
+    required_bytes = (uint64_t)output->pitch * output->height * 3u / 2u;
     if (!output->valid || output->error || (require_accepted && !frame->accepted) ||
         output->picture_count != 1 || output->codec != state->mode->decoder_codec ||
-        output->width != state->mode->output_width ||
-        (output->height != state->mode->output_height &&
-         (!state->mode->alternate_output_height ||
-          output->height != state->mode->alternate_output_height)) ||
-        output->pitch != state->mode->output_pitch || !output->buffer ||
-        (output->pitch_bytes != 0 && output->pitch_bytes != output->pitch) ||
-        output->buffer_size == 0 || output->buffer_size > state->frame_slot_size ||
-        !frame_is_in_pool(state, output->buffer))
+        !output->width || !output->height || output->width > state->mode->decoder_max_width ||
+        output->height > state->mode->decoder_max_height ||
+        output->width < state->config.visible_width ||
+        output->height < state->config.visible_height || output->pitch < output->width ||
+        output->pitch > ((state->mode->decoder_max_width + 255u) & ~255u) ||
+        (output->pitch & 1u) != 0 || !output->buffer || output->pitch_bytes != output->pitch ||
+        required_bytes == 0 || output->buffer_size < required_bytes ||
+        output->buffer_size > state->frame_slot_size || !frame_is_in_pool(state, output->buffer) ||
+        (state->config.codec == IPTV_NATIVE_CODEC_H264 &&
+         output->height != state->config.coded_height &&
+         !(state->config.coded_height == 2176u && state->config.visible_height == 2160u &&
+           output->height == 2160u)))
     {
         ++state->telemetry.decoder_errors;
         state->telemetry.last_result = IPTV_NATIVE_E_DECODER_OUTPUT;
@@ -1019,6 +1023,8 @@ static int32_t present_video_output(backend_state_t *state, const videodec2_fram
 
     ++state->telemetry.decoded_frames;
     state->telemetry.last_decoder_output = (uintptr_t)output->buffer;
+    state->telemetry.output_pitch = output->pitch;
+    state->telemetry.output_surface_height = output->height;
     state->telemetry.decoder_output_in_frame_pool = 1;
     if (!displayable)
     {
@@ -1035,9 +1041,9 @@ static int32_t present_video_output(backend_state_t *state, const videodec2_fram
     state->telemetry.last_present_source = (uintptr_t)output->buffer;
     state->telemetry.zero_copy_pointer_match =
         state->telemetry.last_decoder_output == state->telemetry.last_present_source;
-    result = iptv_native_agc_present_nv12(output->buffer, (size_t)output->buffer_size,
-                                          output->pitch, output->height, state->mode->visible_width,
-                                          state->mode->visible_height);
+    result = iptv_native_agc_present_nv12(
+        output->buffer, (size_t)output->buffer_size, output->pitch, output->height,
+        state->config.visible_width, state->config.visible_height);
     elapsed = monotonic_us() - started;
     state->telemetry.present_total_us += elapsed;
     if (elapsed > state->telemetry.present_max_us)
@@ -1134,6 +1140,29 @@ static int32_t submit_coded_frame(backend_state_t *state, const void *coded_fram
     }
     if (!output.valid)
     {
+        if (state->config.codec == IPTV_NATIVE_CODEC_H264)
+        {
+            memset(&output, 0, sizeof(output));
+            output.size = sizeof(output);
+            started = monotonic_us();
+            result = sceVideodec2Flush(state->decoder, &frame, &output);
+            elapsed = monotonic_us() - started;
+            state->telemetry.decode_total_us += elapsed;
+            if (elapsed > state->telemetry.decode_max_us)
+                state->telemetry.decode_max_us = elapsed;
+            ++state->telemetry.decoder_flushes;
+            if (result != 0 || output.error)
+            {
+                ++state->telemetry.decoder_errors;
+                state->telemetry.last_native_result = result;
+                state->telemetry.last_result = result != 0 ? result : IPTV_NATIVE_E_DECODER_OUTPUT;
+                state->state = IPTV_NATIVE_STATE_ERROR;
+                state->telemetry.state = state->state;
+                return state->telemetry.last_result;
+            }
+            if (output.valid)
+                return present_video_output(state, &frame, &output, 0, 0);
+        }
         ++state->telemetry.buffered_video_access_units;
         return 0;
     }

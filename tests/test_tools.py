@@ -6,6 +6,7 @@
 # Exercises identity initialization and deployment resolution without a console.
 
 import json
+import hashlib
 import os
 from pathlib import Path
 import shutil
@@ -159,6 +160,25 @@ class ToolTests(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertIn("/data/homebrew/PPSA12345.ffpkg", result.stdout)
             self.assertIn("no network request was sent", result.stdout)
+
+    def test_boilerplate_runtime_and_title_layout_are_preserved(self):
+        manifest = (ROOT / "runtime/libc.prx.sha256").read_text(encoding="utf-8").split()
+        self.assertEqual(len(manifest), 2)
+        self.assertEqual(manifest[1], "*libc.prx")
+        runtime = ROOT / "runtime/libc.prx"
+        self.assertTrue(runtime.is_file())
+        self.assertEqual(hashlib.sha256(runtime.read_bytes()).hexdigest(), manifest[0])
+
+        build = (ROOT / "tools/build.sh").read_text(encoding="utf-8")
+        for required in (
+            'mkdir -p "$app/sce_sys" "$app/sce_module"',
+            'self --sign --in "$build/eboot.elf" --out "$app/eboot.bin"',
+            '(cd "$root/runtime" && sha256sum --check --strict libc.prx.sha256)',
+            'runtime_modules=("$root/runtime/libc.prx")',
+            'cp "$input" "$app/sce_module/$name"',
+            'self --inspect --file "$app/eboot.bin"',
+        ):
+            self.assertIn(required, build)
 
 
 if __name__ == "__main__":

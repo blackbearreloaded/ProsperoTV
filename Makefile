@@ -74,10 +74,11 @@ test-unit: $(HOST_UNIT_TEST)
 	@$(HOST_UNIT_TEST) $(GTEST_ARGS)
 
 $(HOST_UNIT_TEST): tests/test_vp9_packet.cpp tests/test_iptv_catalog.cpp \
+		tests/test_iptv_hls.cpp \
 		tests/test_iptv_store.cpp src/iptv_vp9_packet.c src/iptv_catalog.cpp \
-		src/iptv_store.cpp \
+		src/iptv_hls.cpp src/iptv_store.cpp \
 		include/iptv_vp9_packet.h include/iptv_catalog.h \
-		include/iptv_store.h \
+		include/iptv_hls.h include/iptv_store.h \
 		tools/setup-test-dependencies.sh | test-deps
 	@printf '%s\n' '==> [test-unit] Compiling the host-native GoogleTest binary'
 	@mkdir -p -- $(@D)
@@ -93,7 +94,8 @@ $(HOST_UNIT_TEST): tests/test_vp9_packet.cpp tests/test_iptv_catalog.cpp \
 		$(HOST_CXX) $(HOST_TEST_CXXFLAGS) -pthread -Iinclude \
 			-isystem "$$gtest/googletest/include" \
 			tests/test_vp9_packet.cpp tests/test_iptv_catalog.cpp \
-			tests/test_iptv_store.cpp src/iptv_catalog.cpp src/iptv_store.cpp \
+			tests/test_iptv_hls.cpp tests/test_iptv_store.cpp \
+			src/iptv_catalog.cpp src/iptv_hls.cpp src/iptv_store.cpp \
 			$(@D)/iptv-vp9-packet.o \
 			$(@D)/gtest-all.o $(@D)/gtest-main.o \
 			$(HOST_TEST_LDFLAGS) $(HOST_TEST_LIBS) -o $@

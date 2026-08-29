@@ -218,18 +218,6 @@ void BuildNativeCandidates(iptv_hls_playlist_t *master, const iptv_hls_limits_t 
 {
     if (!master || !limits || !candidates)
         return;
-    for (std::uint32_t index = 0; index < master->variant_count; ++index)
-    {
-        iptv_hls_variant_t &variant = master->variants[index];
-        if (!variant.width && !variant.height)
-            continue;
-        const bool native_geometry = (variant.width == 1280u && variant.height == 720u) ||
-                                     (variant.width == 1920u && variant.height == 1080u) ||
-                                     (variant.width == 2560u && variant.height == 1440u) ||
-                                     (variant.width == 3840u && variant.height == 2160u);
-        if (!native_geometry)
-            variant.compatible = 0u;
-    }
 
     std::uint32_t excluded = 0;
     while (candidates->count < master->variant_count)
