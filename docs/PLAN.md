@@ -108,8 +108,9 @@ Status: active
 - Acceptance criteria: `A1`, `A2`, and the startup subset of `A3`.
 - Required evidence: exact hashes; title-specific ShadowMount and klog slice;
   rendered screenshot; clean title close; service health.
-- Candidate commit: `3180560` (RELRO starts at the first stored RELRO byte and
-  every `PT_LOAD` has page-congruent file and virtual addresses).
+- Candidate commit: `4caffd1` (all `PT_LOAD` addresses are page-congruent and
+  the executable preserves PSRadio's separate packaged-libc facade and Sony
+  libc implementation dependencies).
 - Validation-record commit: pending.
 
 ## G2: Native H.264/HEVC playback

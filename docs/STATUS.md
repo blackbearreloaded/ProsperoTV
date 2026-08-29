@@ -13,7 +13,7 @@ investigation-loop run.
 | Area | Current state |
 | --- | --- |
 | Identity | Configured as `psiptv`, title `PPSA88000`, concept `88000`, content version `01.000.001` |
-| Native foundation | Boilerplate build/runtime with PSRadio-style SDL/RmlUi shell, controller input, background work, `/download0` state, and explicit cleanup |
+| Native foundation | Boilerplate build/runtime with byte-identical generated `libc.prx`, PSRadio-style SDL/RmlUi shell, controller input, background work, `/download0` state, and explicit cleanup |
 | Public catalog | Built-in iptv-org `index.m3u` source plus a user-entered custom HTTP(S) M3U/M3U8 source |
 | Catalog parser | Extended M3U metadata, deduplication, alternate URLs/groups, country/language fields, and channel HTTP headers |
 | Local cache | Separate SQLite databases for built-in and custom sources, staged replacement, quick integrity check, and last-good fallback |
@@ -51,9 +51,12 @@ adding Profile 2 to the mode table.
 
 The mode tables and presenter geometry reflect hardware investigation results,
 but this integrated `PPSA88000` application has not completed its final
-console acceptance pass. In particular, startup, catalog refresh, launcher
-return, repeated channel changes, H.264/HEVC at each geometry, audio/video
-pacing, cancellation, and cleanup must be observed on the target console.
+console acceptance pass. The loader now reaches `_start`; the latest run
+identified and corrected an executable-writer error that collapsed PSRadio's
+two libc dependencies and routed `calloc` through the packaged runtime facade.
+Startup must be rerun with candidate `4caffd1`, followed by catalog refresh,
+launcher return, repeated channel changes, H.264/HEVC at each geometry,
+audio/video pacing, cancellation, and cleanup on the target console.
 
 Testing must use the shared PS5 lock and the repository's investigation-loop
 protocol. A crash or black screen requires evidence collection before another
