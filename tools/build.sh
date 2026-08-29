@@ -299,11 +299,13 @@ for compatibility_symbol in fchown lstat; do
         exit 2
     fi
 done
-if "$readelf_tool" --symbols --wide "$build/llvm-pie.elf" |
-    grep -Eq 'UND[[:space:]]+calloc$'; then
-    echo 'target calloc compatibility implementation remained unresolved' >&2
-    exit 2
-fi
+for allocator in malloc calloc realloc free posix_memalign; do
+    if "$readelf_tool" --symbols --wide "$build/llvm-pie.elf" |
+        grep -Eq "UND[[:space:]]+${allocator}$"; then
+        echo "target allocator implementation remained unresolved: $allocator" >&2
+        exit 2
+    fi
+done
 "$tool" link --in "$build/llvm-pie.elf" --out "$build/eboot.elf" \
     --stub-dir "$sdk_root/target/lib" "${builder_stub_args[@]}" --module-sdk "$module_sdk" \
     --companion-sdk "$companion_sdk" --file-name eboot.elf
