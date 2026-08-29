@@ -51,12 +51,14 @@ adding Profile 2 to the mode table.
 
 The mode tables and presenter geometry reflect hardware investigation results,
 but this integrated `PPSA88000` application has not completed its final
-console acceptance pass. The loader now reaches `_start`; the latest run
-identified and corrected an executable-writer error that collapsed PSRadio's
-two libc dependencies and routed `calloc` through the packaged runtime facade.
-Startup must be rerun with candidate `4caffd1`, followed by catalog refresh,
-launcher return, repeated channel changes, H.264/HEVC at each geometry,
-audio/video pacing, cancellation, and cleanup on the target console.
+console acceptance pass. The loader now reaches `_start`. Hardware confirmed
+that both required libc dependencies load, but system `calloc` still returns
+null under the clean-room boilerplate heap contract. Candidate `59fe40c`
+therefore provides a bounded app-local `calloc` using the working allocator
+while preserving the boilerplate-generated `libc.prx` byte-for-byte. Startup
+must be rerun, followed by catalog refresh, launcher return, repeated channel
+changes, H.264/HEVC at each geometry, audio/video pacing, cancellation, and
+cleanup on the target console.
 
 Testing must use the shared PS5 lock and the repository's investigation-loop
 protocol. A crash or black screen requires evidence collection before another

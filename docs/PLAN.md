@@ -108,9 +108,10 @@ Status: active
 - Acceptance criteria: `A1`, `A2`, and the startup subset of `A3`.
 - Required evidence: exact hashes; title-specific ShadowMount and klog slice;
   rendered screenshot; clean title close; service health.
-- Candidate commit: `4caffd1` (all `PT_LOAD` addresses are page-congruent and
-  the executable preserves PSRadio's separate packaged-libc facade and Sony
-  libc implementation dependencies).
+- Candidate commit: `59fe40c` (all `PT_LOAD` addresses are page-congruent, the
+  executable preserves the boilerplate's separate packaged-libc facade and
+  Sony libc implementation dependencies, and app code supplies the missing
+  bounded `calloc` behavior without modifying `libc.prx`).
 - Validation-record commit: pending.
 
 ## G2: Native H.264/HEVC playback
