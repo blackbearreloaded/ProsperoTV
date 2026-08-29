@@ -1,0 +1,790 @@
+/* psiptv - native PS5 IPTV client derived from ps5-native-app-boilerplate.
+ * Copyright (C) 2026 BlackBearReloaded
+ * SPDX-License-Identifier: GPL-3.0-or-later */
+
+#include "iptv_player.h"
+
+#include "iptv_hls.h"
+#include "iptv_http.h"
+#include "iptv_input.h"
+#include "iptv_native_backend.h"
+#include "iptv_stream.h"
+
+#include <cstddef>
+#include <cstdint>
+#include <cstdio>
+#include <cstring>
+#include <new>
+
+extern "C" int sceKernelSendNotificationRequest(std::uint32_t device, void *request,
+                                                std::size_t size, int blocking);
+extern "C" int sceKernelUsleep(std::uint32_t microseconds);
+extern "C" long write(int descriptor, const void *buffer, std::size_t bytes);
+
+namespace
+{
+
+constexpr std::size_t kReadBytes = 64u * 1024u;
+constexpr std::size_t kPlaylistBytes = IPTV_HLS_DEFAULT_MAX_INPUT_BYTES;
+constexpr char kReceiptPath[] = "/download0/iptv-last-receipt.txt";
+
+struct NotificationRequest
+{
+    std::uint8_t reserved[45];
+    char message[3075];
+};
+
+void WriteStdout(const char *text, std::size_t bytes)
+{
+    while (text && bytes)
+    {
+        const long written = write(1, text, bytes);
+        if (written <= 0)
+            return;
+        text += static_cast<std::size_t>(written);
+        bytes -= static_cast<std::size_t>(written);
+    }
+}
+
+void Notify(const char *message)
+{
+    NotificationRequest request{};
+    if (message)
+    {
+        std::snprintf(request.message, sizeof(request.message), "%s", message);
+    }
+    sceKernelSendNotificationRequest(0, &request, sizeof(request), 0);
+}
+
+void NotifyError(const char *stage, int result)
+{
+    char message[192]{};
+    std::snprintf(message, sizeof(message), "IPTV: %s failed (%d)", stage, result);
+    Notify(message);
+}
+
+void SaveReceipt(int result, const iptv_stream_telemetry_t &stream,
+                 const iptv_native_telemetry_t &native)
+{
+    char temporary[96]{};
+    std::snprintf(temporary, sizeof(temporary), "%s.tmp", kReceiptPath);
+    std::FILE *file = std::fopen(temporary, "wb");
+    if (!file)
+        return;
+    std::fprintf(file,
+                 "IPTV_RECEIPT_V1\n"
+                 "result=%d\n"
+                 "stream_state=%d\n"
+                 "stream_result=%d\n"
+                 "stream_error=%s\n"
+                 "codec=%u\nprofile=%u\nlevel=%u\n"
+                 "coded=%ux%u\nvisible=%ux%u\nbit_depth=%u\nchroma=%u\n"
+                 "video_access_units=%llu\naudio_frames=%llu\n"
+                 "native_state=%d\nnative_result=%d\nnative_cleanup=%d\n"
+                 "decoded_frames=%llu\npresented_frames=%llu\nhidden_decoded_frames=%llu\n"
+                 "buffered_video_access_units=%llu\ndrained_video_frames=%llu\n"
+                 "dropped_delayed_frames=%llu\ndecoder_flushes=%llu\n"
+                 "drain_flush_limit_hits=%llu\npending_video_timestamps=%u\n"
+                 "audio_decoded_frames=%llu\naudio_output_grains=%llu\n"
+                 "decoder_output_in_frame_pool=%u\nzero_copy_pointer_match=%u\n"
+                 "last_decoder_output=0x%llx\nlast_present_source=0x%llx\n"
+                 "first_frame_latency_us=%llu\ndecode_max_us=%llu\n"
+                 "present_max_us=%llu\npacing_resets=%llu\n"
+                 "pacing_waits=%llu\npacing_late_frames=%llu\n"
+                 "hardware_validated=%u\nstream_acceptance_validated=%u\n",
+                 result, static_cast<int>(stream.state), stream.last_result, stream.last_error,
+                 stream.format.video_codec, stream.format.video_profile, stream.format.video_level,
+                 stream.format.coded_width, stream.format.coded_height, stream.format.visible_width,
+                 stream.format.visible_height, stream.format.video_bit_depth,
+                 stream.format.video_chroma_format,
+                 static_cast<unsigned long long>(stream.video_access_units),
+                 static_cast<unsigned long long>(stream.audio_frames),
+                 static_cast<int>(native.state), native.last_result, native.cleanup_result,
+                 static_cast<unsigned long long>(native.decoded_frames),
+                 static_cast<unsigned long long>(native.presented_frames),
+                 static_cast<unsigned long long>(native.hidden_decoded_frames),
+                 static_cast<unsigned long long>(native.buffered_video_access_units),
+                 static_cast<unsigned long long>(native.drained_video_frames),
+                 static_cast<unsigned long long>(native.dropped_delayed_frames),
+                 static_cast<unsigned long long>(native.decoder_flushes),
+                 static_cast<unsigned long long>(native.drain_flush_limit_hits),
+                 native.pending_video_timestamps,
+                 static_cast<unsigned long long>(native.decoded_audio_frames),
+                 static_cast<unsigned long long>(native.audio_output_grains),
+                 native.decoder_output_in_frame_pool, native.zero_copy_pointer_match,
+                 static_cast<unsigned long long>(native.last_decoder_output),
+                 static_cast<unsigned long long>(native.last_present_source),
+                 static_cast<unsigned long long>(native.first_frame_latency_us),
+                 static_cast<unsigned long long>(native.decode_max_us),
+                 static_cast<unsigned long long>(native.present_max_us),
+                 static_cast<unsigned long long>(native.pacing_resets),
+                 static_cast<unsigned long long>(native.pacing_waits),
+                 static_cast<unsigned long long>(native.pacing_late_frames),
+                 native.hardware_validated, native.stream_acceptance_validated);
+    const int write_result = std::ferror(file) ? -1 : std::fflush(file);
+    const int close_result = std::fclose(file);
+    if (write_result != 0 || close_result != 0)
+    {
+        std::remove(temporary);
+        return;
+    }
+    if (std::rename(temporary, kReceiptPath) != 0)
+    {
+        std::remove(temporary);
+        return;
+    }
+    char summary[384]{};
+    const int summary_bytes = std::snprintf(
+        summary, sizeof(summary),
+        "IPTV_RECEIPT result=%d codec=%u decoded=%llu presented=%llu "
+        "audio=%llu buffered=%llu drained=%llu flushes=%llu "
+        "pool=%u zero_copy=%u cleanup=%d\n",
+        result, stream.format.video_codec, static_cast<unsigned long long>(native.decoded_frames),
+        static_cast<unsigned long long>(native.presented_frames),
+        static_cast<unsigned long long>(native.decoded_audio_frames),
+        static_cast<unsigned long long>(native.buffered_video_access_units),
+        static_cast<unsigned long long>(native.drained_video_frames),
+        static_cast<unsigned long long>(native.decoder_flushes),
+        native.decoder_output_in_frame_pool, native.zero_copy_pointer_match, native.cleanup_result);
+    if (summary_bytes > 0)
+        WriteStdout(summary, static_cast<std::size_t>(summary_bytes) < sizeof(summary)
+                                 ? static_cast<std::size_t>(summary_bytes)
+                                 : sizeof(summary) - 1u);
+}
+
+bool UrlLooksLikeHls(const char *url)
+{
+    if (!url)
+        return false;
+    for (const char *at = url; *at && *at != '?' && *at != '#'; ++at)
+    {
+        if (at[0] != '.')
+            continue;
+        if (!at[1] || !at[2] || !at[3] || !at[4])
+            continue;
+        const char m = static_cast<char>(at[1] | 0x20);
+        const char u = static_cast<char>(at[3] | 0x20);
+        if (m == 'm' && at[2] == '3' && u == 'u' && at[4] == '8')
+            return true;
+    }
+    return false;
+}
+
+bool BufferLooksLikeHls(const std::uint8_t *data, std::size_t bytes)
+{
+    if (!data)
+        return false;
+    std::size_t at = 0;
+    if (bytes >= 3 && data[0] == 0xef && data[1] == 0xbb && data[2] == 0xbf)
+        at = 3;
+    while (at < bytes &&
+           (data[at] == ' ' || data[at] == '\t' || data[at] == '\r' || data[at] == '\n'))
+    {
+        ++at;
+    }
+    static constexpr char kHeader[] = "#EXTM3U";
+    return bytes - at >= sizeof(kHeader) - 1u &&
+           std::memcmp(data + at, kHeader, sizeof(kHeader) - 1u) == 0;
+}
+
+int ReadInitialProbe(iptv::http::StreamRequest *request, std::uint8_t *buffer, std::size_t capacity)
+{
+    if (!request || !buffer || capacity < IPTV_STREAM_TS_PACKET_BYTES)
+        return -1;
+    std::size_t total = 0;
+    while (total < IPTV_STREAM_TS_PACKET_BYTES)
+    {
+        const int read =
+            iptv::http::ReadStream(request, buffer + total, IPTV_STREAM_TS_PACKET_BYTES - total);
+        if (read < 0)
+            return -1;
+        if (read == 0)
+            break;
+        total += static_cast<std::size_t>(read);
+        if (BufferLooksLikeHls(buffer, total))
+            break;
+    }
+    return static_cast<int>(total);
+}
+
+struct HlsVariantCandidates
+{
+    std::uint32_t count = 0;
+    char urls[IPTV_HLS_MAX_VARIANTS][IPTV_HLS_URL_BYTES]{};
+};
+
+void BuildNativeCandidates(iptv_hls_playlist_t *master, const iptv_hls_limits_t *limits,
+                           HlsVariantCandidates *candidates)
+{
+    if (!master || !limits || !candidates)
+        return;
+    for (std::uint32_t index = 0; index < master->variant_count; ++index)
+    {
+        iptv_hls_variant_t &variant = master->variants[index];
+        if (!variant.width && !variant.height)
+            continue;
+        const bool native_geometry = (variant.width == 1280u && variant.height == 720u) ||
+                                     (variant.width == 1920u && variant.height == 1080u) ||
+                                     (variant.width == 2560u && variant.height == 1440u) ||
+                                     (variant.width == 3840u && variant.height == 2160u);
+        if (!native_geometry)
+            variant.compatible = 0u;
+    }
+
+    std::uint32_t excluded = 0;
+    while (candidates->count < master->variant_count)
+    {
+        const std::uint32_t selected = iptv_hls_select_variant(master, limits, excluded);
+        if (selected == IPTV_HLS_NO_VARIANT)
+            break;
+        std::snprintf(candidates->urls[candidates->count], IPTV_HLS_URL_BYTES, "%s",
+                      master->variants[selected].url);
+        ++candidates->count;
+        excluded |= UINT32_C(1) << selected;
+    }
+}
+
+struct NativeAdapter
+{
+    iptv_native_backend_t backend{};
+    bool initialized = false;
+    bool opened = false;
+};
+
+int AdapterOpen(void *context, const iptv_stream_format_t *format)
+{
+    auto *adapter = static_cast<NativeAdapter *>(context);
+    if (!adapter || !format || !adapter->initialized)
+        return -1;
+
+    iptv_native_open_config_t config{};
+    if (format->video_codec == IPTV_STREAM_VIDEO_H264)
+    {
+        config.codec = IPTV_NATIVE_CODEC_H264;
+    }
+    else if (format->video_codec == IPTV_STREAM_VIDEO_HEVC)
+    {
+        config.codec = IPTV_NATIVE_CODEC_HEVC_MAIN8;
+    }
+    else
+    {
+        return -1;
+    }
+    config.profile = format->video_profile;
+    config.level = format->video_level;
+    config.coded_width = format->coded_width;
+    config.coded_height = format->coded_height;
+    config.visible_width = format->visible_width;
+    config.visible_height = format->visible_height;
+    config.bit_depth = format->video_bit_depth;
+    config.chroma_format = IPTV_NATIVE_CHROMA_420;
+    config.hdr = 0;
+    config.enable_audio = format->audio_pid != 0;
+    const int result = iptv_native_backend_open(&adapter->backend, &config);
+    adapter->opened = result == 0;
+    return result;
+}
+
+int AdapterVideo(void *context, const std::uint8_t *data, std::size_t bytes, std::uint64_t pts_us)
+{
+    auto *adapter = static_cast<NativeAdapter *>(context);
+    return adapter && adapter->opened
+               ? iptv_native_backend_submit_video(&adapter->backend, data, bytes, pts_us)
+               : -1;
+}
+
+int AdapterAudio(void *context, const std::uint8_t *data, std::size_t bytes, std::uint64_t pts_us)
+{
+    auto *adapter = static_cast<NativeAdapter *>(context);
+    return adapter && adapter->opened
+               ? iptv_native_backend_submit_audio(&adapter->backend, data, bytes, pts_us)
+               : -1;
+}
+
+int AdapterDrain(void *context)
+{
+    auto *adapter = static_cast<NativeAdapter *>(context);
+    return adapter && adapter->opened ? iptv_native_backend_drain(&adapter->backend) : 0;
+}
+
+void AdapterClose(void *context)
+{
+    auto *adapter = static_cast<NativeAdapter *>(context);
+    if (!adapter || !adapter->initialized)
+        return;
+    (void)iptv_native_backend_close(&adapter->backend);
+    adapter->opened = false;
+    adapter->initialized = false;
+}
+
+class StreamRunner
+{
+  public:
+    bool Start()
+    {
+        Close();
+        if (iptv_native_backend_init(&adapter_.backend) != 0)
+            return false;
+        adapter_.initialized = true;
+
+        iptv_stream_init(&session_);
+        iptv_stream_backend_t backend{};
+        backend.context = &adapter_;
+        backend.open = AdapterOpen;
+        backend.submit_video = AdapterVideo;
+        backend.submit_audio = AdapterAudio;
+        backend.drain = AdapterDrain;
+        backend.close = AdapterClose;
+        backend.hardware_validated = 0;
+
+        if (iptv_stream_open(&session_, nullptr, &backend) != IPTV_STREAM_OK ||
+            iptv_stream_start(&session_) != IPTV_STREAM_OK)
+        {
+            Close();
+            return false;
+        }
+        active_ = true;
+        return true;
+    }
+
+    int Push(const void *data, std::size_t bytes)
+    {
+        return active_ ? iptv_stream_push(&session_, data, bytes) : IPTV_STREAM_INVALID_STATE;
+    }
+
+    bool StopRequested()
+    {
+        iptv_input_poll();
+        iptv_input_event_t event{};
+        while (iptv_input_next(&event))
+        {
+            if (event.pressed &&
+                (event.action == IPTV_INPUT_CIRCLE || event.action == IPTV_INPUT_OPTIONS))
+            {
+                if (adapter_.initialized)
+                {
+                    iptv_native_backend_request_stop(&adapter_.backend);
+                }
+                return true;
+            }
+        }
+        return adapter_.initialized && iptv_native_backend_stop_requested(&adapter_.backend) != 0;
+    }
+
+    const iptv_stream_telemetry_t *Telemetry() const
+    {
+        return iptv_stream_telemetry(&session_);
+    }
+
+    bool NativeTelemetry(iptv_native_telemetry_t *telemetry) const
+    {
+        return telemetry && iptv_native_backend_get_telemetry(&adapter_.backend, telemetry) == 0;
+    }
+
+    void Close()
+    {
+        if (active_)
+        {
+            (void)iptv_stream_stop(&session_);
+            (void)iptv_stream_cleanup(&session_);
+            active_ = false;
+        }
+        if (adapter_.initialized)
+            AdapterClose(&adapter_);
+    }
+
+    ~StreamRunner()
+    {
+        Close();
+    }
+
+  private:
+    NativeAdapter adapter_{};
+    iptv_stream_session_t session_{};
+    bool active_ = false;
+};
+
+enum class FeedResult
+{
+    ok,
+    stopped,
+    reopen,
+    failed
+};
+
+FeedResult FeedRequest(iptv::http::StreamRequest *request, StreamRunner *runner,
+                       std::uint8_t *buffer, std::size_t buffer_bytes)
+{
+    if (!request || !runner || !buffer || !buffer_bytes)
+        return FeedResult::failed;
+    unsigned read_failures = 0;
+    while (!runner->StopRequested())
+    {
+        const int read = iptv::http::ReadStream(request, buffer, buffer_bytes);
+        if (read == 0)
+            return FeedResult::ok;
+        if (read < 0)
+        {
+            if (++read_failures >= 3u)
+                return FeedResult::failed;
+            sceKernelUsleep(100000u);
+            continue;
+        }
+        read_failures = 0;
+        const int pushed = runner->Push(buffer, static_cast<std::size_t>(read));
+        if (pushed == IPTV_STREAM_REOPEN_REQUIRED)
+            return FeedResult::reopen;
+        if (pushed != IPTV_STREAM_OK)
+            return FeedResult::failed;
+    }
+    return FeedResult::stopped;
+}
+
+bool WaitForRefresh(StreamRunner *runner, std::uint32_t milliseconds)
+{
+    std::uint32_t remaining = milliseconds;
+    while (remaining)
+    {
+        if (runner->StopRequested())
+            return false;
+        const std::uint32_t slice = remaining > 100u ? 100u : remaining;
+        sceKernelUsleep(slice * 1000u);
+        remaining -= slice;
+    }
+    return !runner->StopRequested();
+}
+
+int FetchPlaylist(const char *url, char *data, std::size_t capacity, std::size_t *bytes,
+                  char *effective_url, std::size_t effective_url_capacity,
+                  const iptv::http::RequestHeaders *headers)
+{
+    if (!url || !data || capacity < kPlaylistBytes + 1u || !bytes || !effective_url ||
+        effective_url_capacity == 0)
+    {
+        return -1;
+    }
+    const auto result = iptv::http::GetM3uResolved(url, data, capacity, effective_url,
+                                                   effective_url_capacity, kPlaylistBytes, headers);
+    *bytes = result.bytes;
+    return result.status == iptv::http::Status::ok ? 0 : -static_cast<int>(result.status);
+}
+
+int OpenAndFeedSegment(const char *url, StreamRunner *runner, std::uint8_t *buffer,
+                       const iptv::http::RequestHeaders *headers)
+{
+    for (unsigned attempt = 0; attempt < 3u; ++attempt)
+    {
+        iptv::http::StreamRequest request{};
+        const auto status = iptv::http::OpenStream(url, "video/mp2t, */*", &request, headers);
+        if (status != iptv::http::Status::ok)
+        {
+            if (attempt == 2u)
+                return -static_cast<int>(status);
+            sceKernelUsleep(100000u);
+            continue;
+        }
+        const FeedResult fed = FeedRequest(&request, runner, buffer, kReadBytes);
+        iptv::http::CloseStream(&request);
+        if (fed == FeedResult::stopped)
+            return 1;
+        if (fed == FeedResult::ok)
+            return 0;
+        if (attempt == 2u || !runner->Start())
+            return -1;
+        sceKernelUsleep(100000u);
+    }
+    return -1;
+}
+
+int RunHlsMedia(const char *source_url, StreamRunner *runner, std::uint8_t *read_buffer,
+                char *playlist_data, const iptv_hls_limits_t *limits, iptv_hls_playlist_t *playlist,
+                const iptv::http::RequestHeaders *headers)
+{
+    char media_url[IPTV_HLS_URL_BYTES]{};
+    if (std::strlen(source_url) >= sizeof(media_url))
+        return IPTV_HLS_URL_LIMIT;
+    std::snprintf(media_url, sizeof(media_url), "%s", source_url);
+    char effective_url[IPTV_HLS_URL_BYTES]{};
+    std::size_t playlist_bytes = 0;
+    std::uint64_t next_sequence = 0;
+    std::uint64_t last_discontinuity_sequence = 0;
+    bool have_sequence = false;
+    bool have_discontinuity_sequence = false;
+    bool session_has_data = false;
+    for (;;)
+    {
+        if (runner->StopRequested())
+            return 1;
+        int result = FetchPlaylist(media_url, playlist_data, kPlaylistBytes + 1u, &playlist_bytes,
+                                   effective_url, sizeof(effective_url), headers);
+        if (result != 0)
+            return result;
+        const iptv_hls_result_t parsed =
+            iptv_hls_parse(playlist_data, playlist_bytes, effective_url, std::strlen(effective_url),
+                           limits, playlist);
+        if (parsed != IPTV_HLS_OK || playlist->kind != IPTV_HLS_KIND_MEDIA)
+        {
+            return parsed == IPTV_HLS_OK ? IPTV_HLS_MALFORMED : parsed;
+        }
+        std::snprintf(media_url, sizeof(media_url), "%s", effective_url);
+
+        if (have_sequence && playlist->segment_count)
+        {
+            const std::uint64_t first = playlist->segments[0].sequence;
+            const std::uint64_t last = playlist->segments[playlist->segment_count - 1u].sequence;
+            if (first > next_sequence || last + 1u < next_sequence)
+            {
+                if (!runner->Start())
+                {
+                    return -1;
+                }
+                have_sequence = false;
+                have_discontinuity_sequence = false;
+                session_has_data = false;
+            }
+        }
+
+        std::uint32_t start = 0;
+        if (!have_sequence && playlist->is_live && playlist->segment_count > 3u)
+        {
+            start = playlist->segment_count - 3u;
+        }
+        for (std::uint32_t i = start; i < playlist->segment_count; ++i)
+        {
+            const iptv_hls_segment_t &segment = playlist->segments[i];
+            if (have_sequence && segment.sequence < next_sequence)
+                continue;
+            const bool changed_timeline =
+                have_discontinuity_sequence &&
+                segment.discontinuity_sequence != last_discontinuity_sequence;
+            if ((segment.discontinuity || changed_timeline) && session_has_data)
+            {
+                if (!runner->Start())
+                {
+                    return -1;
+                }
+                session_has_data = false;
+            }
+            result = OpenAndFeedSegment(segment.url, runner, read_buffer, headers);
+            if (result != 0)
+                return result;
+            have_sequence = true;
+            next_sequence = segment.sequence + 1u;
+            have_discontinuity_sequence = true;
+            last_discontinuity_sequence = segment.discontinuity_sequence;
+            session_has_data = true;
+        }
+
+        if (!playlist->is_live)
+        {
+            return 0;
+        }
+        std::uint32_t refresh_ms = playlist->target_duration_ms / 2u;
+        if (refresh_ms < 500u)
+            refresh_ms = 500u;
+        if (!WaitForRefresh(runner, refresh_ms))
+        {
+            return 1;
+        }
+    }
+}
+
+int RunHls(const char *source_url, StreamRunner *runner, std::uint8_t *read_buffer,
+           char *playlist_data, const iptv::http::RequestHeaders *headers)
+{
+    auto *playlist = new (std::nothrow) iptv_hls_playlist_t{};
+    if (!playlist)
+        return -1;
+
+    iptv_hls_limits_t limits{};
+    iptv_hls_default_limits(&limits);
+
+    char effective_url[IPTV_HLS_URL_BYTES]{};
+    std::size_t playlist_bytes = 0;
+    int result = FetchPlaylist(source_url, playlist_data, kPlaylistBytes + 1u, &playlist_bytes,
+                               effective_url, sizeof(effective_url), headers);
+    if (result != 0)
+    {
+        delete playlist;
+        return result;
+    }
+
+    const iptv_hls_result_t parsed = iptv_hls_parse(playlist_data, playlist_bytes, effective_url,
+                                                    std::strlen(effective_url), &limits, playlist);
+    if (parsed != IPTV_HLS_OK)
+    {
+        delete playlist;
+        return parsed;
+    }
+    if (playlist->kind == IPTV_HLS_KIND_MEDIA)
+    {
+        result = RunHlsMedia(effective_url, runner, read_buffer, playlist_data, &limits, playlist,
+                             headers);
+        delete playlist;
+        return result;
+    }
+    if (playlist->kind != IPTV_HLS_KIND_MASTER)
+    {
+        delete playlist;
+        return IPTV_HLS_MALFORMED;
+    }
+
+    auto *candidates = new (std::nothrow) HlsVariantCandidates{};
+    if (!candidates)
+    {
+        delete playlist;
+        return -1;
+    }
+    BuildNativeCandidates(playlist, &limits, candidates);
+    if (!candidates->count)
+    {
+        delete candidates;
+        delete playlist;
+        return IPTV_HLS_NO_VARIANT_WITHIN_LIMITS;
+    }
+
+    for (std::uint32_t index = 0; index < candidates->count; ++index)
+    {
+        if (index && !runner->Start())
+        {
+            result = -1;
+            break;
+        }
+        result = RunHlsMedia(candidates->urls[index], runner, read_buffer, playlist_data, &limits,
+                             playlist, headers);
+        if (result >= 0)
+            break;
+    }
+
+    delete candidates;
+    delete playlist;
+    return result;
+}
+
+int RunDirect(const char *url, StreamRunner *runner, std::uint8_t *read_buffer, char *playlist_data,
+              const iptv::http::RequestHeaders *headers)
+{
+    for (unsigned attempt = 0; attempt < 3u; ++attempt)
+    {
+        iptv::http::StreamRequest request{};
+        const auto status = iptv::http::OpenStream(
+            url, "video/mp2t, application/vnd.apple.mpegurl, */*", &request, headers);
+        if (status != iptv::http::Status::ok)
+        {
+            if (attempt == 2u)
+                return -static_cast<int>(status);
+            sceKernelUsleep(100000u);
+            continue;
+        }
+
+        const int first = ReadInitialProbe(&request, read_buffer, kReadBytes);
+        if (first <= 0)
+        {
+            iptv::http::CloseStream(&request);
+            if (attempt == 2u)
+                return -1;
+            sceKernelUsleep(100000u);
+            continue;
+        }
+        if (BufferLooksLikeHls(read_buffer, static_cast<std::size_t>(first)))
+        {
+            iptv::http::CloseStream(&request);
+            return RunHls(request.effective_url, runner, read_buffer, playlist_data, headers);
+        }
+        const int pushed = runner->Push(read_buffer, static_cast<std::size_t>(first));
+        FeedResult fed = pushed == IPTV_STREAM_REOPEN_REQUIRED ? FeedResult::reopen
+                         : pushed == IPTV_STREAM_OK
+                             ? FeedRequest(&request, runner, read_buffer, kReadBytes)
+                             : FeedResult::failed;
+        iptv::http::CloseStream(&request);
+        if (fed == FeedResult::stopped)
+            return 1;
+        if (attempt == 2u || !runner->Start())
+            return fed == FeedResult::ok ? 0 : -1;
+        sceKernelUsleep(100000u);
+    }
+    return -1;
+}
+
+} // namespace
+
+int iptv_player_run_with_headers(const char *url, const char *channel_name, const char *user_agent,
+                                 const char *referrer)
+{
+    if (!url || !*url)
+        return -1;
+
+    char message[192]{};
+    std::snprintf(message, sizeof(message), "IPTV: opening %.150s",
+                  channel_name && *channel_name ? channel_name : "channel");
+    Notify(message);
+
+    const auto network = iptv::http::NetworkInit();
+    if (network != iptv::http::Status::ok)
+    {
+        NotifyError("network init", static_cast<int>(network));
+        return -1;
+    }
+    const bool input_ready = iptv_input_init();
+    if (!input_ready)
+    {
+        Notify("IPTV: controller initialization failed");
+        iptv::http::NetworkShutdown();
+        return -1;
+    }
+
+    const iptv::http::RequestHeaders headers{user_agent, referrer};
+    auto *runner = new (std::nothrow) StreamRunner{};
+    auto *read_buffer = new (std::nothrow) std::uint8_t[kReadBytes];
+    auto *playlist_data = new (std::nothrow) char[kPlaylistBytes + 1u];
+    int result = -1;
+    if (!runner || !read_buffer || !playlist_data)
+    {
+        Notify("IPTV: out of memory");
+    }
+    else if (!runner->Start())
+    {
+        Notify("IPTV: decoder session initialization failed");
+    }
+    else
+    {
+        result = UrlLooksLikeHls(url)
+                     ? RunHls(url, runner, read_buffer, playlist_data, &headers)
+                     : RunDirect(url, runner, read_buffer, playlist_data, &headers);
+        if (result < 0)
+        {
+            const iptv_stream_telemetry_t *telemetry = runner->Telemetry();
+            if (telemetry && telemetry->last_error[0])
+            {
+                std::snprintf(message, sizeof(message), "IPTV: %.150s", telemetry->last_error);
+                Notify(message);
+            }
+            else
+            {
+                NotifyError("playback", result);
+            }
+        }
+    }
+
+    if (runner)
+    {
+        runner->Close();
+        const iptv_stream_telemetry_t *current = runner->Telemetry();
+        iptv_native_telemetry_t native{};
+        if (current && runner->NativeTelemetry(&native))
+        {
+            SaveReceipt(result, *current, native);
+        }
+    }
+    delete runner;
+    delete[] playlist_data;
+    delete[] read_buffer;
+    iptv_input_shutdown();
+    iptv::http::NetworkShutdown();
+    return result;
+}
+
+int iptv_player_run(const char *url, const char *channel_name)
+{
+    return iptv_player_run_with_headers(url, channel_name, nullptr, nullptr);
+}

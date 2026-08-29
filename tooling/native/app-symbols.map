@@ -1,0 +1,13 @@
+/*
+ * ps5-native-app-boilerplate - Application symbol visibility policy.
+ * Copyright (C) 2026 BlackBearReloaded
+ * SPDX-License-Identifier: GPL-3.0-or-later
+ *
+ * Keeps all application and static-library definitions internal. The native
+ * converter publishes only imported PS5 symbols.
+ */
+
+{
+    local:
+        *;
+};
