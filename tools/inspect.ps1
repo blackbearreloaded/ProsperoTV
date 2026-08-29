@@ -109,6 +109,9 @@ foreach ($load in $mappedLoads) {
     if ($load.Align -ne 0x4000) { $errors.Add("Mapped LOAD $($load.Index) is not 0x4000 aligned.") }
     if ($load.MemorySize -lt $load.FileSize) { $errors.Add("LOAD $($load.Index) has memsz smaller than filesz.") }
     if ($load.Flags -notin @(1, 4, 6)) { $errors.Add("LOAD $($load.Index) has unsupported flags $($load.Flags).") }
+    if ($load.Flags -eq 1 -and $load.FileSize -gt 0x400000) {
+        $errors.Add("Executable LOAD $($load.Index) exceeds the firmware-6.02 4 MiB boundary.")
+    }
 }
 foreach ($header in $programHeaders) {
     if ($header.Type -eq 0x6fffff00) {

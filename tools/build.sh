@@ -303,6 +303,26 @@ done
     --stub-dir "$sdk_root/target/lib" "${builder_stub_args[@]}" --module-sdk "$module_sdk" \
     --companion-sdk "$companion_sdk" --file-name eboot.elf
 
+# Firmware 6.02 rejects a native executable whose executable PT_LOAD grows
+# beyond 4 MiB with "found illegal segment header" before _start. Keep this
+# invariant explicit so a dependency update cannot recreate that launch crash.
+executable_size_hex=$(
+    "$readelf_tool" --program-headers --wide "$build/eboot.elf" |
+        awk '$1 == "LOAD" && $7 == "E" && !found { print $5; found = 1 }'
+)
+[[ $executable_size_hex =~ ^0x[0-9a-fA-F]+$ ]] || {
+    echo "could not determine executable PT_LOAD size" >&2
+    exit 2
+}
+executable_size=$((16#${executable_size_hex#0x}))
+(( executable_size <= 0x400000 )) || {
+    printf 'executable PT_LOAD is too large for firmware 6.02: 0x%x > 0x400000\n' \
+        "$executable_size" >&2
+    exit 2
+}
+printf 'Executable PT_LOAD: 0x%x bytes (firmware-6.02 limit 0x400000)\n' \
+    "$executable_size"
+
 app="$dist/$title_id"
 rm -rf -- "$app"
 mkdir -p "$app/sce_sys" "$app/sce_module"

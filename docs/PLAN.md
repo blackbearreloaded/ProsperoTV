@@ -58,7 +58,7 @@ Status: active
 
 - The target is the shared firmware-6.02 PS5 at `192.168.4.30`; console contact
   requires FTP 2121, klog 3232, elfldr/shsrv 9021, and exclusive ownership of
-  `C:\Users\denis\Documents\PS5\lock.txt` for the entire bounded cycle.
+  the environment-declared shared lock for the entire bounded cycle.
 - Never open or change PS5 Settings and never initiate or approve an update.
 - iptv-org provides playlist metadata, not stream availability or legal rights.
 - The UI currently materializes the bounded selected catalog in memory after
