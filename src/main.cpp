@@ -983,17 +983,154 @@ bool RunLauncher(IptvPlayRequest *play_request, const char *failed_channel_id,
     return !play_request->urls.empty();
 }
 
+constexpr unsigned kAutotestMaxCandidates = 8;
+constexpr unsigned kAutotestMaxCancelMs = 10u * 60u * 1000u;
+constexpr char kAutotestArchivePath[] = "/download0/iptv-autotest-receipts.txt";
+constexpr char kLatestReceiptPath[] = "/download0/iptv-last-receipt.txt";
+
+struct AutotestCase
+{
+    char *urls[kAutotestMaxCandidates]{};
+    unsigned count = 0;
+    unsigned cancel_ms = 0;
+};
+
+char *TrimAutotestField(char *field)
+{
+    while (field && (*field == ' ' || *field == '\t'))
+        ++field;
+    if (!field)
+        return nullptr;
+    char *end = field + std::strlen(field);
+    while (end != field && (end[-1] == ' ' || end[-1] == '\t'))
+        *--end = '\0';
+    return field;
+}
+
+bool ParseAutotestCase(char *line, AutotestCase *test)
+{
+    if (!line || !test)
+        return false;
+    *test = {};
+    bool first_field = true;
+    for (char *field = line; field;)
+    {
+        char *next = std::strchr(field, '\t');
+        if (next)
+            *next++ = '\0';
+        char *value = TrimAutotestField(field);
+        if (!value || !*value)
+            return false;
+        static constexpr char kCancelPrefix[] = "@cancel-ms=";
+        if (first_field && std::strncmp(value, kCancelPrefix, sizeof(kCancelPrefix) - 1u) == 0)
+        {
+            char *end = nullptr;
+            const unsigned long parsed = std::strtoul(value + sizeof(kCancelPrefix) - 1u, &end, 10);
+            if (!end || *end || parsed == 0 || parsed > kAutotestMaxCancelMs)
+                return false;
+            test->cancel_ms = static_cast<unsigned>(parsed);
+        }
+        else
+        {
+            if (test->count == kAutotestMaxCandidates)
+                return false;
+            test->urls[test->count++] = value;
+        }
+        first_field = false;
+        field = next;
+    }
+    return test->count != 0;
+}
+
+void WriteAutotestMarker(const char *archive_path, const char *marker, int marker_bytes)
+{
+    if (!archive_path || !marker || marker_bytes <= 0)
+        return;
+    const std::size_t bytes = std::strlen(marker);
+    WriteStdout(marker, bytes);
+    if (std::FILE *archive = std::fopen(archive_path, "ab"))
+    {
+        std::fwrite(marker, 1, bytes, archive);
+        std::fclose(archive);
+    }
+}
+
+void AppendAutotestReceipt(const char *archive_path, const char *receipt_path)
+{
+    std::FILE *archive = std::fopen(archive_path, "ab");
+    if (!archive)
+        return;
+    if (std::FILE *receipt = std::fopen(receipt_path, "rb"))
+    {
+        char chunk[1024]{};
+        std::size_t bytes = 0;
+        while ((bytes = std::fread(chunk, 1, sizeof(chunk), receipt)) != 0)
+            std::fwrite(chunk, 1, bytes, archive);
+        std::fclose(receipt);
+    }
+    else
+    {
+        std::fputs("IPTV_RECEIPT_MISSING\n", archive);
+    }
+    std::fclose(archive);
+}
+
+struct PlaybackOutcome
+{
+    int result = -1;
+    unsigned attempts = 0;
+    unsigned selected = 0;
+};
+
+PlaybackOutcome RunPlaybackCandidates(const IptvPlayRequest &request, unsigned stop_after_ms,
+                                      const char *archive_path)
+{
+    PlaybackOutcome outcome{};
+    for (std::size_t candidate = 0; candidate < request.urls.size(); ++candidate)
+    {
+        ++outcome.attempts;
+        char marker[128]{};
+        if (archive_path)
+        {
+            const int marker_bytes =
+                std::snprintf(marker, sizeof(marker), "IPTV_AUTOTEST_ATTEMPT_BEGIN candidate=%u\n",
+                              static_cast<unsigned>(candidate + 1u));
+            WriteAutotestMarker(archive_path, marker, marker_bytes);
+            std::remove(kLatestReceiptPath);
+        }
+        outcome.result =
+            stop_after_ms ? iptv_player_run_controlled(request.urls[candidate].c_str(),
+                                                       request.channel_name.c_str(), stop_after_ms)
+                          : iptv_player_run_with_headers(
+                                request.urls[candidate].c_str(), request.channel_name.c_str(),
+                                request.user_agent.empty() ? nullptr : request.user_agent.c_str(),
+                                request.referrer.empty() ? nullptr : request.referrer.c_str());
+        if (archive_path)
+        {
+            AppendAutotestReceipt(archive_path, kLatestReceiptPath);
+            const int marker_bytes = std::snprintf(
+                marker, sizeof(marker), "IPTV_AUTOTEST_ATTEMPT_END candidate=%u result=%d\n",
+                static_cast<unsigned>(candidate + 1u), outcome.result);
+            WriteAutotestMarker(archive_path, marker, marker_bytes);
+        }
+        if (outcome.result >= 0)
+        {
+            outcome.selected = static_cast<unsigned>(candidate + 1u);
+            break;
+        }
+    }
+    return outcome;
+}
+
 bool RunAutotestIfPresent()
 {
     std::FILE *file = std::fopen("/app0/iptv-autotest.txt", "rb");
     if (!file)
         return false;
 
-    constexpr char kArchivePath[] = "/download0/iptv-autotest-receipts.txt";
-    constexpr char kLatestReceiptPath[] = "/download0/iptv-last-receipt.txt";
-    if (std::FILE *archive = std::fopen(kArchivePath, "wb"))
+    if (std::FILE *archive = std::fopen(kAutotestArchivePath, "wb"))
     {
-        std::fputs("IPTV_AUTOTEST_RECEIPTS_V1\n", archive);
+        std::fputs("IPTV_AUTOTEST_RECEIPTS_V2\n", archive);
         std::fclose(archive);
     }
 
@@ -1002,67 +1139,49 @@ bool RunAutotestIfPresent()
     while (std::fgets(line, sizeof(line), file))
     {
         std::size_t bytes = std::strlen(line);
+        const bool oversized = bytes == sizeof(line) - 1u && bytes != 0 && line[bytes - 1u] != '\n';
+        if (oversized)
+        {
+            int discarded = 0;
+            while ((discarded = std::fgetc(file)) != EOF && discarded != '\n')
+            {
+            }
+        }
         while (bytes && (line[bytes - 1u] == '\r' || line[bytes - 1u] == '\n' ||
                          line[bytes - 1u] == ' ' || line[bytes - 1u] == '\t'))
         {
             line[--bytes] = '\0';
         }
-        char *url = line;
-        while (*url == ' ' || *url == '\t')
-            ++url;
-        if (!*url || *url == '#')
+        char *content = line;
+        while (*content == ' ' || *content == '\t')
+            ++content;
+        if (!*content || *content == '#')
             continue;
         ++test_index;
-        char name[64]{};
-        std::snprintf(name, sizeof(name), "controlled acceptance %u", test_index);
-        char marker[96]{};
-        int marker_bytes =
-            std::snprintf(marker, sizeof(marker), "IPTV_AUTOTEST_BEGIN index=%u\n", test_index);
-        if (marker_bytes > 0)
+        AutotestCase test{};
+        const bool parsed = !oversized && ParseAutotestCase(content, &test);
+        char marker[192]{};
+        int marker_bytes = std::snprintf(
+            marker, sizeof(marker), "IPTV_AUTOTEST_BEGIN index=%u candidates=%u cancel_ms=%u\n",
+            test_index, test.count, test.cancel_ms);
+        WriteAutotestMarker(kAutotestArchivePath, marker, marker_bytes);
+        PlaybackOutcome outcome{};
+        if (parsed)
         {
-            WriteStdout(marker, static_cast<std::size_t>(marker_bytes) < sizeof(marker)
-                                    ? static_cast<std::size_t>(marker_bytes)
-                                    : sizeof(marker) - 1u);
-            if (std::FILE *archive = std::fopen(kArchivePath, "ab"))
-            {
-                std::fwrite(marker, 1, static_cast<std::size_t>(marker_bytes), archive);
-                std::fclose(archive);
-            }
+            IptvPlayRequest request{};
+            char name[64]{};
+            std::snprintf(name, sizeof(name), "controlled acceptance %u", test_index);
+            request.channel_name = name;
+            request.urls.reserve(test.count);
+            for (unsigned candidate = 0; candidate < test.count; ++candidate)
+                request.urls.emplace_back(test.urls[candidate]);
+            outcome = RunPlaybackCandidates(request, test.cancel_ms, kAutotestArchivePath);
         }
-        std::remove(kLatestReceiptPath);
-        const int result = iptv_player_run(url, name);
-        if (std::FILE *archive = std::fopen(kArchivePath, "ab"))
-        {
-            if (std::FILE *receipt = std::fopen(kLatestReceiptPath, "rb"))
-            {
-                char receipt_chunk[1024]{};
-                std::size_t receipt_bytes = 0;
-                while ((receipt_bytes =
-                            std::fread(receipt_chunk, 1, sizeof(receipt_chunk), receipt)) != 0)
-                {
-                    std::fwrite(receipt_chunk, 1, receipt_bytes, archive);
-                }
-                std::fclose(receipt);
-            }
-            else
-            {
-                std::fputs("IPTV_RECEIPT_MISSING\n", archive);
-            }
-            std::fclose(archive);
-        }
-        marker_bytes = std::snprintf(marker, sizeof(marker),
-                                     "IPTV_AUTOTEST_END index=%u result=%d\n", test_index, result);
-        if (marker_bytes > 0)
-        {
-            WriteStdout(marker, static_cast<std::size_t>(marker_bytes) < sizeof(marker)
-                                    ? static_cast<std::size_t>(marker_bytes)
-                                    : sizeof(marker) - 1u);
-            if (std::FILE *archive = std::fopen(kArchivePath, "ab"))
-            {
-                std::fwrite(marker, 1, static_cast<std::size_t>(marker_bytes), archive);
-                std::fclose(archive);
-            }
-        }
+        marker_bytes =
+            std::snprintf(marker, sizeof(marker),
+                          "IPTV_AUTOTEST_END index=%u result=%d attempts=%u selected=%u\n",
+                          test_index, outcome.result, outcome.attempts, outcome.selected);
+        WriteAutotestMarker(kAutotestArchivePath, marker, marker_bytes);
         sceKernelUsleep(250000);
     }
     std::fclose(file);
@@ -1100,18 +1219,9 @@ int main()
 
         // SDL and AGC must never own VideoOut at the same time.
         sceKernelUsleep(100000);
-        playback_result = -1;
-        playback_attempts = 0;
-        for (const std::string &url : request.urls)
-        {
-            ++playback_attempts;
-            playback_result = iptv_player_run_with_headers(
-                url.c_str(), request.channel_name.c_str(),
-                request.user_agent.empty() ? nullptr : request.user_agent.c_str(),
-                request.referrer.empty() ? nullptr : request.referrer.c_str());
-            if (playback_result >= 0)
-                break;
-        }
+        const PlaybackOutcome outcome = RunPlaybackCandidates(request, 0, nullptr);
+        playback_result = outcome.result;
+        playback_attempts = outcome.attempts;
         if (playback_result < 0)
         {
             failed_channel_id = request.channel_id;

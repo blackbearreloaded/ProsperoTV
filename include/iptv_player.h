@@ -15,6 +15,10 @@ extern "C" {
 int iptv_player_run(const char *url, const char *channel_name);
 int iptv_player_run_with_headers(const char *url, const char *channel_name,
                                  const char *user_agent, const char *referrer);
+/* Runs the same foreground path with a bounded automatic stop. A zero timeout
+ * disables the deadline. This is used by controlled hardware acceptance. */
+int iptv_player_run_controlled(const char *url, const char *channel_name,
+                               unsigned stop_after_ms);
 
 #ifdef __cplusplus
 }

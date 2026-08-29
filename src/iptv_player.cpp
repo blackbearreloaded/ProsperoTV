@@ -75,7 +75,8 @@ void NotifyError(const char *stage, int result)
 }
 
 void SaveReceipt(int result, const iptv_stream_telemetry_t &stream,
-                 const iptv_native_telemetry_t &native)
+                 const iptv_native_telemetry_t &native, std::uint32_t stop_requested_before_cleanup,
+                 std::uint64_t player_cleanup_count, int player_cleanup_result)
 {
     char temporary[96]{};
     std::snprintf(temporary, sizeof(temporary), "%s.tmp", kReceiptPath);
@@ -95,6 +96,8 @@ void SaveReceipt(int result, const iptv_stream_telemetry_t &stream,
         "coded=%ux%u\nvisible=%ux%u\nbit_depth=%u\nchroma=%u\n"
         "video_access_units=%llu\naudio_frames=%llu\n"
         "native_state=%d\nnative_result=%d\nnative_cleanup=%d\n"
+        "stream_cleanup_count=%llu\nstream_stop_count=%llu\nstream_cleanup_result=%d\n"
+        "player_cleanup_count=%llu\nplayer_cleanup_result=%d\n"
         "decoded_frames=%llu\npresented_frames=%llu\nhidden_decoded_frames=%llu\n"
         "buffered_video_access_units=%llu\ndrained_video_frames=%llu\n"
         "dropped_delayed_frames=%llu\ndecoder_flushes=%llu\n"
@@ -106,7 +109,8 @@ void SaveReceipt(int result, const iptv_stream_telemetry_t &stream,
         "first_frame_latency_us=%llu\ndecode_max_us=%llu\n"
         "present_max_us=%llu\npacing_resets=%llu\n"
         "pacing_waits=%llu\npacing_late_frames=%llu\n"
-        "hardware_validated=%u\nstream_acceptance_validated=%u\n",
+        "hardware_validated=%u\nstream_acceptance_validated=%u\n"
+        "native_stop_requested_before_cleanup=%u\n",
         result, static_cast<int>(stream.state), stream.last_result, stream.last_error,
         stream.audio_disabled, stream.audio_warning, stream.format.video_codec,
         stream.format.video_profile, stream.format.video_level, stream.format.coded_width,
@@ -115,6 +119,9 @@ void SaveReceipt(int result, const iptv_stream_telemetry_t &stream,
         static_cast<unsigned long long>(stream.video_access_units),
         static_cast<unsigned long long>(stream.audio_frames), static_cast<int>(native.state),
         native.last_result, native.cleanup_result,
+        static_cast<unsigned long long>(stream.cleanup_count),
+        static_cast<unsigned long long>(stream.stop_count), stream.last_cleanup_result,
+        static_cast<unsigned long long>(player_cleanup_count), player_cleanup_result,
         static_cast<unsigned long long>(native.decoded_frames),
         static_cast<unsigned long long>(native.presented_frames),
         static_cast<unsigned long long>(native.hidden_decoded_frames),
@@ -135,7 +142,7 @@ void SaveReceipt(int result, const iptv_stream_telemetry_t &stream,
         static_cast<unsigned long long>(native.pacing_resets),
         static_cast<unsigned long long>(native.pacing_waits),
         static_cast<unsigned long long>(native.pacing_late_frames), native.hardware_validated,
-        native.stream_acceptance_validated);
+        native.stream_acceptance_validated, stop_requested_before_cleanup);
     const int write_result = std::ferror(file) ? -1 : std::fflush(file);
     const int close_result = std::fclose(file);
     if (write_result != 0 || close_result != 0)
@@ -329,9 +336,20 @@ void AdapterClose(void *context)
 class StreamRunner
 {
   public:
+    void SetStopAfter(unsigned milliseconds)
+    {
+        stop_deadline_usec_ = 0;
+        if (!milliseconds)
+            return;
+        const std::uint64_t now = MonotonicUsec();
+        if (now)
+            stop_deadline_usec_ = now + static_cast<std::uint64_t>(milliseconds) * UINT64_C(1000);
+    }
+
     bool Start()
     {
-        Close();
+        if (Close() != 0)
+            return false;
         if (iptv_native_backend_init(&adapter_.backend) != 0)
             return false;
         adapter_.initialized = true;
@@ -364,6 +382,16 @@ class StreamRunner
 
     bool StopRequested()
     {
+        if (stop_deadline_usec_)
+        {
+            const std::uint64_t now = MonotonicUsec();
+            if (now >= stop_deadline_usec_)
+            {
+                if (adapter_.initialized)
+                    iptv_native_backend_request_stop(&adapter_.backend);
+                return true;
+            }
+        }
         iptv_input_poll();
         iptv_input_event_t event{};
         while (iptv_input_next(&event))
@@ -407,16 +435,32 @@ class StreamRunner
         return active_ ? iptv_stream_stop(&session_) : IPTV_STREAM_INVALID_STATE;
     }
 
-    void Close()
+    int Close()
     {
         if (active_)
         {
-            (void)iptv_stream_stop(&session_);
-            (void)iptv_stream_cleanup(&session_);
+            const int stop_result = iptv_stream_stop(&session_);
+            const int cleanup_result = iptv_stream_cleanup(&session_);
+            ++player_cleanup_count_;
+            RecordCleanupResult(stop_result);
+            RecordCleanupResult(cleanup_result);
             active_ = false;
         }
         if (adapter_.initialized)
             AdapterClose(&adapter_);
+        iptv_native_telemetry_t native{};
+        if (NativeTelemetry(&native))
+            RecordCleanupResult(native.cleanup_result);
+        return player_cleanup_result_;
+    }
+
+    std::uint64_t PlayerCleanupCount() const
+    {
+        return player_cleanup_count_;
+    }
+    int PlayerCleanupResult() const
+    {
+        return player_cleanup_result_;
     }
 
     ~StreamRunner()
@@ -425,9 +469,18 @@ class StreamRunner
     }
 
   private:
+    void RecordCleanupResult(int result)
+    {
+        if (player_cleanup_result_ == 0 && result != 0)
+            player_cleanup_result_ = result;
+    }
+
     NativeAdapter adapter_{};
     iptv_stream_session_t session_{};
     bool active_ = false;
+    std::uint64_t stop_deadline_usec_ = 0;
+    std::uint64_t player_cleanup_count_ = 0;
+    int player_cleanup_result_ = 0;
 };
 
 enum class FeedResult
@@ -773,8 +826,8 @@ int RunDirect(const char *url, StreamRunner *runner, std::uint8_t *read_buffer, 
 
 } // namespace
 
-int iptv_player_run_with_headers(const char *url, const char *channel_name, const char *user_agent,
-                                 const char *referrer)
+static int RunPlayer(const char *url, const char *channel_name, const char *user_agent,
+                     const char *referrer, unsigned stop_after_ms)
 {
     if (!url || !*url)
         return -1;
@@ -807,38 +860,46 @@ int iptv_player_run_with_headers(const char *url, const char *channel_name, cons
     {
         Notify("IPTV: out of memory");
     }
-    else if (!runner->Start())
-    {
-        Notify("IPTV: decoder session initialization failed");
-    }
     else
     {
-        result = UrlLooksLikeHls(url)
-                     ? RunHls(url, runner, read_buffer, playlist_data, &headers)
-                     : RunDirect(url, runner, read_buffer, playlist_data, &headers);
-        if (result < 0)
+        runner->SetStopAfter(stop_after_ms);
+        if (!runner->Start())
         {
-            const iptv_stream_telemetry_t *telemetry = runner->Telemetry();
-            if (telemetry && telemetry->last_error[0])
+            Notify("IPTV: decoder session initialization failed");
+        }
+        else
+        {
+            result = UrlLooksLikeHls(url)
+                         ? RunHls(url, runner, read_buffer, playlist_data, &headers)
+                         : RunDirect(url, runner, read_buffer, playlist_data, &headers);
+            if (result < 0)
             {
-                std::snprintf(message, sizeof(message), "IPTV: %.150s", telemetry->last_error);
-                Notify(message);
-            }
-            else
-            {
-                NotifyError("playback", result);
+                const iptv_stream_telemetry_t *telemetry = runner->Telemetry();
+                if (telemetry && telemetry->last_error[0])
+                {
+                    std::snprintf(message, sizeof(message), "IPTV: %.150s", telemetry->last_error);
+                    Notify(message);
+                }
+                else
+                {
+                    NotifyError("playback", result);
+                }
             }
         }
     }
 
     if (runner)
     {
+        iptv_native_telemetry_t before_cleanup{};
+        const bool had_native_before_cleanup = runner->NativeTelemetry(&before_cleanup);
         runner->Close();
         const iptv_stream_telemetry_t *current = runner->Telemetry();
         iptv_native_telemetry_t native{};
         if (current && runner->NativeTelemetry(&native))
         {
-            SaveReceipt(result, *current, native);
+            SaveReceipt(result, *current, native,
+                        had_native_before_cleanup ? before_cleanup.stop_requested : 0,
+                        runner->PlayerCleanupCount(), runner->PlayerCleanupResult());
         }
     }
     delete runner;
@@ -849,7 +910,18 @@ int iptv_player_run_with_headers(const char *url, const char *channel_name, cons
     return result;
 }
 
+int iptv_player_run_with_headers(const char *url, const char *channel_name, const char *user_agent,
+                                 const char *referrer)
+{
+    return RunPlayer(url, channel_name, user_agent, referrer, 0);
+}
+
 int iptv_player_run(const char *url, const char *channel_name)
 {
     return iptv_player_run_with_headers(url, channel_name, nullptr, nullptr);
+}
+
+int iptv_player_run_controlled(const char *url, const char *channel_name, unsigned stop_after_ms)
+{
+    return RunPlayer(url, channel_name, nullptr, nullptr, stop_after_ms);
 }
