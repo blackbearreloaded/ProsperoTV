@@ -2,24 +2,24 @@
 
 Updated: 2026-08-29 America/New_York
 
-## Current candidate
+## Current accepted candidate
 
-- Goal: `G4` end-to-end VP9 Profile 0 delivery.
-- Source commit: `51762cb` (`G3` bounded acceptance passed on hardware).
+- Goal: `G4` end-to-end VP9 Profile 0 delivery, complete for direct WebM.
+- Source commit: `611765f` (strict G4 hardware acceptance passed).
 - Title: `PPSA88000`, version `01.000.001`, firmware target 6.02.
 - App folder: `dist/PPSA88000/`.
 - FFPFSC: `dist/PPSA88000.ffpfsc`.
-- Host gates: 32 unit tests, 6 tooling tests, lint, native build,
+- Host gates: 39 unit tests, 6 tooling tests, lint, native build,
   signed-container integrity, MkPFS creation, and MkPFS verification passed.
 
 | Artifact | Bytes | SHA-256 |
 | --- | ---: | --- |
-| `eboot.bin` | 5,421,746 | `0b1aa33e134f8862c10084494b906dc48619a3be89c2ff49441877785bc08957` |
+| `eboot.bin` | 5,432,066 | `ada059836f626f7d68697eff5af51a89770663d251ae0809d2f3452acdaa3264` |
 | `sce_module/libc.prx` | 1,284,674 | `e6ff45d16adf687855cc3b33b0c8a4132b6504360b221e0a34c7e99fb3ba0036` |
 | `sce_sys/param.json` | 883 | `2acfea4e4f7957e254f07d989bb5b97b92e1d4064467c24109befaa73990d856` |
 | `sce_sys/icon0.png` | 355,883 | `282ede549c8118855fc1e1a808703f13ccb1809fdaaaa6f287ac8f2977f053cf` |
 | `sce_sys/pic0.dds` | 8,294,548 | `56a982da83853ffce3cf62f6cc169016a0ad4479a3e6082a2b6390eebdbd264b` |
-| `PPSA88000.ffpfsc` | 37,486,592 | `48a266da8792fbd740cea3806cc5be5b9ec811c7c49046e89cd45799d73d63ff` |
+| `PPSA88000.ffpfsc` | 37,486,592 | `0dd94e7fc24e1056678f22544f32549e3762616c3bac8c407f0af25d39e4f7e5` |
 
 ## Boilerplate invariant
 
@@ -34,11 +34,11 @@ Updated: 2026-08-29 America/New_York
 
 ## Next bounded case
 
-- Acceptance: progressive WebM delivery reaches the existing VP9 Profile 0
-  backend at 1080p, 1440p, and 2160p with decoded/presented output and clean
-  teardown.
-- Control: three short, local, legal-safe VP9 fixtures under one frozen
-  candidate and one bounded investigation-loop cycle.
+- Acceptance: controller browse/search/filter, favorite/history persistence,
+  source selection, clean catalog refresh, and cache-first relaunch all work in
+  one bounded functional cycle.
+- Control: the accepted production title with a known cached iptv-org catalog
+  and one clean `/download0` refresh/relaunch sequence.
 - Stop condition: any Settings, Store, sign-in, update, ambiguous screen,
   execution crash, kernel-health concern, hash mismatch, or failed cleanup.
 - Use the maintained `ps5-homebrew-dev-protocol` IPTV wrapper. It owns the
@@ -72,3 +72,6 @@ Updated: 2026-08-29 America/New_York
 - 2026-08-29 | G3 | 9463577 | fw6.02 | pass: unsupported AAC was disabled without losing H.264 video, then HEVC/AAC reopened and completed cleanly | results/G3/PPSA88013-20260829-143003-codec-receipts.txt | add grouped fallback and timed cancellation
 - 2026-08-29 | G3 | 249bfef | fw6.02 | partial-pass: all six resilience scenarios completed without a crash, but strict validation exposed that cancellation drain status was incorrectly reported as cleanup failure | results/G3/PPSA88014-20260829-145909-resilience-receipts.txt | distinguish playback stop from resource cleanup
 - 2026-08-29 | G3 | 51762cb | fw6.02 | pass: mid-playback HLS failure selected the second URL, timed HEVC cancellation and four repeated H.264/HEVC sessions completed, every cleanup result was zero, and the title returned to launcher | results/G3/PPSA88015-20260829-151056-resilience-receipts.txt | begin bounded VP9 WebM delivery
+- 2026-08-29 | G4 | 611765f | host | pass: 39 unit tests, 6 tooling tests, lint, signed SELF/runtime checks, and all 90 controlled WebM frames parsed | docs/HANDOFF.md | run strict VP9 cycle
+- 2026-08-29 | G4 | 611765f | fw6.02 | transport-failure: first PPSA88017 launch reached LaunchFlowError before eboot under stale LVD registration | results/G4/PPSA88017-20260829-161014-result.json | retry identical bytes once
+- 2026-08-29 | G4 | 611765f | fw6.02 | pass: VP9 Profile 0 at 1080p/1440p/2160p decoded and presented 30/30 each, zero-copy and all cleanup zero | results/G4/PPSA88017-20260829-161418-g4-vp9-receipts.txt | run controller/cache gate

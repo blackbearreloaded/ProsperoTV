@@ -12,8 +12,7 @@ Status: active
   IPTV playlists.
 - Scope and functionality: iptv-org and custom M3U catalogs, SQLite caching,
   browsing/search/favorites/history, HLS and direct MPEG-TS playback, AAC audio,
-  native H.264/HEVC playback, and a VP9 hardware backend ready for a bounded
-  VP9 delivery adapter.
+  native H.264/HEVC playback, and direct WebM VP9 Profile 0 playback.
 - Deliverables: source, tests, signed title folder, optional FFPFSC image,
   deployment tooling, hardware evidence, and an accurate status record.
 - Non-goals: DRM, encrypted streams, provider credentials, console settings
@@ -36,9 +35,9 @@ Status: active
   hardware-proven capacity classes through 720p, 1080p, 1440p, and 2160p.
 - `R8`: present up to 1080p on a native 1080p target, scale 1440p bilinearly to
   a native 4K target, and present 2160p 1:1 on the native 4K target.
-- `R9`: support VP9 Profile 0 backend operation at 1080p, 1440p, and 2160p,
-  including superframe splitting, hidden-frame ordering, and caller-owned
-  buffers.
+- `R9`: support bounded direct WebM delivery and VP9 Profile 0 backend
+  operation at 1080p, 1440p, and 2160p, including superframe splitting,
+  hidden-frame ordering, and caller-owned buffers.
 - `R10`: persist bounded playback telemetry sufficient to classify network,
   demux, decoder, presenter, stop, and cleanup outcomes.
 
@@ -65,8 +64,9 @@ Status: active
 - iptv-org provides playlist metadata, not stream availability or legal rights.
 - The UI currently materializes the bounded selected catalog in memory after
   loading it from SQLite. Database-backed paging is measurement-driven follow-up.
-- VP9 Profile 0 has a native decoder backend but no WebM/Matroska or DASH
-  delivery path yet. Ordinary catalog channels therefore cannot reach it.
+- VP9 Profile 0 is accepted through a bounded video-only WebM path. DASH,
+  fragmented MP4, WebM audio, and general Matroska features remain outside the
+  current delivery contract.
 - VP9 Profile 2 is hardware-proven by the research project, including its
   low-aligned 10-bit surface. It remains deferred here until psiptv has a
   redistributable 10-bit AGC shader/path and VP9 transport.
@@ -93,7 +93,7 @@ Status: active
 | `G1` | Stable native shell, catalog cache, and launcher lifecycle | None | complete |
 | `G2` | Complete H.264/HEVC IPTV path and resolution matrix | `G1` | complete |
 | `G3` | Resilience, channel switching, and repeated-run stability | `G2` | complete (bounded) |
-| `G4` | End-to-end VP9 Profile 0 delivery | `G2` | in progress |
+| `G4` | End-to-end VP9 Profile 0 delivery | `G2` | complete |
 | `G5` | Redistributable VP9 Profile 2/10-bit presentation | `G4` | deferred |
 
 ## G1: Native shell and catalog
@@ -163,18 +163,30 @@ Status: active
 
 ## G4: VP9 Profile 0 delivery
 
-- Status: in progress
-- Objective: connect a bounded WebM/Matroska and/or DASH producer to the existing
-  Profile 0 backend without blocking network receive on decode or completed flip.
+- Status: complete for direct WebM Profile 0
+- Objective: connect a bounded WebM producer to the existing Profile 0 backend
+  without blocking network receive on decode or completed flip.
 - Requirements advanced: `R9`, `R10`, `N1`-`N4`.
 - Dependencies: `G2`; controlled Profile 0 fixtures.
-- Deliverables: parser/demux tests, bounded producer queue, end-to-end playback.
+- Deliverables: bounded incremental WebM demux, direct player adapter,
+  packet-order regression tests, and end-to-end playback.
 - Limitations and risks: preserve per-coded-frame boundaries, split compound
   superframes, submit hidden frames, and retain show-frame/show-existing order.
 - Acceptance criteria: `A6`.
 - Required evidence: 1080p/1440p/2160p counts, screenshot, logs, and teardown.
-- Candidate commit: pending.
-- Validation-record commit: pending.
+- Candidate commit: `611765f` (WebM parser `39f7da5`, player integration
+  `d285656`, and VP9 specification-bit-order correction `611765f`).
+- Candidate artifact: `eboot.bin` SHA-256
+  `ada059836f626f7d68697eff5af51a89770663d251ae0809d2f3452acdaa3264`.
+- Accepted case: disposable title `PPSA88017` decoded and presented 30/30
+  Profile 0 frames at 1920x1080, 2560x1440, and 3840x2160. All three used the
+  native frame pool with matching zero-copy pointers and reported zero native,
+  stream, and player cleanup errors. The first launch was inconclusive before
+  eboot because of stale ShadowMount registration; the one permitted
+  identical-byte retry entered eboot and returned to the launcher cleanly.
+- Evidence: `results/G4/PPSA88017-20260829-161418-result.json` and
+  `results/G4/PPSA88017-20260829-161418-g4-vp9-receipts.txt`.
+- Validation harness: protocol `ec87e00`.
 
 ## G5: VP9 Profile 2 presentation
 

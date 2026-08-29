@@ -5,9 +5,9 @@ Status date: 2026-08-29
 psiptv has a hardware-proven native shell and local iptv-org catalog cache plus
 an integrated MPEG-TS/HLS playback and hardware decoder/presenter path. H.264
 and HEVC are hardware-proven from sub-720p through native 4K. Bounded fallback,
-cancellation, and repeated decoder teardown are also hardware-accepted. It is
-not yet a release: normal-playback VP9 delivery, remaining UI/cache behavior,
-and long-duration soak remain.
+cancellation, repeated decoder teardown, and direct WebM VP9 Profile 0 at
+1080p, 1440p, and 2160p are also hardware-accepted. It is not yet a release:
+remaining UI/cache behavior and long-duration soak remain.
 
 ## Implemented
 
@@ -19,26 +19,21 @@ and long-duration soak remain.
 | Catalog parser | Extended M3U metadata, deduplication, alternate URLs/groups, country/language fields, and channel HTTP headers |
 | Local cache | Separate SQLite databases for built-in and custom sources, staged replacement, quick integrity check, and last-good fallback |
 | Browser UI | Channel list, details, search, broad groups, favorites, recents, source selection, and background refresh state |
-| Transport | HTTP(S), redirects, direct MPEG-TS, HLS master/media playlists, MPEG-TS PAT/PMT/PES, and optional AAC ADTS |
+| Transport | HTTP(S), redirects, direct MPEG-TS, HLS master/media playlists, MPEG-TS PAT/PMT/PES, optional AAC ADTS, and bounded direct WebM video |
 | H.264 | Native hardware capacity classes through 720p, 1080p, 1440p, and 2160p; arbitrary valid dimensions within a class are accepted |
 | HEVC | Native Main 8-bit capacity classes through 720p, 1080p, 1440p, and 2160p; arbitrary valid dimensions within a class are accepted |
-| VP9 Profile 0 backend | Native 1080p, 1440p, and 2160p capacity classes; superframe splitting; hidden/display frame ordering; one-frame caller-owned pipeline |
+| VP9 Profile 0 | Bounded incremental WebM demux; native 1080p, 1440p, and 2160p capacity classes; superframe splitting; hidden/display frame ordering; one-frame caller-owned pipeline |
 | Presentation | SDR NV12 AGC presenter with 1080p and 4K VideoOut classes; bilinear 1440p-to-4K scaling |
 | Diagnostics | Persistent playback receipt and native decode/present telemetry |
 | Build output | Native title folder plus optional `.ffpkg` and `.ffpfsc` packaging paths |
 
 ## Incomplete or not yet proven
 
-### VP9 end-to-end delivery
+### VP9 delivery boundary
 
-The VP9 Profile 0 packetizer and Videodec2 backend exist, but normal channel
-playback cannot select them. The current stream contract recognizes only H.264
-and HEVC from MPEG-TS, and the player adapter maps only those two codecs.
-
-Completing VP9 delivery requires a bounded container/manifest path—most likely
-WebM/Matroska and/or DASH—plus a stream contract that passes VP9 coded packets,
-profile, level, geometry, and timestamps to the existing backend. This should
-be tested with superframes, hidden frames, and `show_existing_frame` events.
+Direct video-only WebM Profile 0 playback is complete and hardware-accepted.
+DASH, fragmented MP4, WebM audio, and general Matroska features are not part of
+the current bounded demux contract.
 
 ### VP9 Profile 2 presentation
 
@@ -69,6 +64,14 @@ observed, and the title returned to the launcher. The exact accepted
 `eboot.bin` SHA-256 is
 `0b1aa33e134f8862c10084494b906dc48619a3be89c2ff49441877785bc08957`.
 
+Candidate `611765f` then passed strict G4 acceptance as disposable title
+`PPSA88017`. Direct WebM Profile 0 fixtures at 1920x1080, 2560x1440, and
+3840x2160 each decoded and presented 30/30 frames from the native frame pool
+with matching zero-copy pointers. Every native, stream, and player cleanup
+result was zero, and the title returned to the launcher. The exact accepted
+`eboot.bin` SHA-256 is
+`ada059836f626f7d68697eff5af51a89770663d251ae0809d2f3452acdaa3264`.
+
 The build remains structurally based on `ps5-native-app-boilerplate`: it uses
 the boilerplate's native linker/module writer and SELF/container validation,
 assembles `eboot.bin`, `sce_sys`, and `sce_module`, and copies the verified
@@ -98,8 +101,8 @@ possible optimization if measurements show startup latency or memory pressure.
 - Timed cancellation and four consecutive H.264/HEVC session teardowns passed
   with explicit zero cleanup results. A longer soak and a deliberately stalled
   socket remain release-hardening cases.
-- Fragmented MP4 HLS, DASH, WebM/Matroska, DRM, and encrypted media are not
-  supported.
+- Fragmented MP4 HLS, DASH, WebM audio, general Matroska, DRM, and encrypted
+  media are not supported.
 - HLS and the native backend accept arbitrary valid dimensions that fit a
   decoder capacity class; profile, level, bit depth, and chroma are still
   bounded to hardware-proven SDR modes.
@@ -110,11 +113,9 @@ possible optimization if measurements show startup latency or memory pressure.
 
 1. Exercise controller browsing, clean `/download0` refresh, and cache-only
    relaunch as explicit functional cases.
-2. Add a bounded VP9 delivery/container adapter and validate Profile 0 at all
-   three configured geometries.
-3. Add and validate the 10-bit AGC presentation path before exposing VP9
+2. Add and validate the 10-bit AGC presentation path before exposing VP9
    Profile 2.
-4. Run long-duration alternate-URL, channel-change, cancellation, and stalled
+3. Run long-duration alternate-URL, channel-change, cancellation, and stalled
    socket tests.
 
 Release readiness requires all applicable gates to pass on hardware without a

@@ -28,7 +28,7 @@ it does not operate or control the streams listed by iptv-org.
 - Provides native browsing, search, category filters, favorites, recent
   channels, and source management.
 - Plays HLS or direct MPEG-TS streams carrying H.264 or 8-bit HEVC video, with
-  optional AAC ADTS audio.
+  optional AAC ADTS audio, plus direct WebM streams carrying VP9 Profile 0.
 - Uses the native Videodec2 and AGC path for hardware decode and presentation.
 - Contains a native VP9 Profile 0 backend, including superframe splitting,
   hidden-frame ordering, and 1080p/1440p/2160p decode modes.
@@ -39,7 +39,7 @@ it does not operate or control the streams listed by iptv-org.
 | --- | --- | --- |
 | H.264/AVC | 720p, 1080p, 1440p, 2160p; Baseline/Main/High within each mode's configured level limit | Yes, through MPEG-TS/HLS |
 | HEVC | Main profile, 8-bit 4:2:0 at 720p, 1080p, 1440p, and 2160p | Yes, through MPEG-TS/HLS |
-| VP9 | Profile 0, 8-bit 4:2:0 at 1080p, 1440p, and 2160p | Not yet: delivery/container demux is not wired into the stream adapter |
+| VP9 | Profile 0, 8-bit 4:2:0 at 1080p, 1440p, and 2160p | Yes, through direct WebM |
 
 Output geometry is selected from the decoded source size:
 
@@ -55,20 +55,19 @@ is presented on the 4K surface.
 
 ## Important limitations
 
-- VP9 Profile 0 is implemented at the packet/backend layer, but the current
-  transport layer recognizes only H.264 and HEVC in MPEG-TS. WebM/Matroska and
-  DASH delivery are not implemented, so ordinary catalog playback cannot yet
-  reach the VP9 backend.
+- VP9 delivery currently supports direct, video-only WebM Profile 0 streams.
+  DASH, fragmented MP4, WebM audio, and more general Matroska features are not
+  implemented. MPEG-TS video remains limited to H.264 and HEVC.
 - VP9 Profile 2 is not supported. Its 10-bit low-aligned output requires a
   dedicated presentation shader/path; the current presenter is SDR NV12.
 - The catalog is persisted in SQLite but loaded into an in-memory model for UI
   navigation rather than queried page by page.
 - Merged alternate stream URLs are tried automatically when a primary URL
   fails or ends without a successful playback result.
-- Startup, H.264/HEVC playback, alternate-URL fallback, timed cancellation,
-  and repeated decoder teardown have passed bounded PS5 acceptance. VP9
-  delivery and the remaining controller/cache behavior gates still prevent a
-  release-ready claim.
+- Startup, H.264/HEVC playback, direct WebM VP9 playback, alternate-URL
+  fallback, timed cancellation, and repeated decoder teardown have passed
+  bounded PS5 acceptance. The remaining controller/cache behavior and soak
+  gates still prevent a release-ready claim.
 
 See [Architecture](docs/ARCHITECTURE.md) for component and codec details and
 [Status](docs/STATUS.md) for the implementation boundary and remaining work.

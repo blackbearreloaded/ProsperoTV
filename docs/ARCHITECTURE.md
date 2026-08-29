@@ -40,23 +40,24 @@ iptv-org index.m3u or custom M3U
  in-memory browse/search model
               |
               v
- HLS selection or direct stream
-              |
-              v
- MPEG-TS PAT/PMT/PES demux
-       |                 |
-       v                 v
- H.264/HEVC AU        AAC ADTS
-       |                 |
-       v                 v
-   Videodec2          AudioDec2
-       |
-       v
- SDR NV12 AGC presenter -> VideoOut
+ HLS or direct MPEG-TS       direct WebM
+              |                  |
+              v                  v
+ MPEG-TS PAT/PMT/PES demux   WebM blocks
+       |                 |        |
+       v                 v        v
+ H.264/HEVC AU        AAC ADTS   VP9 AU
+       |                 |        |
+       +--------+        v        |
+                v     AudioDec2   |
+             Videodec2 <----------+
+                |
+                v
+       SDR NV12 AGC presenter -> VideoOut
 ```
 
-VP9 currently joins this design at the coded-packet/Videodec2 boundary. No
-WebM/Matroska or DASH demuxer connects catalog delivery to that boundary yet.
+VP9 joins this design through a bounded incremental WebM demuxer that emits
+Profile 0 coded blocks directly to the native packet/Videodec2 boundary.
 
 ## Catalog and persistence
 
@@ -106,6 +107,7 @@ The media path currently accepts:
 
 - direct MPEG-TS streams;
 - HLS media playlists whose segments contain MPEG-TS;
+- direct video-only WebM streams carrying VP9 Profile 0;
 - H.264 stream type `0x1b` or HEVC stream type `0x24`;
 - optional AAC ADTS audio.
 
@@ -113,10 +115,9 @@ The MPEG-TS layer discovers PAT/PMT state, assembles bounded PES payloads,
 extracts codec configuration from SPS data, emits complete Annex-B access
 units, and preserves presentation timestamps for native pacing.
 
-It does not currently accept fragmented MP4, WebM/Matroska, or DASH. The
-stream codec enum and player adapter expose only H.264 and HEVC, which is the
-specific reason VP9 Profile 0 is not yet reachable during normal channel
-playback.
+It does not currently accept fragmented MP4, DASH, WebM audio, or general
+Matroska features. MPEG-TS remains limited to H.264/HEVC plus optional AAC;
+VP9 Profile 0 uses the direct WebM path.
 
 ## Native video backend
 
