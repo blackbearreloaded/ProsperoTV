@@ -92,8 +92,8 @@ Status: active
 | --- | --- | --- | --- |
 | `G1` | Stable native shell, catalog cache, and launcher lifecycle | None | complete |
 | `G2` | Complete H.264/HEVC IPTV path and resolution matrix | `G1` | complete |
-| `G3` | Resilience, channel switching, and repeated-run stability | `G2` | planned |
-| `G4` | End-to-end VP9 Profile 0 delivery | `G2` | planned |
+| `G3` | Resilience, channel switching, and repeated-run stability | `G2` | complete (bounded) |
+| `G4` | End-to-end VP9 Profile 0 delivery | `G2` | in progress |
 | `G5` | Redistributable VP9 Profile 2/10-bit presentation | `G4` | deferred |
 
 ## G1: Native shell and catalog
@@ -136,7 +136,7 @@ Status: active
 
 ## G3: Playback resilience
 
-- Status: planned
+- Status: complete for the bounded acceptance case
 - Objective: validate alternate URLs, cancellation, repeated channel changes,
   network interruption, cached relaunch, and resource reuse.
 - Requirements advanced: `R5`, `R6`, `R10`, `N2`, `N3`.
@@ -145,12 +145,25 @@ Status: active
 - Limitations and risks: every scenario must have a deterministic stop condition.
 - Acceptance criteria: `A5`.
 - Required evidence: scenario receipts, klog slices, and post-run health checks.
-- Candidate commit: pending.
-- Validation-record commit: pending.
+- Candidate commit: `51762cb`.
+- Candidate artifact: `eboot.bin` SHA-256
+  `0b1aa33e134f8862c10084494b906dc48619a3be89c2ff49441877785bc08957`.
+- Accepted case: disposable title `PPSA88015` decoded and presented 300 H.264
+  frames before the primary HLS fixture failed, selected the second URL, then
+  completed it. A timed HEVC live stream cancellation presented 149 frames and
+  four subsequent H.264/HEVC sessions presented 300/330/300/330 frames. Every
+  attempt reported zero stream, player, and native cleanup error; the app
+  remained alive and returned to the launcher.
+- Evidence: `results/G3/PPSA88015-20260829-151056-result.json` and
+  `results/G3/PPSA88015-20260829-151056-resilience-receipts.txt`.
+- Validation-record commit: protocol `83367cd`.
+- Residual release soak: repeat against a deliberately stalled socket and for
+  a longer channel-change duration; this does not invalidate the bounded A5
+  pass.
 
 ## G4: VP9 Profile 0 delivery
 
-- Status: planned
+- Status: in progress
 - Objective: connect a bounded WebM/Matroska and/or DASH producer to the existing
   Profile 0 backend without blocking network receive on decode or completed flip.
 - Requirements advanced: `R9`, `R10`, `N1`-`N4`.

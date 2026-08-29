@@ -4,22 +4,22 @@ Updated: 2026-08-29 America/New_York
 
 ## Current candidate
 
-- Goal: `G3` playback resilience and repeated-run stability.
-- Source commit: `0e92b6b` (`G2` accepted on hardware).
+- Goal: `G4` end-to-end VP9 Profile 0 delivery.
+- Source commit: `51762cb` (`G3` bounded acceptance passed on hardware).
 - Title: `PPSA88000`, version `01.000.001`, firmware target 6.02.
 - App folder: `dist/PPSA88000/`.
 - FFPFSC: `dist/PPSA88000.ffpfsc`.
-- Host gates: 28 unit tests, 6 tooling tests, lint, native build,
+- Host gates: 32 unit tests, 6 tooling tests, lint, native build,
   signed-container integrity, MkPFS creation, and MkPFS verification passed.
 
 | Artifact | Bytes | SHA-256 |
 | --- | ---: | --- |
-| `eboot.bin` | 5,415,874 | `4055f6f09c41a2cd071e0df20728105309ee8b746b7eb54f2c29622c8960df22` |
+| `eboot.bin` | 5,421,746 | `0b1aa33e134f8862c10084494b906dc48619a3be89c2ff49441877785bc08957` |
 | `sce_module/libc.prx` | 1,284,674 | `e6ff45d16adf687855cc3b33b0c8a4132b6504360b221e0a34c7e99fb3ba0036` |
 | `sce_sys/param.json` | 883 | `2acfea4e4f7957e254f07d989bb5b97b92e1d4064467c24109befaa73990d856` |
 | `sce_sys/icon0.png` | 355,883 | `282ede549c8118855fc1e1a808703f13ccb1809fdaaaa6f287ac8f2977f053cf` |
 | `sce_sys/pic0.dds` | 8,294,548 | `56a982da83853ffce3cf62f6cc169016a0ad4479a3e6082a2b6390eebdbd264b` |
-| `PPSA88000.ffpfsc` | 37,486,592 | `7184ac1afbae3bb60ea5bf1cc1f897dbaad0feead2b4cbb171b6a493d5251e0` |
+| `PPSA88000.ffpfsc` | 37,486,592 | `48a266da8792fbd740cea3806cc5be5b9ec811c7c49046e89cd45799d73d63ff` |
 
 ## Boilerplate invariant
 
@@ -34,9 +34,11 @@ Updated: 2026-08-29 America/New_York
 
 ## Next bounded case
 
-- Acceptance: deterministic alternate-URL, cancellation, channel-change, and
-  unsupported-audio failures remain responsive and release all owned resources.
-- Control: one failure mode per bounded investigation-loop cycle.
+- Acceptance: progressive WebM delivery reaches the existing VP9 Profile 0
+  backend at 1080p, 1440p, and 2160p with decoded/presented output and clean
+  teardown.
+- Control: three short, local, legal-safe VP9 fixtures under one frozen
+  candidate and one bounded investigation-loop cycle.
 - Stop condition: any Settings, Store, sign-in, update, ambiguous screen,
   execution crash, kernel-health concern, hash mismatch, or failed cleanup.
 - Use the maintained `ps5-homebrew-dev-protocol` IPTV wrapper. It owns the
@@ -67,3 +69,6 @@ Updated: 2026-08-29 America/New_York
 - 2026-08-29 | G2 | 4055f6f eboot | fw6.02 | inconclusive before app execution: ShadowMount lost and reattached the outer PFSC device without rebuilding the inner exFAT layer | results/G2/PPSA88007-20260829-124918-result.json | retry unchanged artifact under a fresh disposable title
 - 2026-08-29 | G2 | 4055f6f eboot | fw6.02 | fixture rejected: both 1080p codecs decoded/presented 90/90, but the first mux emitted no parsable AAC frames | results/G2/PPSA88008-20260829-125240-codec-receipts.txt | correct only the controlled fixture mux
 - 2026-08-29 | G2 | 0e92b6b | fw6.02 | pass: H.264 High and HEVC Main 1080p decoded/presented 90/90 with AAC and zero-copy native output | results/G2/PPSA88009-20260829-125638-codec-receipts.txt | begin G3 resilience work
+- 2026-08-29 | G3 | 9463577 | fw6.02 | pass: unsupported AAC was disabled without losing H.264 video, then HEVC/AAC reopened and completed cleanly | results/G3/PPSA88013-20260829-143003-codec-receipts.txt | add grouped fallback and timed cancellation
+- 2026-08-29 | G3 | 249bfef | fw6.02 | partial-pass: all six resilience scenarios completed without a crash, but strict validation exposed that cancellation drain status was incorrectly reported as cleanup failure | results/G3/PPSA88014-20260829-145909-resilience-receipts.txt | distinguish playback stop from resource cleanup
+- 2026-08-29 | G3 | 51762cb | fw6.02 | pass: mid-playback HLS failure selected the second URL, timed HEVC cancellation and four repeated H.264/HEVC sessions completed, every cleanup result was zero, and the title returned to launcher | results/G3/PPSA88015-20260829-151056-resilience-receipts.txt | begin bounded VP9 WebM delivery

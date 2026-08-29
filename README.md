@@ -64,9 +64,11 @@ is presented on the 4K surface.
 - The catalog is persisted in SQLite but loaded into an in-memory model for UI
   navigation rather than queried page by page.
 - Merged alternate stream URLs are tried automatically when a primary URL
-  fails before playback starts.
-- The latest integrated build still requires PS5 acceptance testing before it
-  should be described as release-ready.
+  fails or ends without a successful playback result.
+- Startup, H.264/HEVC playback, alternate-URL fallback, timed cancellation,
+  and repeated decoder teardown have passed bounded PS5 acceptance. VP9
+  delivery and the remaining controller/cache behavior gates still prevent a
+  release-ready claim.
 
 See [Architecture](docs/ARCHITECTURE.md) for component and codec details and
 [Status](docs/STATUS.md) for the implementation boundary and remaining work.

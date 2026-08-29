@@ -4,8 +4,10 @@ Status date: 2026-08-29
 
 psiptv has a hardware-proven native shell and local iptv-org catalog cache plus
 an integrated MPEG-TS/HLS playback and hardware decoder/presenter path. H.264
-and HEVC are hardware-proven from sub-720p through native 4K. It is not yet a
-release: resilience, normal-playback VP9 delivery, and UI behavior remain.
+and HEVC are hardware-proven from sub-720p through native 4K. Bounded fallback,
+cancellation, and repeated decoder teardown are also hardware-accepted. It is
+not yet a release: normal-playback VP9 delivery, remaining UI/cache behavior,
+and long-duration soak remain.
 
 ## Implemented
 
@@ -57,6 +59,16 @@ controlled hardware playback for H.264 at 960x540, 1920x1080, 2560x1440, and
 accepted fixture decoded and presented all video access units from the native
 frame pool with matching zero-copy pointers and decoded AAC audio.
 
+Candidate `51762cb` then passed the strict G3 cycle as disposable title
+`PPSA88015`. A controlled HLS primary failed after decoding/presenting 300
+H.264 frames; the normal catalog fallback helper selected and completed the
+second URL. Timed HEVC cancellation presented 149 frames, followed by four
+successful H.264/HEVC sessions presenting 300/330/300/330 frames. All six
+tests reported zero stream, player, and native cleanup error, no crash was
+observed, and the title returned to the launcher. The exact accepted
+`eboot.bin` SHA-256 is
+`0b1aa33e134f8862c10084494b906dc48619a3be89c2ff49441877785bc08957`.
+
 The build remains structurally based on `ps5-native-app-boilerplate`: it uses
 the boilerplate's native linker/module writer and SELF/container validation,
 assembles `eboot.bin`, `sce_sys`, and `sce_module`, and copies the verified
@@ -80,7 +92,12 @@ possible optimization if measurements show startup latency or memory pressure.
 ### Playback resilience
 
 - Alternate URLs are attempted in catalog order after a primary stream
-  failure. Per-URL health scoring and cooldowns are not yet implemented.
+  failure. Mid-playback HLS failure and selection of the second candidate have
+  passed the bounded hardware case. Per-URL health scoring and cooldowns are
+  not implemented.
+- Timed cancellation and four consecutive H.264/HEVC session teardowns passed
+  with explicit zero cleanup results. A longer soak and a deliberately stalled
+  socket remain release-hardening cases.
 - Fragmented MP4 HLS, DASH, WebM/Matroska, DRM, and encrypted media are not
   supported.
 - HLS and the native backend accept arbitrary valid dimensions that fit a
@@ -93,13 +110,12 @@ possible optimization if measurements show startup latency or memory pressure.
 
 1. Exercise controller browsing, clean `/download0` refresh, and cache-only
    relaunch as explicit functional cases.
-2. Validate alternate URLs, cancellation, repeated channel changes, unsupported
-   audio fallback, and worker shutdown under deterministic failures.
-3. Add a bounded VP9 delivery/container adapter and validate Profile 0 at all
+2. Add a bounded VP9 delivery/container adapter and validate Profile 0 at all
    three configured geometries.
-4. Add and validate the 10-bit AGC presentation path before exposing VP9
+3. Add and validate the 10-bit AGC presentation path before exposing VP9
    Profile 2.
-5. Run long-duration alternate-URL, channel-change, and cancellation tests.
+4. Run long-duration alternate-URL, channel-change, cancellation, and stalled
+   socket tests.
 
 Release readiness requires all applicable gates to pass on hardware without a
 startup crash, resource leak across repeated playback, or stale ShadowMount
