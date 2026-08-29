@@ -27,7 +27,11 @@ namespace
 constexpr std::size_t kPageSize = 0x4000;
 constexpr std::size_t kPoolChunkSize = 32 * 1024 * 1024;
 constexpr std::size_t kDirectMapThreshold = 4 * 1024 * 1024;
-constexpr std::size_t kDefaultAlignment = alignof(std::max_align_t);
+// The native compiler emits 256-bit aligned stores when initializing some
+// library objects returned by ordinary operator new. Match that target ABI
+// expectation for the complete malloc/new family.
+constexpr std::size_t kDefaultAlignment = 32;
+static_assert(kDefaultAlignment >= alignof(std::max_align_t));
 constexpr std::uint64_t kAllocatedMagic = UINT64_C(0x49505456414C4C43);
 constexpr std::uint64_t kFreeMagic = UINT64_C(0x4950545646524545);
 constexpr int kProtectionReadWrite = 3;
