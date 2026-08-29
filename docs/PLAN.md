@@ -32,12 +32,13 @@ Status: active
   source selection, refresh state, and actionable errors.
 - `R6`: play direct MPEG-TS and HLS carrying H.264 or HEVC, with optional AAC,
   and try catalog alternate URLs after a pre-playback failure.
-- `R7`: hardware-decode H.264 and HEVC at 720p, 1080p, 1440p, and 2160p.
+- `R7`: hardware-decode H.264 and HEVC at arbitrary valid dimensions within
+  hardware-proven capacity classes through 720p, 1080p, 1440p, and 2160p.
 - `R8`: present up to 1080p on a native 1080p target, scale 1440p bilinearly to
   a native 4K target, and present 2160p 1:1 on the native 4K target.
 - `R9`: support VP9 Profile 0 backend operation at 1080p, 1440p, and 2160p,
-  including superframe splitting, hidden-frame ordering, and depth-three
-  caller-owned buffers.
+  including superframe splitting, hidden-frame ordering, and caller-owned
+  buffers.
 - `R10`: persist bounded playback telemetry sufficient to classify network,
   demux, decoder, presenter, stop, and cleanup outcomes.
 
@@ -49,8 +50,9 @@ Status: active
   decoder, and completed-flip presentation remain separable for VP9 delivery.
 - `N3`: shutdown is deterministic and releases network, decoder, audio,
   presenter, SDL, and worker resources in ownership order.
-- `N4`: host tests, formatting, lint, signed-container inspection, and exact
-  artifact hashes pass before every hardware candidate.
+- `N4`: host tests, formatting, lint, signed-container inspection, exact
+  artifact hashes, and the boilerplate PRX/title-layout invariant pass before
+  every hardware candidate.
 - `N5`: no proprietary shader, SDK, credential, fixture, or console artifact is
   committed.
 
@@ -89,7 +91,7 @@ Status: active
 | Goal | Outcome | Dependencies | Status |
 | --- | --- | --- | --- |
 | `G1` | Stable native shell, catalog cache, and launcher lifecycle | None | complete |
-| `G2` | Complete H.264/HEVC IPTV path and resolution matrix | `G1` | active |
+| `G2` | Complete H.264/HEVC IPTV path and resolution matrix | `G1` | complete |
 | `G3` | Resilience, channel switching, and repeated-run stability | `G2` | planned |
 | `G4` | End-to-end VP9 Profile 0 delivery | `G2` | planned |
 | `G5` | Redistributable VP9 Profile 2/10-bit presentation | `G4` | deferred |
@@ -116,7 +118,7 @@ Status: active
 
 ## G2: Native H.264/HEVC playback
 
-- Status: active
+- Status: complete
 - Objective: prove the IPTV stream adapter, native decoder, audio, pacing, and
   1080p/1440p/2160p output geometry with controlled legal-safe fixtures.
 - Requirements advanced: `R6`-`R8`, `R10`, `N2`-`N4`.
@@ -127,7 +129,9 @@ Status: active
 - Acceptance criteria: `A4`.
 - Required evidence: exact candidate hash, decoded/presented counts, output
   class, screenshot, title-specific logs, and clean teardown.
-- Candidate commit: pending.
+- Candidate commit: `0e92b6b`.
+- Candidate artifact: `eboot.bin` SHA-256
+  `4055f6f09c41a2cd071e0df20728105309ee8b746b7eb54f2c29622c8960df22`.
 - Validation-record commit: pending.
 
 ## G3: Playback resilience

@@ -97,8 +97,10 @@ and playback receipts use separate versioned files under `/download0`.
 
 The HTTP layer supports HTTP(S), bounded redirects, deadlines, streaming
 reads, and safe propagation of per-channel `User-Agent` and `Referer` values.
-HLS master playlists are reduced to variants whose declared geometry is one of
-720p, 1080p, 1440p, or 2160p and is within the configured bandwidth limit.
+HLS master playlists are reduced to variants whose declared codec, profile,
+level, dimensions, and bandwidth fit the configured native limits. Valid
+nonstandard dimensions are mapped to the smallest compatible decoder capacity
+class rather than being rejected by an exact-resolution allowlist.
 
 The media path currently accepts:
 
@@ -119,9 +121,9 @@ playback.
 ## Native video backend
 
 The decoder owns distinct input and frame pools and validates every requested
-codec/profile/geometry combination against a fixed mode table before opening
-Videodec2. H.264 and HEVC use a one-frame decoder pipeline. VP9 Profile 0 uses
-a depth-three pipeline.
+codec/profile/geometry combination against capacity classes before opening
+Videodec2. H.264, HEVC, and VP9 Profile 0 use a one-frame caller-owned decoder
+pipeline, matching the hardware investigation results.
 
 VP9 coded packets are split using the trailing superframe index. Every coded
 frame is submitted in packet order, including hidden frames. The fixed
@@ -133,17 +135,17 @@ submission order.
 
 | Codec | Profile | Coded / visible geometry | Maximum configured level | Output pitch |
 | --- | --- | --- | --- | --- |
-| H.264 | Baseline, Main, High | 1280×720 / 1280×720 | 41 | 1280 |
-| H.264 | Baseline, Main, High | 1920×1088 / 1920×1080 | 51 | 2048 |
-| H.264 | Baseline, Main, High | 2560×1440 / 2560×1440 | 51 | 2560 |
-| H.264 | Baseline, Main, High | 3840×2160 or 3840×2176 / 3840×2160 | 52 | 3840 |
-| HEVC | Main, 8-bit 4:2:0 | 1280×720 / 1280×720 | 123 | 1280 |
-| HEVC | Main, 8-bit 4:2:0 | 1920×1080 or 1920×1088 / 1920×1080 | 123 | 2048 |
-| HEVC | Main, 8-bit 4:2:0 | 2560×1440 / 2560×1440 | 150 | 2560 |
-| HEVC | Main, 8-bit 4:2:0 | 3840×2160 or 3840×2176 / 3840×2160 | 153 | 3840 |
-| VP9 | Profile 0, 8-bit 4:2:0 | 1920×1080 / 1920×1080 | 41 | 2048 |
-| VP9 | Profile 0, 8-bit 4:2:0 | 2560×1440 / 2560×1440 | 50 | 2560 |
-| VP9 | Profile 0, 8-bit 4:2:0 | 3840×2160 / 3840×2160 | 51 | 3840 |
+| H.264 | Baseline, Main, High | Up to 1280×720 | 41 | Decoder-reported |
+| H.264 | High | Up to 1920×1088 | 51 | Decoder-reported |
+| H.264 | High | Up to 2560×1440 | 51 | Decoder-reported |
+| H.264 | High | Up to 3840×2176 | 52 | Decoder-reported |
+| HEVC | Main, 8-bit 4:2:0 | Up to 1280×720 | 123 | Decoder-reported |
+| HEVC | Main, 8-bit 4:2:0 | Up to 1920×1088 | 123 | Decoder-reported |
+| HEVC | Main, 8-bit 4:2:0 | Up to 2560×1440 | 150 | Decoder-reported |
+| HEVC | Main, 8-bit 4:2:0 | Up to 3840×2176 | 153 | Decoder-reported |
+| VP9 | Profile 0, 8-bit 4:2:0 | Up to 1920×1080 | 41 | Decoder-reported |
+| VP9 | Profile 0, 8-bit 4:2:0 | Up to 2560×1440 | 50 | Decoder-reported |
+| VP9 | Profile 0, 8-bit 4:2:0 | Up to 3840×2160 | 51 | Decoder-reported |
 
 The level values above are the numeric values consumed by the current native
 backend, not marketing labels inferred by the documentation.
@@ -165,7 +167,7 @@ The presenter chooses one of two VideoOut surfaces:
 
 Therefore 720p and 1080p use the 1080p output class, 1440p is bilinearly
 scaled by AGC to the 4K surface, and 2160p maps to the 4K surface. Framebuffer
-registration, viewport/scissor state, TV-safe inset, and allocation size are
+registration, full-frame viewport/scissor state, and allocation size are
 recreated when the output class changes.
 
 ## Cleanup and diagnostics
