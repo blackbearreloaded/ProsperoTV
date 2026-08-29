@@ -75,7 +75,7 @@ void NotifyError(const char *stage, int result)
 }
 
 void SaveReceipt(int result, const iptv_stream_telemetry_t &stream,
-                 const iptv_native_telemetry_t &native, std::uint32_t stop_requested_before_cleanup,
+                 const iptv_native_telemetry_t &native, std::uint32_t playback_stop_requested,
                  std::uint64_t player_cleanup_count, int player_cleanup_result)
 {
     char temporary[96]{};
@@ -110,7 +110,7 @@ void SaveReceipt(int result, const iptv_stream_telemetry_t &stream,
         "present_max_us=%llu\npacing_resets=%llu\n"
         "pacing_waits=%llu\npacing_late_frames=%llu\n"
         "hardware_validated=%u\nstream_acceptance_validated=%u\n"
-        "native_stop_requested_before_cleanup=%u\n",
+        "playback_stop_requested=%u\n",
         result, static_cast<int>(stream.state), stream.last_result, stream.last_error,
         stream.audio_disabled, stream.audio_warning, stream.format.video_codec,
         stream.format.video_profile, stream.format.video_level, stream.format.coded_width,
@@ -142,7 +142,7 @@ void SaveReceipt(int result, const iptv_stream_telemetry_t &stream,
         static_cast<unsigned long long>(native.pacing_resets),
         static_cast<unsigned long long>(native.pacing_waits),
         static_cast<unsigned long long>(native.pacing_late_frames), native.hardware_validated,
-        native.stream_acceptance_validated, stop_requested_before_cleanup);
+        native.stream_acceptance_validated, playback_stop_requested);
     const int write_result = std::ferror(file) ? -1 : std::fflush(file);
     const int close_result = std::fclose(file);
     if (write_result != 0 || close_result != 0)
@@ -387,6 +387,7 @@ class StreamRunner
             const std::uint64_t now = MonotonicUsec();
             if (now >= stop_deadline_usec_)
             {
+                playback_stop_requested_ = true;
                 if (adapter_.initialized)
                     iptv_native_backend_request_stop(&adapter_.backend);
                 return true;
@@ -399,6 +400,7 @@ class StreamRunner
             if (event.pressed &&
                 (event.action == IPTV_INPUT_CIRCLE || event.action == IPTV_INPUT_OPTIONS))
             {
+                playback_stop_requested_ = true;
                 if (adapter_.initialized)
                 {
                     iptv_native_backend_request_stop(&adapter_.backend);
@@ -406,7 +408,12 @@ class StreamRunner
                 return true;
             }
         }
-        return adapter_.initialized && iptv_native_backend_stop_requested(&adapter_.backend) != 0;
+        if (adapter_.initialized && iptv_native_backend_stop_requested(&adapter_.backend) != 0)
+        {
+            playback_stop_requested_ = true;
+            return true;
+        }
+        return false;
     }
 
     const iptv_stream_telemetry_t *Telemetry() const
@@ -442,7 +449,7 @@ class StreamRunner
             const int stop_result = iptv_stream_stop(&session_);
             const int cleanup_result = iptv_stream_cleanup(&session_);
             ++player_cleanup_count_;
-            RecordCleanupResult(stop_result);
+            (void)stop_result;
             RecordCleanupResult(cleanup_result);
             active_ = false;
         }
@@ -461,6 +468,10 @@ class StreamRunner
     int PlayerCleanupResult() const
     {
         return player_cleanup_result_;
+    }
+    bool PlaybackStopRequested() const
+    {
+        return playback_stop_requested_;
     }
 
     ~StreamRunner()
@@ -481,6 +492,7 @@ class StreamRunner
     std::uint64_t stop_deadline_usec_ = 0;
     std::uint64_t player_cleanup_count_ = 0;
     int player_cleanup_result_ = 0;
+    bool playback_stop_requested_ = false;
 };
 
 enum class FeedResult
@@ -890,15 +902,12 @@ static int RunPlayer(const char *url, const char *channel_name, const char *user
 
     if (runner)
     {
-        iptv_native_telemetry_t before_cleanup{};
-        const bool had_native_before_cleanup = runner->NativeTelemetry(&before_cleanup);
         runner->Close();
         const iptv_stream_telemetry_t *current = runner->Telemetry();
         iptv_native_telemetry_t native{};
         if (current && runner->NativeTelemetry(&native))
         {
-            SaveReceipt(result, *current, native,
-                        had_native_before_cleanup ? before_cleanup.stop_requested : 0,
+            SaveReceipt(result, *current, native, runner->PlaybackStopRequested() ? 1u : 0u,
                         runner->PlayerCleanupCount(), runner->PlayerCleanupResult());
         }
     }
