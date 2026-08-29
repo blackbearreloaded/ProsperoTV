@@ -47,9 +47,10 @@ TEST(Vp9PacketTest, RejectsMismatchedOrIncompleteIndexes)
 
 TEST(Vp9PacketTest, ReadsVisibleHiddenAndShowExistingFlags)
 {
-    constexpr std::array<std::uint8_t, 1> visible{0x42};
-    constexpr std::array<std::uint8_t, 1> hidden{0x02};
-    constexpr std::array<std::uint8_t, 1> show_existing{0x72};
+    // Prefix from the first keyframe of a libvpx-produced Profile 0 fixture.
+    constexpr std::array<std::uint8_t, 8> visible{0x82, 0x49, 0x83, 0x42, 0x00, 0x77, 0xf0, 0x43};
+    constexpr std::array<std::uint8_t, 1> hidden{0x84};
+    constexpr std::array<std::uint8_t, 1> show_existing{0x88};
     iptv_vp9_frame_flags_t flags{};
 
     ASSERT_EQ(iptv_vp9_read_frame_flags(visible.data(), visible.size(), 0, &flags), 0);
@@ -69,8 +70,8 @@ TEST(Vp9PacketTest, ReadsVisibleHiddenAndShowExistingFlags)
 
 TEST(Vp9PacketTest, RejectsProfileMismatchAndBadFrameMarker)
 {
-    constexpr std::array<std::uint8_t, 1> profile_two{0x4a};
-    constexpr std::array<std::uint8_t, 1> bad_marker{0x41};
+    constexpr std::array<std::uint8_t, 1> profile_two{0x92};
+    constexpr std::array<std::uint8_t, 1> bad_marker{0x42};
     iptv_vp9_frame_flags_t flags{};
     EXPECT_NE(iptv_vp9_read_frame_flags(profile_two.data(), profile_two.size(), 0, &flags), 0);
     EXPECT_NE(iptv_vp9_read_frame_flags(bad_marker.data(), bad_marker.size(), 0, &flags), 0);

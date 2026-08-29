@@ -569,6 +569,12 @@ class StreamRunner
             return IPTV_STREAM_INVALID_STATE;
         if (webm_finished_)
             return session_.telemetry.last_result;
+        if (session_.telemetry.state == IPTV_STREAM_STATE_ERROR)
+        {
+            ++session_.telemetry.stop_count;
+            webm_finished_ = true;
+            return session_.telemetry.last_result;
+        }
 
         const int drained = adapter_.opened ? AdapterDrain(&adapter_) : -1;
         ++session_.telemetry.stop_count;
@@ -639,6 +645,8 @@ class StreamRunner
   private:
     int FailWebm(int result, const char *message)
     {
+        if (session_.telemetry.state == IPTV_STREAM_STATE_ERROR)
+            return session_.telemetry.last_result;
         session_.telemetry.last_result = result;
         session_.telemetry.state = IPTV_STREAM_STATE_ERROR;
         ++session_.telemetry.error_count;

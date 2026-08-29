@@ -17,7 +17,7 @@ static int read_bit(bit_reader_t *reader, uint32_t *value)
 {
     if (!reader || !value || reader->position >= reader->bits)
         return 0;
-    *value = (reader->data[reader->position >> 3] >> (reader->position & 7u)) & 1u;
+    *value = (reader->data[reader->position >> 3] >> (7u - (reader->position & 7u))) & 1u;
     ++reader->position;
     return 1;
 }
@@ -34,7 +34,7 @@ static int read_bits(bit_reader_t *reader, uint32_t count, uint32_t *value)
         uint32_t bit;
         if (!read_bit(reader, &bit))
             return 0;
-        result |= bit << index;
+        result = (result << 1u) | bit;
     }
     *value = result;
     return 1;
