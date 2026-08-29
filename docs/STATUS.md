@@ -52,13 +52,15 @@ adding Profile 2 to the mode table.
 The mode tables and presenter geometry reflect hardware investigation results,
 but this integrated `PPSA88000` application has not completed its final
 console acceptance pass. The loader now reaches `_start`. Hardware confirmed
-that both required libc dependencies load, but system `calloc` still returns
-null under the clean-room boilerplate heap contract. Candidate `59fe40c`
-therefore provides a bounded app-local `calloc` using the working allocator
-while preserving the boilerplate-generated `libc.prx` byte-for-byte. Startup
-must be rerun, followed by catalog refresh, launcher return, repeated channel
-changes, H.264/HEVC at each geometry, audio/video pacing, cancellation, and
-cleanup on the target console.
+that both required libc dependencies load, but system allocation entry points
+return null under the clean-room boilerplate heap contract. A local `calloc`
+probe confirmed that its underlying system `malloc` fails identically.
+Candidate `8dc7f8b` therefore gives the executable one page-backed allocator
+family with pooled small-object reuse, aligned allocations, and releasable
+large mappings while preserving the boilerplate-generated `libc.prx`
+byte-for-byte. Startup must be rerun, followed by catalog refresh, launcher
+return, repeated channel changes, H.264/HEVC at each geometry, audio/video
+pacing, cancellation, and cleanup on the target console.
 
 Testing must use the shared PS5 lock and the repository's investigation-loop
 protocol. A crash or black screen requires evidence collection before another

@@ -5,7 +5,7 @@ Updated: 2026-08-29 America/New_York
 ## Current candidate
 
 - Goal: `G1` native shell and catalog startup acceptance.
-- Source commit: `59fe40c`.
+- Source commit: `8dc7f8b`.
 - Title: `PPSA88000`, version `01.000.001`, firmware target 6.02.
 - App folder: `dist/PPSA88000/`.
 - FFPFSC: `dist/PPSA88000.ffpfsc`.
@@ -14,12 +14,12 @@ Updated: 2026-08-29 America/New_York
 
 | Artifact | Bytes | SHA-256 |
 | --- | ---: | --- |
-| `eboot.bin` | 5,414,002 | `7dff12be25aacfb0f8be06ffd8f431413cb88e26b2aea9afe182f24acc2d6a73` |
+| `eboot.bin` | 5,416,258 | `360f861c8a132f31851b666e7e7a46d6c1008a096143cf4e122a2c6a706f7c1a` |
 | `sce_module/libc.prx` | 1,284,674 | `e6ff45d16adf687855cc3b33b0c8a4132b6504360b221e0a34c7e99fb3ba0036` |
 | `sce_sys/param.json` | 883 | `2acfea4e4f7957e254f07d989bb5b97b92e1d4064467c24109befaa73990d856` |
 | `sce_sys/icon0.png` | 355,883 | `282ede549c8118855fc1e1a808703f13ccb1809fdaaaa6f287ac8f2977f053cf` |
 | `sce_sys/pic0.dds` | 8,294,548 | `56a982da83853ffce3cf62f6cc169016a0ad4479a3e6082a2b6390eebdbd264b` |
-| `PPSA88000.ffpfsc` | 37,486,592 | `6b15747be63fb39342fc42a5a2db195bc80d220eb38f6945ceaf5189129d9155` |
+| `PPSA88000.ffpfsc` | 37,486,592 | `01dad17fb7cc85b527fbe0457525a3c938e2beb2de3f4068bf9f0f9fb9399131` |
 
 ## Next bounded case
 
@@ -44,3 +44,5 @@ Updated: 2026-08-29 America/New_York
 - 2026-08-29 | G1 | 4caffd1 | host | pass: 25 unit tests, 5 tooling tests, lint, signed containers, dual-libc build gate, MkPFS creation, and verification | docs/HANDOFF.md | remount exact image and run startup case
 - 2026-08-29 | G1 | 4caffd1 | fw6.02 | failed: both libc dependencies loaded, but system `calloc` returned null under the clean-room boilerplate heap contract | results/G1/PPSA88000-20260829-103844-result.json | provide bounded app-local `calloc`
 - 2026-08-29 | G1 | 59fe40c | host | pass: 25 unit tests, 5 tooling tests, lint, local-`calloc` binding gate, unchanged boilerplate `libc.prx`, signed containers, MkPFS creation, and verification | docs/HANDOFF.md | remount exact image and run startup case
+- 2026-08-29 | G1 | 59fe40c | fw6.02 | failed: app-local `calloc` reached the same first font-map allocation failure because its underlying system `malloc` also returned null | results/G1/PPSA88000-20260829-105947-result.json | own the complete executable allocator family
+- 2026-08-29 | G1 | 8dc7f8b | host | pass: 25 unit tests, 5 tooling tests, lint, no unresolved allocator-family imports, unchanged boilerplate `libc.prx`, signed containers, static inspection, MkPFS creation, and verification | docs/HANDOFF.md | remount exact image and run startup case
