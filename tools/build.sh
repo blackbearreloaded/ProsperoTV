@@ -345,13 +345,13 @@ for asset in icon0.png pic0.dds pic1.dds snd0.at9; do
 done
 [[ ! -d $root/assets ]] || cp -a "$root/assets" "$app/assets"
 [[ ! -d $root/ui ]] || cp -a "$root/ui" "$app/ui"
-if [[ -f $app/assets/ui/main.rml ]]; then
-    python3 - "$app/assets/ui/main.rml" "$content_version" <<'PY'
+if [[ -f $app/ui/main.rml ]]; then
+    python3 - "$app/ui/main.rml" "$content_version" <<'PY'
 from pathlib import Path
 import sys
 
 path = Path(sys.argv[1])
-value = path.read_text(encoding="utf-8").replace("{{PS5_RADIO_VERSION}}", sys.argv[2])
+value = path.read_text(encoding="utf-8").replace("{{PROSPERO_TV_VERSION}}", sys.argv[2])
 path.write_text(value, encoding="utf-8", newline="\n")
 PY
 fi

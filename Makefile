@@ -8,6 +8,7 @@ SHELL := /bin/bash
 -include .env
 
 APP_DEFINITIONS ?=
+IPTV_AUTOTEST ?= 0
 APP_INCLUDE_PATHS ?=
 APP_STATIC_ARCHIVES ?=
 APP_RUNTIME_MODULES ?=
@@ -40,7 +41,7 @@ RUNTIME := runtime/libc.prx
 RUNTIME_INPUTS := tools/rebuild-libc.sh \
 	$(wildcard tooling/native/*.cpp tooling/native/*.hpp) \
 	$(wildcard tooling/native/runtime/*.txt)
-APP_DEFINITIONS += SDL_MAIN_HANDLED SDL_STATIC_LIB USING_GENERATED_CONFIG_H RMLUI_STATIC_LIB ITLIB_FLAT_MAP_NO_THROW
+APP_DEFINITIONS += SDL_MAIN_HANDLED SDL_STATIC_LIB USING_GENERATED_CONFIG_H RMLUI_STATIC_LIB ITLIB_FLAT_MAP_NO_THROW IPTV_AUTOTEST_ENABLED=$(IPTV_AUTOTEST)
 # Keep the native shell compact. The streaming hot path remains in O2-built C
 # code and platform libraries.
 APP_CXXFLAGS += -frtti -Os
@@ -74,12 +75,12 @@ test-unit: $(HOST_UNIT_TEST)
 	@$(HOST_UNIT_TEST) $(GTEST_ARGS)
 
 $(HOST_UNIT_TEST): tests/test_vp9_packet.cpp tests/test_iptv_catalog.cpp \
-		tests/test_iptv_hls.cpp \
+		tests/test_iptv_hls.cpp tests/test_iptv_http.cpp \
 		tests/test_iptv_store.cpp tests/test_iptv_stream.cpp tests/test_iptv_webm.cpp \
 		src/iptv_vp9_packet.c src/iptv_catalog.cpp \
-		src/iptv_hls.cpp src/iptv_store.cpp src/iptv_stream.cpp src/iptv_webm.cpp \
+		src/iptv_hls.cpp src/iptv_http.cpp src/iptv_store.cpp src/iptv_stream.cpp src/iptv_webm.cpp \
 		include/iptv_vp9_packet.h include/iptv_catalog.h \
-		include/iptv_hls.h include/iptv_store.h include/iptv_stream.h include/iptv_webm.h \
+		include/iptv_hls.h include/iptv_http.h include/iptv_store.h include/iptv_stream.h include/iptv_webm.h \
 		tools/setup-test-dependencies.sh | test-deps
 	@printf '%s\n' '==> [test-unit] Compiling the host-native GoogleTest binary'
 	@mkdir -p -- $(@D)
@@ -94,10 +95,10 @@ $(HOST_UNIT_TEST): tests/test_vp9_packet.cpp tests/test_iptv_catalog.cpp \
 			-c src/iptv_vp9_packet.c -o $(@D)/iptv-vp9-packet.o; \
 		$(HOST_CXX) $(HOST_TEST_CXXFLAGS) -pthread -Iinclude \
 			-isystem "$$gtest/googletest/include" \
-			tests/test_vp9_packet.cpp tests/test_iptv_catalog.cpp \
+			tests/test_vp9_packet.cpp tests/test_iptv_catalog.cpp tests/test_iptv_http.cpp \
 			tests/test_iptv_hls.cpp tests/test_iptv_store.cpp tests/test_iptv_stream.cpp \
 			tests/test_iptv_webm.cpp src/iptv_catalog.cpp src/iptv_hls.cpp \
-			src/iptv_store.cpp src/iptv_stream.cpp src/iptv_webm.cpp \
+			src/iptv_http.cpp src/iptv_store.cpp src/iptv_stream.cpp src/iptv_webm.cpp \
 			$(@D)/iptv-vp9-packet.o \
 			$(@D)/gtest-all.o $(@D)/gtest-main.o \
 			$(HOST_TEST_LDFLAGS) $(HOST_TEST_LIBS) -o $@
@@ -184,7 +185,7 @@ distclean: clean
 
 help:
 	@printf '%s\n' \
-	  'make                 Generate libc.prx and build the psiptv app folder' \
+	  'make                 Generate libc.prx and build the ProsperoTV app folder' \
 	  'make init TITLE_ID=PPSA12345 APP_NAME="My App"  Configure app identity' \
 	  'make doctor          Check required and optional Linux/WSL tools' \
 	  'make test            Run all host unit and integration tests' \

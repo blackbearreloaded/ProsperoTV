@@ -1,4 +1,4 @@
-/* psiptv - native PS5 IPTV client derived from ps5-native-app-boilerplate.
+/* ProsperoTV - native PS5 IPTV client derived from ps5-native-app-boilerplate.
  * Copyright (C) 2026 BlackBearReloaded
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
@@ -27,6 +27,10 @@
 #include <new>
 #include <pthread.h>
 #include <vector>
+
+#ifndef IPTV_AUTOTEST_ENABLED
+#define IPTV_AUTOTEST_ENABLED 0
+#endif
 
 extern "C" int sceKernelUsleep(std::uint32_t microseconds);
 extern "C" int sceKernelSendNotificationRequest(std::uint32_t device, void *request,
@@ -878,7 +882,7 @@ bool RunLauncher(IptvPlayRequest *play_request, const char *failed_channel_id,
     SDL_SetHint(SDL_HINT_FRAMEBUFFER_ACCELERATION, "software");
     SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, "nearest");
 
-    SDL_Window *window = SDL_CreateWindow("PS5 IPTV Client", SDL_WINDOWPOS_UNDEFINED,
+    SDL_Window *window = SDL_CreateWindow("ProsperoTV", SDL_WINDOWPOS_UNDEFINED,
                                           SDL_WINDOWPOS_UNDEFINED, 1920, 1080, SDL_WINDOW_SHOWN);
     SDL_Surface *surface = window ? SDL_GetWindowSurface(window) : nullptr;
     SDL_Renderer *renderer = surface ? SDL_CreateSoftwareRenderer(surface) : nullptr;
@@ -923,7 +927,7 @@ bool RunLauncher(IptvPlayRequest *play_request, const char *failed_channel_id,
     Rml::Context *context =
         Rml::CreateContext("iptv-shell", {1920, 1080}, adapted_render_interface);
     Rml::ElementDocument *document = context ? context->LoadDocument("ui/main.rml") : nullptr;
-    IptvApp app;
+    static IptvApp app;
     bool input_ready = false;
     bool running = false;
     if (document)
@@ -1204,7 +1208,10 @@ int main()
         KeepProcessAlive();
     }
 
-    (void)RunAutotestIfPresent();
+    // Acceptance fixtures are opt-in test builds. Production must ignore a stale
+    // iptv-autotest.txt left in an already-mounted development folder.
+    if (IPTV_AUTOTEST_ENABLED != 0)
+        (void)RunAutotestIfPresent();
 
     std::string failed_channel_id;
     std::string failed_channel_name;

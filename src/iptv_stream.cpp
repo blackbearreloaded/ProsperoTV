@@ -1,9 +1,10 @@
-/* psiptv - native PS5 IPTV client derived from ps5-native-app-boilerplate.
+/* ProsperoTV - native PS5 IPTV client derived from ps5-native-app-boilerplate.
  * Copyright (C) 2026 BlackBearReloaded
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "iptv_stream.h"
 
+#include <cstdio>
 #include <cstring>
 #include <limits>
 #include <new>
@@ -101,6 +102,7 @@ struct impl_t
     bool video_sps;
     bool video_pps;
     bool video_vps;
+    bool video_random_access;
     bool audio_disabled;
 
     uint8_t packet[kPacketBufferBytes];
@@ -756,6 +758,7 @@ static int parse_pmt_section(iptv_stream_session_t *session, impl_t *impl, const
         impl->video_sps = false;
         impl->video_pps = false;
         impl->video_vps = false;
+        impl->video_random_access = false;
         impl->video_es.size = 0;
         impl->audio_es.size = 0;
         marker_clear(&impl->video_markers);
@@ -970,6 +973,29 @@ static int inspect_video_nal(iptv_stream_session_t *session, impl_t *impl, const
 
 static int process_audio(iptv_stream_session_t *session, impl_t *impl);
 
+static bool video_access_unit_is_random_access(const impl_t *impl, size_t bytes)
+{
+    size_t at = 0;
+    while (at < bytes)
+    {
+        size_t prefix_bytes = 0;
+        const size_t start = find_start_code(impl->video_es.data, bytes, at, &prefix_bytes);
+        if (start == kNoOffset || start + prefix_bytes >= bytes)
+            return false;
+        const uint8_t *nal = impl->video_es.data + start + prefix_bytes;
+        if (impl->format.video_codec == IPTV_STREAM_VIDEO_H264 && (nal[0] & 0x1fu) == 5u)
+            return true;
+        if (impl->format.video_codec == IPTV_STREAM_VIDEO_HEVC)
+        {
+            const uint8_t type = (nal[0] >> 1) & 0x3fu;
+            if (type >= 16u && type <= 21u)
+                return true;
+        }
+        at = start + prefix_bytes;
+    }
+    return false;
+}
+
 static int emit_video(iptv_stream_session_t *session, impl_t *impl, size_t bytes)
 {
     if (!bytes || bytes > impl->video_es.size)
@@ -981,6 +1007,17 @@ static int emit_video(iptv_stream_session_t *session, impl_t *impl, size_t bytes
         buffer_erase(&impl->video_es, bytes);
         return IPTV_STREAM_OK;
     }
+    if (!impl->video_random_access)
+    {
+        if (!video_access_unit_is_random_access(impl, bytes))
+        {
+            ++session->telemetry.dropped_payloads;
+            marker_erase(&impl->video_markers, bytes, IPTV_STREAM_PTS_UNKNOWN);
+            buffer_erase(&impl->video_es, bytes);
+            return IPTV_STREAM_OK;
+        }
+        impl->video_random_access = true;
+    }
     int result = maybe_activate(session, impl);
     if (result != IPTV_STREAM_OK)
         return result;
@@ -990,8 +1027,10 @@ static int emit_video(iptv_stream_session_t *session, impl_t *impl, size_t bytes
                                             impl->video_markers.base_pts);
         if (result != 0)
         {
+            char error[96];
             ++session->telemetry.video_submit_errors;
-            return fail(session, IPTV_STREAM_NATIVE_ERROR, "native video submit failed");
+            std::snprintf(error, sizeof(error), "native video submit failed (%d)", result);
+            return fail(session, IPTV_STREAM_NATIVE_ERROR, error);
         }
     }
     ++session->telemetry.video_access_units;
@@ -1145,11 +1184,11 @@ static int process_audio(iptv_stream_session_t *session, impl_t *impl)
         const uint32_t object_type = (data[2] >> 6) + 1u;
         const uint32_t rate_index = (data[2] >> 2) & 0x0fu;
         const uint32_t channels = ((data[2] & 1u) << 2) | (data[3] >> 6);
+        const uint32_t blocks = (data[6] & 3u) + 1u;
         const size_t header = (data[1] & 1u) ? 7u : 9u;
         const size_t frame_bytes = (static_cast<size_t>(data[3] & 3u) << 11) |
                                    (static_cast<size_t>(data[4]) << 3) | (data[5] >> 5);
-        if (object_type != 2u || !kAdtsRates[rate_index] || channels < 1u || channels > 2u ||
-            (data[6] & 3u) != 0u)
+        if (object_type != 2u || !kAdtsRates[rate_index] || channels < 1u || channels > 2u)
             return disable_audio(session, impl, "unsupported AAC; continuing with silent video");
         if (frame_bytes < header || frame_bytes > impl->audio_es.capacity)
             return disable_audio(session, impl,
@@ -1185,9 +1224,10 @@ static int process_audio(iptv_stream_session_t *session, impl_t *impl)
         ++session->telemetry.audio_frames;
         session->telemetry.audio_bytes += frame_bytes;
         session->telemetry.last_audio_pts_us = pts;
-        const uint64_t next_pts = pts == IPTV_STREAM_PTS_UNKNOWN
-                                      ? IPTV_STREAM_PTS_UNKNOWN
-                                      : pts + UINT64_C(1024000000) / kAdtsRates[rate_index];
+        const uint64_t next_pts =
+            pts == IPTV_STREAM_PTS_UNKNOWN
+                ? IPTV_STREAM_PTS_UNKNOWN
+                : pts + UINT64_C(1024000000) * blocks / kAdtsRates[rate_index];
         buffer_erase(&impl->audio_es, frame_bytes);
         marker_erase(&impl->audio_markers, frame_bytes, next_pts);
         update_buffered(session, impl);
@@ -1759,8 +1799,11 @@ int iptv_stream_stop(iptv_stream_session_t *session)
         const int drain = impl->backend.drain(impl->backend.context);
         if (drain != 0 && result == IPTV_STREAM_OK)
         {
+            char message[IPTV_STREAM_ERROR_TEXT_BYTES];
+            std::snprintf(message, sizeof(message),
+                          "native backend reported an error while stopping (%d)", drain);
             result = IPTV_STREAM_NATIVE_ERROR;
-            fail(session, result, "native backend drain failed");
+            fail(session, result, message);
         }
         impl->backend.close(impl->backend.context);
         impl->backend_open = false;

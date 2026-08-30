@@ -1,4 +1,4 @@
-# psiptv project plan
+# ProsperoTV project plan
 
 Updated: 2026-08-29 America/New_York
 Status: active
@@ -22,7 +22,7 @@ Status: active
 
 ### Functional
 
-- `R1`: start as `psiptv` under title `PPSA88000` and render the native UI.
+- `R1`: start as `ProsperoTV` under title `PPSA99003` and render the native UI.
 - `R2`: load the last good catalog from `/download0` before network refresh.
 - `R3`: fetch and parse the official iptv-org `index.m3u` off the UI thread.
 - `R4`: persist built-in and custom catalogs in separate bounded SQLite files
@@ -68,7 +68,7 @@ Status: active
   fragmented MP4, WebM audio, and general Matroska features remain outside the
   current delivery contract.
 - VP9 Profile 2 is hardware-proven by the research project, including its
-  low-aligned 10-bit surface. It remains deferred here until psiptv has a
+  low-aligned 10-bit surface. It remains deferred here until ProsperoTV has a
   redistributable 10-bit AGC shader/path and VP9 transport.
 - Hardware risk is controlled with one frozen candidate, title-specific logs,
   bounded observation, explicit close, service health checks, and no speculative
@@ -78,7 +78,7 @@ Status: active
 
 | ID | Observable criterion | Required evidence |
 | --- | --- | --- |
-| `A1` | ShadowMount registers `PPSA88000` and the title reaches a stable rendered UI without a crash. | Frozen hashes, lifecycle/klog slice, screenshot, clean close |
+| `A1` | ShadowMount registers `PPSA99003` and the title reaches a stable rendered UI without a crash. | Frozen hashes, lifecycle/klog slice, screenshot, clean close |
 | `A2` | A clean data directory refreshes iptv-org into SQLite; relaunch loads the cache before refresh. | UI evidence plus `/download0` files and receipt |
 | `A3` | Browse, search, favorite, recent, source, and refresh controls work from the controller. | Bounded functional run and persisted state |
 | `A4` | H.264 and HEVC play at 1080p, 1440p, and 2160p with expected output geometry and clean stop. | Per-mode receipt, screenshot, klog, clean teardown |

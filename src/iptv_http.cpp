@@ -1,4 +1,4 @@
-/* psiptv - native PS5 IPTV client derived from ps5-native-app-boilerplate.
+/* ProsperoTV - native PS5 IPTV client derived from ps5-native-app-boilerplate.
  * Copyright (C) 2026 BlackBearReloaded
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
@@ -6,6 +6,7 @@
 
 #include <atomic>
 #include <cctype>
+#include <cstdio>
 #include <cstring>
 #include <time.h>
 
@@ -40,6 +41,27 @@ bool EqualsAsciiInsensitive(const char *value, const char *expected, std::size_t
             return false;
     }
     return true;
+}
+
+bool ContainsAsciiInsensitive(const char *value, std::size_t value_length, const char *needle)
+{
+    if (!value || !needle || !*needle)
+        return false;
+    const std::size_t needle_length = std::strlen(needle);
+    if (needle_length > value_length)
+        return false;
+    for (std::size_t offset = 0; offset <= value_length - needle_length; ++offset)
+    {
+        std::size_t index = 0;
+        while (index < needle_length &&
+               LowerAscii(value[offset + index]) == LowerAscii(needle[index]))
+        {
+            ++index;
+        }
+        if (index == needle_length)
+            return true;
+    }
+    return false;
 }
 
 bool IsDigits(const char *value, std::size_t length)
@@ -422,6 +444,138 @@ Status ResolveRedirectUrl(const char *base_url, const char *location, char *reso
     return Status::ok;
 }
 
+bool ResponseIndicatesGeographicBlock(const char *response, std::size_t bytes)
+{
+    if (!response || bytes == 0)
+        return false;
+    constexpr const char *patterns[] = {
+        "geoip",
+        "geo-block",
+        "geo block",
+        "geoblock",
+        "geographic restriction",
+        "geographical restriction",
+        "not available in your country",
+        "not available in your region",
+        "country is blocked",
+        "region is blocked",
+        "country not allowed",
+        "region not allowed",
+    };
+    for (const char *pattern : patterns)
+    {
+        if (ContainsAsciiInsensitive(response, bytes, pattern))
+            return true;
+    }
+    return false;
+}
+
+void DescribeFailure(Status status, int http_status, int native_error, const char *response,
+                     char *description, std::size_t description_capacity)
+{
+    if (!description || description_capacity == 0)
+        return;
+    description[0] = '\0';
+    const std::size_t response_bytes = response ? std::strlen(response) : 0u;
+    if (status == Status::http_status_error)
+    {
+        if (ResponseIndicatesGeographicBlock(response, response_bytes))
+        {
+            std::snprintf(description, description_capacity,
+                          "unavailable in your region (GeoIP blocked; HTTP %d)", http_status);
+            return;
+        }
+        switch (http_status)
+        {
+        case 400:
+            std::snprintf(description, description_capacity,
+                          "the provider rejected the stream request (HTTP 400)");
+            return;
+        case 401:
+            std::snprintf(description, description_capacity,
+                          "the stream requires authentication (HTTP 401)");
+            return;
+        case 403:
+            std::snprintf(description, description_capacity,
+                          "access denied by the channel provider (HTTP 403)");
+            return;
+        case 404:
+            std::snprintf(description, description_capacity,
+                          "stream is offline or no longer exists (HTTP 404)");
+            return;
+        case 408:
+            std::snprintf(description, description_capacity,
+                          "the channel provider timed out (HTTP 408)");
+            return;
+        case 410:
+            std::snprintf(description, description_capacity,
+                          "stream is no longer available (HTTP 410)");
+            return;
+        case 429:
+            std::snprintf(description, description_capacity,
+                          "the channel provider is rate limiting requests (HTTP 429)");
+            return;
+        case 451:
+            std::snprintf(description, description_capacity,
+                          "unavailable for legal or regional restrictions (HTTP 451)");
+            return;
+        default:
+            if (http_status >= 500 && http_status <= 599)
+            {
+                std::snprintf(description, description_capacity,
+                              "the channel provider is unavailable (HTTP %d)", http_status);
+                return;
+            }
+            std::snprintf(description, description_capacity,
+                          "the provider rejected the request (HTTP %d)", http_status);
+            return;
+        }
+    }
+
+    switch (status)
+    {
+    case Status::ok:
+        std::snprintf(description, description_capacity, "no error");
+        break;
+    case Status::invalid_argument:
+        std::snprintf(description, description_capacity, "invalid stream request");
+        break;
+    case Status::unsupported_url:
+        std::snprintf(description, description_capacity, "unsupported stream URL");
+        break;
+    case Status::not_initialized:
+    case Status::platform_unavailable:
+    case Status::network_init_failed:
+        std::snprintf(description, description_capacity, "network service unavailable");
+        break;
+    case Status::request_failed:
+        if (native_error != 0)
+            std::snprintf(description, description_capacity,
+                          "connection failed (native error 0x%08X)",
+                          static_cast<unsigned>(native_error));
+        else
+            std::snprintf(description, description_capacity, "connection failed");
+        break;
+    case Status::response_too_large:
+        std::snprintf(description, description_capacity, "provider response is too large");
+        break;
+    case Status::read_failed:
+        std::snprintf(description, description_capacity, "connection was interrupted");
+        break;
+    case Status::deadline_exceeded:
+        std::snprintf(description, description_capacity, "connection timed out");
+        break;
+    case Status::redirect_error:
+        std::snprintf(description, description_capacity, "provider returned an invalid redirect");
+        break;
+    case Status::cancelled:
+        std::snprintf(description, description_capacity, "request was cancelled");
+        break;
+    case Status::http_status_error:
+        break;
+    }
+}
+
 #if defined(__PROSPERO__) || defined(__ORBIS__)
 
 namespace
@@ -570,6 +724,20 @@ bool ExtractLocation(int request, char *location, std::size_t capacity)
         found = true;
     }
     return found;
+}
+
+std::size_t ReadErrorResponse(int request, char *response, std::size_t capacity)
+{
+    if (!response || capacity == 0)
+        return 0;
+    response[0] = '\0';
+    if (request < 0 || capacity == 1)
+        return 0;
+    const int read = sceHttpReadData(request, response, capacity - 1u);
+    if (read <= 0 || static_cast<std::size_t>(read) >= capacity)
+        return 0;
+    response[read] = '\0';
+    return static_cast<std::size_t>(read);
 }
 
 std::uint64_t MonotonicUsec()
@@ -837,8 +1005,12 @@ FetchResult GetM3uResolved(const char *url, char *buffer, std::size_t buffer_cap
     }
     if (http_status < 200 || http_status >= 300)
     {
+        const std::size_t error_capacity = buffer_capacity < kMaxErrorResponseBytes + 1u
+                                               ? buffer_capacity
+                                               : kMaxErrorResponseBytes + 1u;
+        const std::size_t bytes = ReadErrorResponse(request, buffer, error_capacity);
         CloseRequest(connection, request);
-        return Failure(Status::http_status_error, 0, http_status);
+        return Failure(Status::http_status_error, 0, http_status, bytes);
     }
 
     std::size_t bytes = 0;
@@ -957,6 +1129,8 @@ Status OpenStream(const char *url, const char *accept, StreamRequest *stream,
         {
             if (stream->http_status < 200 || stream->http_status >= 300)
             {
+                ReadErrorResponse(stream->request, stream->error_response,
+                                  sizeof(stream->error_response));
                 CloseStream(stream);
                 return Status::http_status_error;
             }

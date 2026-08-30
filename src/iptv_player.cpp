@@ -1,4 +1,4 @@
-/* psiptv - native PS5 IPTV client derived from ps5-native-app-boilerplate.
+/* ProsperoTV - native PS5 IPTV client derived from ps5-native-app-boilerplate.
  * Copyright (C) 2026 BlackBearReloaded
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
@@ -7,10 +7,13 @@
 #include "iptv_hls.h"
 #include "iptv_http.h"
 #include "iptv_input.h"
+#include "iptv_native_agc_present.h"
 #include "iptv_native_backend.h"
 #include "iptv_stream.h"
 #include "iptv_webm.h"
 
+#include <atomic>
+#include <cstdarg>
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
@@ -21,15 +24,95 @@
 extern "C" int sceKernelSendNotificationRequest(std::uint32_t device, void *request,
                                                 std::size_t size, int blocking);
 extern "C" int sceKernelUsleep(std::uint32_t microseconds);
+extern "C" int scePthreadCreate(void **thread, const void *attributes, void *(*entry)(void *),
+                                void *argument, const char *name);
+extern "C" int scePthreadJoin(void *thread, void **result);
 extern "C" long write(int descriptor, const void *buffer, std::size_t bytes);
 
 namespace
 {
 
 constexpr std::size_t kReadBytes = 64u * 1024u;
+constexpr std::size_t kReadAheadBytes = 16u * 1024u * 1024u;
+constexpr std::size_t kReadAheadMinimumBytes = 64u * 1024u;
+constexpr std::size_t kReadAheadHighWaterBytes = 12u * 1024u * 1024u;
+constexpr std::uint64_t kReadAheadInitialUsec = UINT64_C(2000000);
+constexpr std::uint64_t kReadAheadRebufferUsec = UINT64_C(1000000);
+constexpr std::uint64_t kReadAheadRebufferStepUsec = UINT64_C(500000);
+constexpr std::uint64_t kReadAheadMaximumUsec = UINT64_C(3000000);
+constexpr std::uint64_t kHlsMinimumInitialUsec = UINT64_C(6000000);
+constexpr std::uint64_t kHlsMaximumInitialUsec = UINT64_C(15000000);
+constexpr std::uint64_t kHlsMinimumRebufferUsec = UINT64_C(4000000);
+constexpr std::uint64_t kHlsMaximumRebufferUsec = UINT64_C(8000000);
 constexpr std::size_t kPlaylistBytes = IPTV_HLS_DEFAULT_MAX_INPUT_BYTES;
 constexpr std::uint64_t kVideoProgressTimeoutUsec = UINT64_C(15000000);
 constexpr char kReceiptPath[] = "/download0/iptv-last-receipt.txt";
+
+constexpr std::uint64_t ClampUsec(std::uint64_t value, std::uint64_t minimum, std::uint64_t maximum)
+{
+    return value < minimum ? minimum : value > maximum ? maximum : value;
+}
+
+constexpr std::uint64_t HlsInitialUsec(std::uint32_t target_duration_ms)
+{
+    return ClampUsec(static_cast<std::uint64_t>(target_duration_ms) * 2000u, kHlsMinimumInitialUsec,
+                     kHlsMaximumInitialUsec);
+}
+
+constexpr std::uint64_t HlsRebufferUsec(std::uint32_t target_duration_ms)
+{
+    return ClampUsec(static_cast<std::uint64_t>(target_duration_ms) * 1000u,
+                     kHlsMinimumRebufferUsec, kHlsMaximumRebufferUsec);
+}
+
+constexpr std::uint64_t ReadAheadPrimeUsec(unsigned underruns, std::uint64_t initial_us,
+                                           std::uint64_t rebuffer_us, std::uint64_t maximum_us)
+{
+    const std::uint64_t requested =
+        underruns == 0 ? initial_us : rebuffer_us + underruns * kReadAheadRebufferStepUsec;
+    return requested < maximum_us ? requested : maximum_us;
+}
+
+constexpr bool ReadAheadPrimed(std::size_t available, std::uint64_t elapsed_us,
+                               std::uint64_t required_us)
+{
+    return available >= kReadAheadHighWaterBytes ||
+           (available >= kReadAheadMinimumBytes && elapsed_us >= required_us);
+}
+
+static_assert(HlsInitialUsec(5000) == UINT64_C(10000000));
+static_assert(HlsInitialUsec(6000) == UINT64_C(12000000));
+static_assert(HlsRebufferUsec(5000) == UINT64_C(5000000));
+static_assert(ReadAheadPrimeUsec(0, kReadAheadInitialUsec, kReadAheadRebufferUsec,
+                                 kReadAheadMaximumUsec) == UINT64_C(2000000));
+static_assert(ReadAheadPrimeUsec(1, kReadAheadInitialUsec, kReadAheadRebufferUsec,
+                                 kReadAheadMaximumUsec) == UINT64_C(1500000));
+static_assert(!ReadAheadPrimed(kReadAheadMinimumBytes, UINT64_C(1000000), kReadAheadInitialUsec));
+static_assert(ReadAheadPrimed(kReadAheadMinimumBytes, UINT64_C(2000000), kReadAheadInitialUsec));
+char gLastPlaybackError[192]{};
+
+void SetLastPlaybackError(const char *format, ...)
+{
+    va_list arguments;
+
+    if (!format)
+    {
+        gLastPlaybackError[0] = '\0';
+        return;
+    }
+    va_start(arguments, format);
+    std::vsnprintf(gLastPlaybackError, sizeof(gLastPlaybackError), format, arguments);
+    va_end(arguments);
+}
+
+void SetRequestFailure(const char *context, iptv::http::Status status, int http_status,
+                       int native_error, const char *response)
+{
+    char reason[160]{};
+    iptv::http::DescribeFailure(status, http_status, native_error, response, reason,
+                                sizeof(reason));
+    SetLastPlaybackError("%s: %s.", context, reason);
+}
 
 std::uint64_t MonotonicUsec()
 {
@@ -68,16 +151,18 @@ void Notify(const char *message)
     sceKernelSendNotificationRequest(0, &request, sizeof(request), 0);
 }
 
-void NotifyError(const char *stage, int result)
+void NotifyLastPlaybackError()
 {
     char message[192]{};
-    std::snprintf(message, sizeof(message), "IPTV: %s failed (%d)", stage, result);
+    std::snprintf(message, sizeof(message), "IPTV: %.180s",
+                  gLastPlaybackError[0] ? gLastPlaybackError : "The channel could not be played.");
     Notify(message);
 }
 
 void SaveReceipt(int result, const iptv_stream_telemetry_t &stream,
-                 const iptv_native_telemetry_t &native, std::uint32_t playback_stop_requested,
-                 std::uint64_t player_cleanup_count, int player_cleanup_result)
+                 const iptv_native_telemetry_t &native, std::uint32_t native_telemetry_available,
+                 std::uint32_t playback_stop_requested, std::uint64_t player_cleanup_count,
+                 int player_cleanup_result)
 {
     char temporary[96]{};
     std::snprintf(temporary, sizeof(temporary), "%s.tmp", kReceiptPath);
@@ -86,8 +171,9 @@ void SaveReceipt(int result, const iptv_stream_telemetry_t &stream,
         return;
     std::fprintf(
         file,
-        "IPTV_RECEIPT_V1\n"
+        "IPTV_RECEIPT_V2\n"
         "result=%d\n"
+        "playback_error=%s\n"
         "stream_state=%d\n"
         "stream_result=%d\n"
         "stream_error=%s\n"
@@ -97,35 +183,54 @@ void SaveReceipt(int result, const iptv_stream_telemetry_t &stream,
         "coded=%ux%u\nvisible=%ux%u\nbit_depth=%u\nchroma=%u\n"
         "video_access_units=%llu\naudio_frames=%llu\n"
         "native_state=%d\nnative_result=%d\nnative_cleanup=%d\n"
+        "decoder_surface_pitch=%u\ndecoder_surface_height=%u\n"
+        "native_telemetry_available=%u\n"
         "stream_cleanup_count=%llu\nstream_stop_count=%llu\nstream_cleanup_result=%d\n"
         "player_cleanup_count=%llu\nplayer_cleanup_result=%d\n"
         "decoded_frames=%llu\npresented_frames=%llu\nhidden_decoded_frames=%llu\n"
+        "last_video_access_unit_bytes=%llu\nlast_video_nal_mask=0x%08x\n"
+        "decoder_output_reject_flags=0x%08x\n"
+        "decoder_output_valid=%u\ndecoder_output_error=%u\n"
+        "decoder_output_picture_count=%u\ndecoder_output_codec=%u\n"
+        "decoder_output_width=%u\ndecoder_output_height=%u\ndecoder_output_pitch=%u\n"
+        "decoder_frame_accepted=%u\n"
         "buffered_video_access_units=%llu\ndrained_video_frames=%llu\n"
         "dropped_delayed_frames=%llu\ndecoder_flushes=%llu\n"
         "drain_flush_limit_hits=%llu\npending_video_timestamps=%u\n"
         "audio_decoded_frames=%llu\naudio_output_grains=%llu\n"
+        "audio_output_total_us=%llu\naudio_output_max_us=%llu\n"
+        "audio_queue_max_frames=%u\naudio_queue_underruns=%llu\n"
+        "video_queue_max_frames=%u\nvideo_queue_max_bytes=%llu\n"
+        "video_queue_underruns=%llu\nactual_frame_rate_x100=%u\nbitrate_kbps=%u\n"
         "native_audio_disabled=%u\nnative_audio_result=%d\n"
         "decoder_output_in_frame_pool=%u\nzero_copy_pointer_match=%u\n"
         "last_decoder_output=0x%llx\nlast_present_source=0x%llx\n"
         "first_frame_latency_us=%llu\ndecode_max_us=%llu\n"
         "present_max_us=%llu\npacing_resets=%llu\n"
         "pacing_waits=%llu\npacing_late_frames=%llu\n"
+        "dropped_late_video_frames=%llu\n"
         "hardware_validated=%u\nstream_acceptance_validated=%u\n"
         "playback_stop_requested=%u\n",
-        result, static_cast<int>(stream.state), stream.last_result, stream.last_error,
-        stream.audio_disabled, stream.audio_warning, stream.format.video_codec,
+        result, gLastPlaybackError, static_cast<int>(stream.state), stream.last_result,
+        stream.last_error, stream.audio_disabled, stream.audio_warning, stream.format.video_codec,
         stream.format.video_profile, stream.format.video_level, stream.format.coded_width,
         stream.format.coded_height, stream.format.visible_width, stream.format.visible_height,
         stream.format.video_bit_depth, stream.format.video_chroma_format,
         static_cast<unsigned long long>(stream.video_access_units),
         static_cast<unsigned long long>(stream.audio_frames), static_cast<int>(native.state),
-        native.last_result, native.cleanup_result,
+        native.last_result, native.cleanup_result, native.output_pitch,
+        native.output_surface_height, native_telemetry_available,
         static_cast<unsigned long long>(stream.cleanup_count),
         static_cast<unsigned long long>(stream.stop_count), stream.last_cleanup_result,
         static_cast<unsigned long long>(player_cleanup_count), player_cleanup_result,
         static_cast<unsigned long long>(native.decoded_frames),
         static_cast<unsigned long long>(native.presented_frames),
         static_cast<unsigned long long>(native.hidden_decoded_frames),
+        static_cast<unsigned long long>(native.last_video_access_unit_bytes),
+        native.last_video_nal_mask, native.decoder_output_reject_flags, native.decoder_output_valid,
+        native.decoder_output_error, native.decoder_output_picture_count,
+        native.decoder_output_codec, native.decoder_output_width, native.decoder_output_height,
+        native.decoder_output_pitch, native.decoder_frame_accepted,
         static_cast<unsigned long long>(native.buffered_video_access_units),
         static_cast<unsigned long long>(native.drained_video_frames),
         static_cast<unsigned long long>(native.dropped_delayed_frames),
@@ -133,7 +238,14 @@ void SaveReceipt(int result, const iptv_stream_telemetry_t &stream,
         static_cast<unsigned long long>(native.drain_flush_limit_hits),
         native.pending_video_timestamps,
         static_cast<unsigned long long>(native.decoded_audio_frames),
-        static_cast<unsigned long long>(native.audio_output_grains), native.audio_disabled,
+        static_cast<unsigned long long>(native.audio_output_grains),
+        static_cast<unsigned long long>(native.audio_output_total_us),
+        static_cast<unsigned long long>(native.audio_output_max_us), native.audio_queue_max_frames,
+        static_cast<unsigned long long>(native.audio_queue_underruns),
+        native.video_queue_max_frames,
+        static_cast<unsigned long long>(native.video_queue_max_bytes),
+        static_cast<unsigned long long>(native.video_queue_underruns),
+        native.actual_frame_rate_x100, native.bitrate_kbps, native.audio_disabled,
         native.last_audio_result, native.decoder_output_in_frame_pool,
         native.zero_copy_pointer_match, static_cast<unsigned long long>(native.last_decoder_output),
         static_cast<unsigned long long>(native.last_present_source),
@@ -142,8 +254,9 @@ void SaveReceipt(int result, const iptv_stream_telemetry_t &stream,
         static_cast<unsigned long long>(native.present_max_us),
         static_cast<unsigned long long>(native.pacing_resets),
         static_cast<unsigned long long>(native.pacing_waits),
-        static_cast<unsigned long long>(native.pacing_late_frames), native.hardware_validated,
-        native.stream_acceptance_validated, playback_stop_requested);
+        static_cast<unsigned long long>(native.pacing_late_frames),
+        static_cast<unsigned long long>(native.dropped_late_video_frames),
+        native.hardware_validated, native.stream_acceptance_validated, playback_stop_requested);
     const int write_result = std::ferror(file) ? -1 : std::fflush(file);
     const int close_result = std::fclose(file);
     if (write_result != 0 || close_result != 0)
@@ -151,6 +264,7 @@ void SaveReceipt(int result, const iptv_stream_telemetry_t &stream,
         std::remove(temporary);
         return;
     }
+    std::remove(kReceiptPath);
     if (std::rename(temporary, kReceiptPath) != 0)
     {
         std::remove(temporary);
@@ -317,6 +431,10 @@ int AdapterOpen(void *context, const iptv_stream_format_t *format)
     config.chroma_format = IPTV_NATIVE_CHROMA_420;
     config.hdr = 0;
     config.enable_audio = format->audio_pid != 0;
+    iptv_native_agc_loading_stop();
+    const int handoff = iptv_native_agc_present_shutdown();
+    if (handoff != 0)
+        return handoff;
     const int result = iptv_native_backend_open(&adapter->backend, &config);
     adapter->opened = result == 0;
     return result;
@@ -418,6 +536,11 @@ class StreamRunner
         }
         active_ = true;
         mode_ = RunnerMode::transport_stream;
+        if (!StartReadAhead())
+        {
+            Close();
+            return false;
+        }
         return true;
     }
 
@@ -444,9 +567,58 @@ class StreamRunner
 
     int Push(const void *data, std::size_t bytes)
     {
-        return active_ && mode_ == RunnerMode::transport_stream
-                   ? iptv_stream_push(&session_, data, bytes)
-                   : IPTV_STREAM_INVALID_STATE;
+        if (!active_ || mode_ != RunnerMode::transport_stream || !data || !bytes ||
+            !read_ahead_buffer_ || !read_ahead_thread_)
+            return IPTV_STREAM_INVALID_STATE;
+
+        const auto *source = static_cast<const std::uint8_t *>(data);
+        while (bytes)
+        {
+            const int worker_result = read_ahead_result_.load(std::memory_order_acquire);
+            if (worker_result != IPTV_STREAM_OK)
+                return worker_result;
+            const std::uint64_t read = read_ahead_read_.load(std::memory_order_acquire);
+            const std::uint64_t write = read_ahead_write_.load(std::memory_order_relaxed);
+            const std::size_t used = static_cast<std::size_t>(write - read);
+            if (used >= kReadAheadBytes)
+            {
+                if (StopRequested())
+                    return IPTV_STREAM_OK;
+                sceKernelUsleep(1000u);
+                continue;
+            }
+            const std::size_t offset = static_cast<std::size_t>(write % kReadAheadBytes);
+            std::size_t chunk = kReadAheadBytes - used;
+            if (chunk > kReadAheadBytes - offset)
+                chunk = kReadAheadBytes - offset;
+            if (chunk > bytes)
+                chunk = bytes;
+            std::memcpy(read_ahead_buffer_ + offset, source, chunk);
+            read_ahead_write_.store(write + chunk, std::memory_order_release);
+            source += chunk;
+            bytes -= chunk;
+        }
+        return IPTV_STREAM_OK;
+    }
+
+    bool FlushInput()
+    {
+        if (!read_ahead_thread_)
+            return true;
+        read_ahead_flush_.store(true, std::memory_order_release);
+        while (read_ahead_read_.load(std::memory_order_acquire) !=
+               read_ahead_write_.load(std::memory_order_acquire))
+        {
+            if (read_ahead_result_.load(std::memory_order_acquire) != IPTV_STREAM_OK ||
+                StopRequested())
+            {
+                read_ahead_flush_.store(false, std::memory_order_release);
+                return false;
+            }
+            sceKernelUsleep(1000u);
+        }
+        read_ahead_flush_.store(false, std::memory_order_release);
+        return read_ahead_result_.load(std::memory_order_acquire) == IPTV_STREAM_OK;
     }
 
     int PushWebm(const iptv_webm_video_info_t &video, const iptv_webm_block_t &block)
@@ -516,6 +688,11 @@ class StreamRunner
             }
         }
         iptv_input_poll();
+        const bool overlay_chord =
+            iptv_input_pressed(IPTV_INPUT_TOUCHPAD) && iptv_input_pressed(IPTV_INPUT_R1);
+        if (overlay_chord && !overlay_chord_down_)
+            iptv_native_agc_set_overlay_enabled(!iptv_native_agc_overlay_enabled());
+        overlay_chord_down_ = overlay_chord;
         iptv_input_event_t event{};
         while (iptv_input_next(&event))
         {
@@ -553,10 +730,20 @@ class StreamRunner
         return PresentedFrames() != 0;
     }
 
+    void ConfigureHlsBuffering(std::uint32_t target_duration_ms)
+    {
+        if (!target_duration_ms)
+            return;
+        const std::uint64_t initial = HlsInitialUsec(target_duration_ms);
+        read_ahead_initial_us_.store(initial, std::memory_order_release);
+        read_ahead_rebuffer_us_.store(HlsRebufferUsec(target_duration_ms),
+                                      std::memory_order_release);
+        read_ahead_maximum_us_.store(initial, std::memory_order_release);
+    }
+
     std::uint64_t PresentedFrames() const
     {
-        iptv_native_telemetry_t telemetry{};
-        return NativeTelemetry(&telemetry) ? telemetry.presented_frames : 0;
+        return iptv_native_backend_presented_frames(&adapter_.backend);
     }
 
     int Finish()
@@ -564,7 +751,19 @@ class StreamRunner
         if (!active_)
             return IPTV_STREAM_INVALID_STATE;
         if (mode_ == RunnerMode::transport_stream)
-            return iptv_stream_stop(&session_);
+        {
+            const int read_ahead_result = StopReadAhead(true);
+            if (read_ahead_result != IPTV_STREAM_OK)
+                return read_ahead_result;
+            const int stop_result = iptv_stream_stop(&session_);
+            const iptv_stream_telemetry_t *telemetry = Telemetry();
+            const bool drain_only =
+                telemetry &&
+                std::strncmp(telemetry->last_error, "native backend drain failed", 27u) == 0;
+            if (stop_result != IPTV_STREAM_OK && drain_only && HasPresentedVideo())
+                return IPTV_STREAM_OK;
+            return stop_result;
+        }
         if (mode_ != RunnerMode::webm)
             return IPTV_STREAM_INVALID_STATE;
         if (webm_finished_)
@@ -592,6 +791,7 @@ class StreamRunner
         {
             if (mode_ == RunnerMode::transport_stream)
             {
+                (void)StopReadAhead(false);
                 const int stop_result = iptv_stream_stop(&session_);
                 const int cleanup_result = iptv_stream_cleanup(&session_);
                 ++player_cleanup_count_;
@@ -643,6 +843,119 @@ class StreamRunner
     }
 
   private:
+    static void *ReadAheadEntry(void *context)
+    {
+        static_cast<StreamRunner *>(context)->ReadAheadLoop();
+        return nullptr;
+    }
+
+    bool StartReadAhead()
+    {
+        read_ahead_buffer_ = new (std::nothrow) std::uint8_t[kReadAheadBytes];
+        if (!read_ahead_buffer_)
+            return false;
+        read_ahead_read_.store(0, std::memory_order_relaxed);
+        read_ahead_write_.store(0, std::memory_order_relaxed);
+        read_ahead_result_.store(IPTV_STREAM_OK, std::memory_order_relaxed);
+        read_ahead_stop_.store(false, std::memory_order_relaxed);
+        read_ahead_finished_.store(false, std::memory_order_relaxed);
+        read_ahead_flush_.store(false, std::memory_order_relaxed);
+        if (scePthreadCreate(&read_ahead_thread_, nullptr, ReadAheadEntry, this,
+                             "prosperotv-buffer") != 0)
+        {
+            delete[] read_ahead_buffer_;
+            read_ahead_buffer_ = nullptr;
+            read_ahead_thread_ = nullptr;
+            return false;
+        }
+        return true;
+    }
+
+    void ReadAheadLoop()
+    {
+        bool primed = false;
+        unsigned underruns = 0;
+        std::uint64_t prime_started_us = 0;
+        while (!read_ahead_stop_.load(std::memory_order_acquire))
+        {
+            const std::uint64_t read = read_ahead_read_.load(std::memory_order_relaxed);
+            const std::uint64_t write = read_ahead_write_.load(std::memory_order_acquire);
+            const std::size_t available = static_cast<std::size_t>(write - read);
+            const bool finished = read_ahead_finished_.load(std::memory_order_acquire);
+            const bool flushing = read_ahead_flush_.load(std::memory_order_acquire);
+            if (!primed)
+            {
+                if (available == 0 && finished)
+                    break;
+                if (available == 0)
+                {
+                    prime_started_us = 0;
+                    sceKernelUsleep(1000u);
+                    continue;
+                }
+                const std::uint64_t now = MonotonicUsec();
+                if (prime_started_us == 0)
+                    prime_started_us = now;
+                const std::uint64_t elapsed = now >= prime_started_us ? now - prime_started_us : 0;
+                const std::uint64_t required = ReadAheadPrimeUsec(
+                    underruns, read_ahead_initial_us_.load(std::memory_order_acquire),
+                    read_ahead_rebuffer_us_.load(std::memory_order_acquire),
+                    read_ahead_maximum_us_.load(std::memory_order_acquire));
+                if (!finished && !flushing && !ReadAheadPrimed(available, elapsed, required))
+                {
+                    sceKernelUsleep(1000u);
+                    continue;
+                }
+                primed = true;
+            }
+            if (available == 0)
+            {
+                if (finished)
+                    break;
+                primed = false;
+                ++underruns;
+                prime_started_us = 0;
+                sceKernelUsleep(1000u);
+                continue;
+            }
+
+            const std::size_t offset = static_cast<std::size_t>(read % kReadAheadBytes);
+            std::size_t chunk = available;
+            if (chunk > kReadBytes)
+                chunk = kReadBytes;
+            if (chunk > kReadAheadBytes - offset)
+                chunk = kReadAheadBytes - offset;
+            const int result = iptv_stream_push(&session_, read_ahead_buffer_ + offset, chunk);
+            if (result != IPTV_STREAM_OK)
+            {
+                read_ahead_result_.store(result, std::memory_order_release);
+                break;
+            }
+            read_ahead_read_.store(read + chunk, std::memory_order_release);
+        }
+    }
+
+    int StopReadAhead(bool drain)
+    {
+        if (!read_ahead_thread_)
+            return read_ahead_result_.load(std::memory_order_acquire);
+        if (drain)
+        {
+            read_ahead_finished_.store(true, std::memory_order_release);
+        }
+        else
+        {
+            read_ahead_stop_.store(true, std::memory_order_release);
+        }
+        const int join_result = scePthreadJoin(read_ahead_thread_, nullptr);
+        read_ahead_thread_ = nullptr;
+        delete[] read_ahead_buffer_;
+        read_ahead_buffer_ = nullptr;
+        if (join_result != 0)
+            return IPTV_STREAM_NATIVE_ERROR;
+        return read_ahead_result_.load(std::memory_order_acquire);
+    }
+
     int FailWebm(int result, const char *message)
     {
         if (session_.telemetry.state == IPTV_STREAM_STATE_ERROR)
@@ -670,6 +983,18 @@ class StreamRunner
     std::uint64_t player_cleanup_count_ = 0;
     int player_cleanup_result_ = 0;
     bool playback_stop_requested_ = false;
+    bool overlay_chord_down_ = false;
+    std::uint8_t *read_ahead_buffer_ = nullptr;
+    std::atomic<std::uint64_t> read_ahead_initial_us_{kReadAheadInitialUsec};
+    std::atomic<std::uint64_t> read_ahead_rebuffer_us_{kReadAheadRebufferUsec};
+    std::atomic<std::uint64_t> read_ahead_maximum_us_{kReadAheadMaximumUsec};
+    void *read_ahead_thread_ = nullptr;
+    std::atomic<std::uint64_t> read_ahead_read_{0};
+    std::atomic<std::uint64_t> read_ahead_write_{0};
+    std::atomic<int> read_ahead_result_{IPTV_STREAM_OK};
+    std::atomic<bool> read_ahead_stop_{false};
+    std::atomic<bool> read_ahead_finished_{false};
+    std::atomic<bool> read_ahead_flush_{false};
 };
 
 enum class FeedResult
@@ -696,7 +1021,10 @@ FeedResult FeedRequest(iptv::http::StreamRequest *request, StreamRunner *runner,
         if (read < 0)
         {
             if (++read_failures >= 3u)
+            {
+                SetLastPlaybackError("The channel connection was interrupted while streaming.");
                 return FeedResult::failed;
+            }
             sceKernelUsleep(100000u);
             continue;
         }
@@ -705,7 +1033,13 @@ FeedResult FeedRequest(iptv::http::StreamRequest *request, StreamRunner *runner,
         if (pushed == IPTV_STREAM_REOPEN_REQUIRED)
             return FeedResult::reopen;
         if (pushed != IPTV_STREAM_OK)
+        {
+            const iptv_stream_telemetry_t *telemetry = runner->Telemetry();
+            SetLastPlaybackError("%s", telemetry && telemetry->last_error[0]
+                                           ? telemetry->last_error
+                                           : "The channel uses an unsupported media format.");
             return FeedResult::failed;
+        }
         const std::uint64_t presented = runner->PresentedFrames();
         const std::uint64_t now = MonotonicUsec();
         if (presented > last_presented)
@@ -716,6 +1050,7 @@ FeedResult FeedRequest(iptv::http::StreamRequest *request, StreamRunner *runner,
         else if (last_progress != 0 && now >= last_progress &&
                  now - last_progress >= kVideoProgressTimeoutUsec)
         {
+            SetLastPlaybackError("The channel stalled without producing video for 15 seconds.");
             return FeedResult::failed;
         }
     }
@@ -816,6 +1151,9 @@ int FetchPlaylist(const char *url, char *data, std::size_t capacity, std::size_t
     const auto result = iptv::http::GetM3uResolved(url, data, capacity, effective_url,
                                                    effective_url_capacity, kPlaylistBytes, headers);
     *bytes = result.bytes;
+    if (result.status != iptv::http::Status::ok)
+        SetRequestFailure("Playlist request failed", result.status, result.http_status,
+                          result.native_error, data);
     return result.status == iptv::http::Status::ok ? 0 : -static_cast<int>(result.status);
 }
 
@@ -829,7 +1167,11 @@ int OpenAndFeedSegment(const char *url, StreamRunner *runner, std::uint8_t *buff
         if (status != iptv::http::Status::ok)
         {
             if (attempt == 2u)
+            {
+                SetRequestFailure("Channel segment request failed", status, request.http_status,
+                                  request.native_error, request.error_response);
                 return -static_cast<int>(status);
+            }
             sceKernelUsleep(100000u);
             continue;
         }
@@ -840,7 +1182,11 @@ int OpenAndFeedSegment(const char *url, StreamRunner *runner, std::uint8_t *buff
         if (fed == FeedResult::ok)
             return 0;
         if (attempt == 2u || !runner->Start())
+        {
+            if (!gLastPlaybackError[0])
+                SetLastPlaybackError("The channel segment could not be decoded.");
             return -1;
+        }
         sceKernelUsleep(100000u);
     }
     return -1;
@@ -862,6 +1208,7 @@ int RunHlsMedia(const char *source_url, StreamRunner *runner, std::uint8_t *read
     bool have_discontinuity_sequence = false;
     bool session_has_data = false;
     unsigned stale_refreshes = 0;
+    unsigned consecutive_segment_failures = 0;
     std::uint64_t last_presented = runner->PresentedFrames();
     for (;;)
     {
@@ -876,8 +1223,16 @@ int RunHlsMedia(const char *source_url, StreamRunner *runner, std::uint8_t *read
                            limits, playlist);
         if (parsed != IPTV_HLS_OK || playlist->kind != IPTV_HLS_KIND_MEDIA)
         {
+            if (iptv::http::ResponseIndicatesGeographicBlock(playlist_data, playlist_bytes))
+                SetLastPlaybackError(
+                    "Playlist request failed: unavailable in your region (GeoIP blocked).");
+            else
+                SetLastPlaybackError(
+                    "HLS playlist is not playable: %s.",
+                    iptv_hls_result_name(parsed == IPTV_HLS_OK ? IPTV_HLS_MALFORMED : parsed));
             return parsed == IPTV_HLS_OK ? IPTV_HLS_MALFORMED : parsed;
         }
+        runner->ConfigureHlsBuffering(playlist->target_duration_ms);
         std::snprintf(media_url, sizeof(media_url), "%s", effective_url);
 
         if (have_sequence && playlist->segment_count)
@@ -912,7 +1267,7 @@ int RunHlsMedia(const char *source_url, StreamRunner *runner, std::uint8_t *read
                 segment.discontinuity_sequence != last_discontinuity_sequence;
             if ((segment.discontinuity || changed_timeline) && session_has_data)
             {
-                if (!runner->Start())
+                if (!runner->FlushInput() || !runner->Start())
                 {
                     return -1;
                 }
@@ -921,7 +1276,24 @@ int RunHlsMedia(const char *source_url, StreamRunner *runner, std::uint8_t *read
             }
             result = OpenAndFeedSegment(segment.url, runner, read_buffer, headers);
             if (result != 0)
-                return result;
+            {
+                if (result == 1 || !playlist->is_live || ++consecutive_segment_failures >= 3u)
+                    return result;
+                // Public live playlists frequently retain a segment for a moment
+                // after its CDN object expires. Skip that object and reopen the
+                // decoder at the next segment instead of abandoning the channel.
+                if (!runner->Start())
+                    return -1;
+                have_sequence = true;
+                next_sequence = segment.sequence + 1u;
+                have_discontinuity_sequence = true;
+                last_discontinuity_sequence = segment.discontinuity_sequence;
+                session_has_data = false;
+                stale_refreshes = 0;
+                last_presented = 0;
+                continue;
+            }
+            consecutive_segment_failures = 0;
             have_sequence = true;
             next_sequence = segment.sequence + 1u;
             have_discontinuity_sequence = true;
@@ -947,7 +1319,10 @@ int RunHlsMedia(const char *source_url, StreamRunner *runner, std::uint8_t *read
             last_presented = presented;
         }
         else if (++stale_refreshes >= 6u)
+        {
+            SetLastPlaybackError("The live channel stopped producing video.");
             return -1;
+        }
         std::uint32_t refresh_ms = playlist->target_duration_ms / 2u;
         if (refresh_ms < 500u)
             refresh_ms = 500u;
@@ -982,6 +1357,11 @@ int RunHls(const char *source_url, StreamRunner *runner, std::uint8_t *read_buff
                                                     std::strlen(effective_url), &limits, playlist);
     if (parsed != IPTV_HLS_OK)
     {
+        if (iptv::http::ResponseIndicatesGeographicBlock(playlist_data, playlist_bytes))
+            SetLastPlaybackError(
+                "Playlist request failed: unavailable in your region (GeoIP blocked).");
+        else
+            SetLastPlaybackError("HLS playlist is not playable: %s.", iptv_hls_result_name(parsed));
         delete playlist;
         return parsed;
     }
@@ -1007,6 +1387,7 @@ int RunHls(const char *source_url, StreamRunner *runner, std::uint8_t *read_buff
     BuildNativeCandidates(playlist, &limits, candidates);
     if (!candidates->count)
     {
+        SetLastPlaybackError("No H.264 or HEVC HLS quality is supported by this PS5 decoder.");
         delete candidates;
         delete playlist;
         return IPTV_HLS_NO_VARIANT_WITHIN_LIMITS;
@@ -1041,7 +1422,11 @@ int RunDirect(const char *url, StreamRunner *runner, std::uint8_t *read_buffer, 
         if (status != iptv::http::Status::ok)
         {
             if (attempt == 2u)
+            {
+                SetRequestFailure("Channel request failed", status, request.http_status,
+                                  request.native_error, request.error_response);
                 return -static_cast<int>(status);
+            }
             sceKernelUsleep(100000u);
             continue;
         }
@@ -1051,9 +1436,20 @@ int RunDirect(const char *url, StreamRunner *runner, std::uint8_t *read_buffer, 
         {
             iptv::http::CloseStream(&request);
             if (attempt == 2u)
+            {
+                SetLastPlaybackError("The channel opened but returned no media data.");
                 return -1;
+            }
             sceKernelUsleep(100000u);
             continue;
+        }
+        if (iptv::http::ResponseIndicatesGeographicBlock(
+                reinterpret_cast<const char *>(read_buffer), static_cast<std::size_t>(first)))
+        {
+            iptv::http::CloseStream(&request);
+            SetLastPlaybackError(
+                "Channel request failed: unavailable in your region (GeoIP blocked).");
+            return -static_cast<int>(iptv::http::Status::http_status_error);
         }
         if (BufferLooksLikeHls(read_buffer, static_cast<std::size_t>(first)))
         {
@@ -1066,6 +1462,7 @@ int RunDirect(const char *url, StreamRunner *runner, std::uint8_t *read_buffer, 
             if ((attempt != 0u || !runner->IsWebm()) && !runner->StartWebm())
             {
                 iptv::http::CloseStream(&request);
+                SetLastPlaybackError("The VP9 decoder could not start for this channel.");
                 return -1;
             }
             const int webm = RunWebm(&request, runner, read_buffer, static_cast<std::size_t>(first),
@@ -1079,6 +1476,12 @@ int RunDirect(const char *url, StreamRunner *runner, std::uint8_t *read_buffer, 
             continue;
         }
         const int pushed = runner->Push(read_buffer, static_cast<std::size_t>(first));
+        if (pushed != IPTV_STREAM_OK && pushed != IPTV_STREAM_REOPEN_REQUIRED)
+        {
+            const iptv_stream_telemetry_t *telemetry = runner->Telemetry();
+            if (telemetry && telemetry->last_error[0])
+                SetLastPlaybackError("%s", telemetry->last_error);
+        }
         FeedResult fed = pushed == IPTV_STREAM_REOPEN_REQUIRED ? FeedResult::reopen
                          : pushed == IPTV_STREAM_OK
                              ? FeedRequest(&request, runner, read_buffer, kReadBytes)
@@ -1093,7 +1496,11 @@ int RunDirect(const char *url, StreamRunner *runner, std::uint8_t *read_buffer, 
                 return 0;
         }
         if (attempt == 2u || !runner->Start())
+        {
+            if (!gLastPlaybackError[0])
+                SetLastPlaybackError("The channel media could not be decoded.");
             return -1;
+        }
         sceKernelUsleep(100000u);
     }
     return -1;
@@ -1104,8 +1511,12 @@ int RunDirect(const char *url, StreamRunner *runner, std::uint8_t *read_buffer, 
 static int RunPlayer(const char *url, const char *channel_name, const char *user_agent,
                      const char *referrer, unsigned stop_after_ms)
 {
+    SetLastPlaybackError(nullptr);
     if (!url || !*url)
+    {
+        SetLastPlaybackError("The channel has no stream URL.");
         return -1;
+    }
 
     char message[192]{};
     std::snprintf(message, sizeof(message), "IPTV: opening %.150s",
@@ -1115,12 +1526,14 @@ static int RunPlayer(const char *url, const char *channel_name, const char *user
     const auto network = iptv::http::NetworkInit();
     if (network != iptv::http::Status::ok)
     {
-        NotifyError("network init", static_cast<int>(network));
+        SetRequestFailure("Network initialization failed", network, 0, 0, nullptr);
+        NotifyLastPlaybackError();
         return -1;
     }
     const bool input_ready = iptv_input_init();
     if (!input_ready)
     {
+        SetLastPlaybackError("Controller initialization failed.");
         Notify("IPTV: controller initialization failed");
         iptv::http::NetworkShutdown();
         return -1;
@@ -1133,6 +1546,7 @@ static int RunPlayer(const char *url, const char *channel_name, const char *user
     int result = -1;
     if (!runner || !read_buffer || !playlist_data)
     {
+        SetLastPlaybackError("Not enough memory to open this channel.");
         Notify("IPTV: out of memory");
     }
     else
@@ -1140,40 +1554,86 @@ static int RunPlayer(const char *url, const char *channel_name, const char *user
         runner->SetStopAfter(stop_after_ms);
         if (!(UrlLooksLikeWebm(url) ? runner->StartWebm() : runner->Start()))
         {
+            SetLastPlaybackError("The hardware decoder session could not be initialized.");
             Notify("IPTV: decoder session initialization failed");
         }
         else
         {
+            (void)iptv_native_agc_loading_start();
             result = UrlLooksLikeHls(url)
                          ? RunHls(url, runner, read_buffer, playlist_data, &headers)
                          : RunDirect(url, runner, read_buffer, playlist_data, &headers);
+            if (stop_after_ms && result >= 0 && runner->PlaybackStopRequested() &&
+                !runner->HasPresentedVideo())
+            {
+                result = -1;
+                SetLastPlaybackError(
+                    "The channel did not produce a decodable video frame within the test window.");
+            }
             if (result < 0)
             {
                 const iptv_stream_telemetry_t *telemetry = runner->Telemetry();
-                if (telemetry && telemetry->last_error[0])
-                {
-                    std::snprintf(message, sizeof(message), "IPTV: %.150s", telemetry->last_error);
-                    Notify(message);
-                }
-                else
-                {
-                    NotifyError("playback", result);
-                }
+                iptv_native_telemetry_t native{};
+                const bool have_native = runner->NativeTelemetry(&native);
+                const int native_result = have_native && native.last_native_result != 0
+                                              ? native.last_native_result
+                                              : native.last_result;
+                const std::uint32_t native_code = static_cast<std::uint32_t>(native_result);
+                if (telemetry &&
+                    std::strstr(telemetry->last_error, "unable to acquire MPEG-TS packet sync"))
+                    SetLastPlaybackError(
+                        "The channel did not provide a valid MPEG-TS stream (packet sync failed).");
+                else if (native_result == -5)
+                    SetLastPlaybackError(
+                        "PS5 VideoOut timed out while presenting a decoded frame.");
+                else if (native_result == -1004)
+                    SetLastPlaybackError(
+                        "The PS5 hardware decoder did not produce a valid frame for this stream.");
+                else if (native_result == -1003)
+                    SetLastPlaybackError(
+                        "The channel sent a video access unit the PS5 decoder cannot accept.");
+                else if (native_result == -1002)
+                    SetLastPlaybackError(
+                        "This channel's codec profile or resolution is not supported.");
+                else if (native_code == UINT32_C(0x811D0301))
+                    SetLastPlaybackError(
+                        "The channel sent an invalid video access unit (VideoDec2 0x811D0301).");
+                else if (native_code == UINT32_C(0x811D0302))
+                    SetLastPlaybackError("The channel exceeds the PS5 decoder instance capacity "
+                                         "(VideoDec2 0x811D0302).");
+                else if (native_code == UINT32_C(0x811D0303))
+                    SetLastPlaybackError("The channel did not provide a valid video sequence "
+                                         "(VideoDec2 0x811D0303).");
+                else if (native_code == UINT32_C(0x811D0304))
+                    SetLastPlaybackError("The channel contains a fatal video bitstream error "
+                                         "(VideoDec2 0x811D0304).");
+                else if (native_result != 0 && native_result != -125)
+                    SetLastPlaybackError("The PS5 video backend failed (native error 0x%08X).",
+                                         static_cast<unsigned>(native_result));
+                else if (telemetry && telemetry->last_error[0] && !gLastPlaybackError[0])
+                    SetLastPlaybackError("%s", telemetry->last_error);
+                if (!gLastPlaybackError[0])
+                    SetLastPlaybackError("The channel could not be played.");
+                NotifyLastPlaybackError();
             }
         }
     }
 
     if (runner)
     {
+        iptv_native_agc_loading_stop();
         runner->Close();
         const iptv_stream_telemetry_t *current = runner->Telemetry();
         iptv_native_telemetry_t native{};
-        if (current && runner->NativeTelemetry(&native))
+        const bool have_native_telemetry = runner->NativeTelemetry(&native);
+        if (current)
         {
-            SaveReceipt(result, *current, native, runner->PlaybackStopRequested() ? 1u : 0u,
-                        runner->PlayerCleanupCount(), runner->PlayerCleanupResult());
+            SaveReceipt(result, *current, native, have_native_telemetry ? 1u : 0u,
+                        runner->PlaybackStopRequested() ? 1u : 0u, runner->PlayerCleanupCount(),
+                        runner->PlayerCleanupResult());
         }
     }
+    (void)iptv_native_agc_present_shutdown();
     delete runner;
     delete[] playlist_data;
     delete[] read_buffer;
@@ -1186,6 +1646,11 @@ int iptv_player_run_with_headers(const char *url, const char *channel_name, cons
                                  const char *referrer)
 {
     return RunPlayer(url, channel_name, user_agent, referrer, 0);
+}
+
+const char *iptv_player_last_error(void)
+{
+    return gLastPlaybackError;
 }
 
 int iptv_player_run(const char *url, const char *channel_name)

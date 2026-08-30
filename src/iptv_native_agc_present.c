@@ -1,4 +1,4 @@
-/* psiptv - native PS5 IPTV client derived from ps5-native-app-boilerplate.
+/* ProsperoTV - native PS5 IPTV client derived from ps5-native-app-boilerplate.
  * Copyright (C) 2026 BlackBearReloaded
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
@@ -10,6 +10,8 @@
 #include <stdatomic.h>
 #include <stddef.h>
 #include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #define BASE_OUTPUT_WIDTH 1920u
@@ -24,6 +26,13 @@
 #define MAP_PROTECTION 0x33
 #define VIDEO_OUT_PIXEL_FORMAT_SDR UINT64_C(0x8000000000000000)
 #define PRESENT_WAIT_VBLANKS 120u
+#define LOADING_PITCH 1920u
+#define LOADING_SURFACE_HEIGHT 1088u
+#define LOADING_VISIBLE_HEIGHT 1080u
+#define LOADING_SURFACE_BYTES ((size_t)LOADING_PITCH * LOADING_SURFACE_HEIGHT * 3u / 2u)
+#define LOADING_FONT_WIDTH 512u
+#define LOADING_FONT_HEIGHT 128u
+#define LOADING_FONT_BYTES ((size_t)LOADING_FONT_WIDTH * LOADING_FONT_HEIGHT * 4u)
 
 typedef struct agc_register
 {
@@ -73,6 +82,10 @@ int32_t sceKernelMapDirectMemory(void **address, size_t length, int protection, 
                                  int64_t direct_memory_start, size_t alignment);
 int32_t sceKernelMunmap(void *address, size_t length);
 int32_t sceKernelReleaseDirectMemory(int64_t direct_memory_start, size_t length);
+int32_t sceKernelUsleep(uint32_t microseconds);
+int scePthreadCreate(void **thread, const void *attributes, void *(*entry)(void *), void *argument,
+                     const char *name);
+int scePthreadJoin(void *thread, void **result);
 int sceVideoOutOpen(int32_t user_id, int32_t bus_type, int32_t index, const void *param);
 int sceVideoOutClose(int32_t handle);
 int sceVideoOutSetFlipRate(int32_t handle, int32_t rate);
@@ -151,7 +164,23 @@ static iptv_native_agc_presenter_t presenter = {
 };
 static uint64_t agc_state;
 static uint8_t agc_initialized;
+static uint64_t render_sequence;
 static _Atomic int present_cancelled;
+static _Atomic int overlay_enabled = 1;
+
+typedef struct loading_animation
+{
+    void *surface;
+    int64_t surface_start;
+    size_t surface_bytes;
+    void *thread;
+    uint8_t *font_atlas;
+    _Atomic int active;
+} loading_animation_t;
+
+static loading_animation_t loading = {
+    .surface_start = -1,
+};
 
 typedef struct output_geometry
 {
@@ -191,6 +220,281 @@ static void flush_gpu_data(const void *address, size_t bytes)
     for (; at < end; at += 64)
         __asm__ volatile("clflush (%0)" : : "r"(at) : "memory");
     __asm__ volatile("mfence" ::: "memory");
+}
+
+static const uint8_t *glyph_rows(char character)
+{
+    static const uint8_t blank[7] = {0};
+    static const uint8_t digits[10][7] = {
+        {14, 17, 19, 21, 25, 17, 14}, {4, 12, 4, 4, 4, 4, 14},  {14, 17, 1, 2, 4, 8, 31},
+        {30, 1, 1, 14, 1, 1, 30},     {2, 6, 10, 18, 31, 2, 2}, {31, 16, 16, 30, 1, 1, 30},
+        {14, 16, 16, 30, 17, 17, 14}, {31, 1, 2, 4, 8, 8, 8},   {14, 17, 17, 14, 17, 17, 14},
+        {14, 17, 17, 15, 1, 1, 14},
+    };
+    static const uint8_t a[7] = {14, 17, 17, 31, 17, 17, 17};
+    static const uint8_t b[7] = {30, 17, 17, 30, 17, 17, 30};
+    static const uint8_t c[7] = {14, 17, 16, 16, 16, 17, 14};
+    static const uint8_t d[7] = {30, 17, 17, 17, 17, 17, 30};
+    static const uint8_t e[7] = {31, 16, 16, 30, 16, 16, 31};
+    static const uint8_t f[7] = {31, 16, 16, 30, 16, 16, 16};
+    static const uint8_t g[7] = {14, 17, 16, 23, 17, 17, 15};
+    static const uint8_t h[7] = {17, 17, 17, 31, 17, 17, 17};
+    static const uint8_t i[7] = {14, 4, 4, 4, 4, 4, 14};
+    static const uint8_t k[7] = {17, 18, 20, 24, 20, 18, 17};
+    static const uint8_t l[7] = {16, 16, 16, 16, 16, 16, 31};
+    static const uint8_t m[7] = {17, 27, 21, 21, 17, 17, 17};
+    static const uint8_t n[7] = {17, 25, 21, 19, 17, 17, 17};
+    static const uint8_t o[7] = {14, 17, 17, 17, 17, 17, 14};
+    static const uint8_t p[7] = {30, 17, 17, 30, 16, 16, 16};
+    static const uint8_t r[7] = {30, 17, 17, 30, 20, 18, 17};
+    static const uint8_t s[7] = {15, 16, 16, 14, 1, 1, 30};
+    static const uint8_t t[7] = {31, 4, 4, 4, 4, 4, 4};
+    static const uint8_t v[7] = {17, 17, 17, 17, 17, 10, 4};
+    static const uint8_t x[7] = {17, 17, 10, 4, 10, 17, 17};
+    static const uint8_t dot[7] = {0, 0, 0, 0, 0, 6, 6};
+
+    if (character >= '0' && character <= '9')
+        return digits[(unsigned)(character - '0')];
+    switch (character)
+    {
+    case 'A':
+        return a;
+    case 'B':
+        return b;
+    case 'C':
+        return c;
+    case 'D':
+        return d;
+    case 'E':
+        return e;
+    case 'F':
+        return f;
+    case 'G':
+        return g;
+    case 'H':
+        return h;
+    case 'I':
+        return i;
+    case 'K':
+        return k;
+    case 'L':
+        return l;
+    case 'M':
+        return m;
+    case 'N':
+        return n;
+    case 'O':
+        return o;
+    case 'P':
+        return p;
+    case 'R':
+        return r;
+    case 'S':
+        return s;
+    case 'T':
+        return t;
+    case 'V':
+        return v;
+    case 'X':
+        return x;
+    case '.':
+        return dot;
+    default:
+        return blank;
+    }
+}
+
+static void draw_text(uint8_t *luma, uint32_t pitch, uint32_t width, uint32_t height,
+                      const char *text, uint32_t x, uint32_t y, uint32_t scale, uint8_t value)
+{
+    while (text && *text && x + 5u * scale <= width)
+    {
+        const uint8_t *glyph = glyph_rows(*text++);
+        for (uint32_t row = 0; row < 7u; ++row)
+            for (uint32_t column = 0; column < 5u; ++column)
+                if ((glyph[row] & (uint8_t)(1u << (4u - column))) != 0)
+                    for (uint32_t dy = 0; dy < scale && y + row * scale + dy < height; ++dy)
+                        for (uint32_t dx = 0; dx < scale; ++dx)
+                            luma[(size_t)(y + row * scale + dy) * pitch + x + column * scale + dx] =
+                                value;
+        x += 6u * scale;
+    }
+}
+
+typedef struct loading_font_glyph
+{
+    char character;
+    uint16_t x;
+    uint16_t y;
+    uint8_t width;
+    uint8_t height;
+    int8_t x_offset;
+    int8_t y_offset;
+    uint8_t advance;
+} loading_font_glyph_t;
+
+static const loading_font_glyph_t loading_font_glyphs[] = {
+    {' ', 0, 0, 0, 0, 0, 29, 9},      {'A', 34, 33, 25, 22, -1, 7, 23},
+    {'C', 83, 33, 21, 22, 1, 7, 23},  {'D', 106, 33, 22, 22, 3, 7, 26},
+    {'E', 130, 33, 17, 22, 3, 7, 21}, {'G', 168, 33, 22, 22, 1, 7, 25},
+    {'H', 192, 33, 20, 22, 3, 7, 26}, {'I', 214, 33, 4, 22, 3, 7, 10},
+    {'L', 259, 33, 16, 22, 3, 7, 19}, {'N', 304, 33, 20, 22, 3, 7, 26},
+    {'O', 326, 33, 25, 22, 1, 7, 27},
+};
+
+static const loading_font_glyph_t *loading_font_glyph(char character)
+{
+    size_t index;
+
+    for (index = 0; index < sizeof(loading_font_glyphs) / sizeof(loading_font_glyphs[0]); ++index)
+        if (loading_font_glyphs[index].character == character)
+            return &loading_font_glyphs[index];
+    return NULL;
+}
+
+static void load_loading_font(void)
+{
+    static const char path[] = "/app0/ui/fonts/lvgl-bitmap/Montserrat-32.tga";
+    uint8_t header[18];
+    uint8_t *pixels;
+    FILE *file;
+
+    if (loading.font_atlas)
+        return;
+    file = fopen(path, "rb");
+    if (!file)
+        return;
+    if (fread(header, 1, sizeof(header), file) != sizeof(header) || header[1] != 0u ||
+        header[2] != 2u || header[12] != 0u || header[13] != 2u || header[14] != 128u ||
+        header[15] != 0u || header[16] != 32u || (header[17] & 0x20u) == 0u ||
+        (header[0] != 0u && fseek(file, header[0], SEEK_CUR) != 0))
+    {
+        (void)fclose(file);
+        return;
+    }
+    pixels = malloc(LOADING_FONT_BYTES);
+    if (!pixels || fread(pixels, 1, LOADING_FONT_BYTES, file) != LOADING_FONT_BYTES)
+    {
+        free(pixels);
+        (void)fclose(file);
+        return;
+    }
+    (void)fclose(file);
+    loading.font_atlas = pixels;
+}
+
+static int draw_loading_font_text(uint8_t *luma, uint32_t pitch, uint32_t width, uint32_t height,
+                                  const char *text, int y, uint8_t value)
+{
+    const char *at;
+    uint32_t text_width = 0;
+    int pen_x;
+
+    if (!loading.font_atlas || !text)
+        return 0;
+    for (at = text; *at; ++at)
+    {
+        const loading_font_glyph_t *glyph = loading_font_glyph(*at);
+        if (!glyph)
+            return 0;
+        text_width += glyph->advance;
+    }
+    pen_x = width > text_width ? (int)((width - text_width) / 2u) : 0;
+    for (at = text; *at; ++at)
+    {
+        const loading_font_glyph_t *glyph = loading_font_glyph(*at);
+        uint32_t row;
+
+        for (row = 0; row < glyph->height; ++row)
+        {
+            const int destination_y = y + glyph->y_offset + (int)row;
+            uint32_t column;
+            if (destination_y < 0 || (uint32_t)destination_y >= height)
+                continue;
+            for (column = 0; column < glyph->width; ++column)
+            {
+                const int destination_x = pen_x + glyph->x_offset + (int)column;
+                const size_t source =
+                    ((size_t)(glyph->y + row) * LOADING_FONT_WIDTH + glyph->x + column) * 4u;
+                const uint32_t alpha = loading.font_atlas[source + 3u];
+                uint8_t *pixel;
+                if (destination_x < 0 || (uint32_t)destination_x >= width || alpha == 0u)
+                    continue;
+                pixel = luma + (size_t)destination_y * pitch + (uint32_t)destination_x;
+                *pixel =
+                    (uint8_t)(((uint32_t)*pixel * (255u - alpha) + value * alpha + 127u) / 255u);
+            }
+        }
+        pen_x += glyph->advance;
+    }
+    return 1;
+}
+
+static void draw_disc(uint8_t *luma, uint32_t pitch, uint32_t width, uint32_t height, int center_x,
+                      int center_y, int radius, uint8_t value)
+{
+    for (int y = -radius; y <= radius; ++y)
+        for (int x = -radius; x <= radius; ++x)
+            if (x * x + y * y <= radius * radius && center_x + x >= 0 && center_y + y >= 0 &&
+                (uint32_t)(center_x + x) < width && (uint32_t)(center_y + y) < height)
+                luma[(size_t)(center_y + y) * pitch + (uint32_t)(center_x + x)] = value;
+}
+
+static void draw_video_overlay(void *source, size_t source_bytes, uint32_t pitch,
+                               uint32_t surface_height, uint32_t visible_width,
+                               uint32_t visible_height, const iptv_native_video_overlay_t *overlay)
+{
+    uint8_t *luma = source;
+    const size_t y_bytes = (size_t)pitch * surface_height;
+    const uint32_t scale = visible_width >= 640u ? 2u : 1u;
+
+    if (!source || !overlay ||
+        y_bytes + (size_t)pitch * ((surface_height + 1u) / 2u) > source_bytes)
+        return;
+
+    if (iptv_native_agc_overlay_enabled())
+    {
+        char text[96];
+        const uint32_t x = visible_width >= 200u ? 16u : 4u;
+        const uint32_t y = 16u;
+        const uint32_t height = 7u * scale + 12u;
+        const char *codec = overlay->codec == 1u ? "H264" : overlay->codec == 2u ? "HEVC" : "VP9";
+        int bytes;
+        uint32_t width;
+        if (overlay->bitrate_kbps >= 1000u)
+            bytes = snprintf(text, sizeof(text), "%s %uX%u %u.%02u FPS %u.%02u MBPS", codec,
+                             overlay->width, overlay->height, overlay->fps_x100 / 100u,
+                             overlay->fps_x100 % 100u, overlay->bitrate_kbps / 1000u,
+                             (overlay->bitrate_kbps % 1000u) / 10u);
+        else
+            bytes = snprintf(text, sizeof(text), "%s %uX%u %u.%02u FPS %u KBPS", codec,
+                             overlay->width, overlay->height, overlay->fps_x100 / 100u,
+                             overlay->fps_x100 % 100u, overlay->bitrate_kbps);
+        if (bytes > 0 && x < visible_width && y < visible_height)
+        {
+            width = (uint32_t)bytes * 6u * scale + 12u;
+            if (width > visible_width - x)
+                width = visible_width - x;
+            for (uint32_t row = y; row < y + height && row < visible_height; ++row)
+                memset(luma + (size_t)row * pitch + x, 32, width);
+            draw_text(luma, pitch, visible_width, visible_height, text, x + 6u, y + 6u, scale, 235);
+            flush_gpu_data(luma + (size_t)y * pitch + x, (size_t)height * pitch);
+        }
+    }
+
+    if (overlay->show_controls && visible_height > 56u)
+    {
+        static const char help[] = "CIRCLE OR OPTIONS  BACK    SELECT R1  STATS";
+        const uint32_t width = (uint32_t)(sizeof(help) - 1u) * 6u * scale + 24u;
+        const uint32_t x = visible_width > width ? (visible_width - width) / 2u : 0u;
+        const uint32_t y = visible_height - (7u * scale + 34u);
+        const uint32_t height = 7u * scale + 22u;
+        const uint32_t clipped_width = width < visible_width ? width : visible_width;
+        for (uint32_t row = y; row < y + height && row < visible_height; ++row)
+            memset(luma + (size_t)row * pitch + x, 32, clipped_width);
+        draw_text(luma, pitch, visible_width, visible_height, help, x + 12u, y + 11u, scale, 235);
+        flush_gpu_data(luma + (size_t)y * pitch + x, (size_t)height * pitch);
+    }
 }
 
 static int shader_resource_offset(void *shader, unsigned kind, uint32_t *offset)
@@ -606,6 +910,139 @@ fail:
     return result;
 }
 
+static int32_t present_loading_frame(uint32_t phase)
+{
+    static const int offsets[8][2] = {
+        {0, -58}, {41, -41}, {58, 0}, {41, 41}, {0, 58}, {-41, 41}, {-58, 0}, {-41, -41},
+    };
+    uint8_t *surface = loading.surface;
+    const size_t y_bytes = (size_t)LOADING_PITCH * LOADING_SURFACE_HEIGHT;
+    const uint32_t active = phase & 7u;
+
+    if (!surface || loading.surface_bytes < LOADING_SURFACE_BYTES)
+        return -1;
+    memset(surface, 20, y_bytes);
+    memset(surface + y_bytes, 128, LOADING_SURFACE_BYTES - y_bytes);
+    for (uint32_t index = 0; index < 8u; ++index)
+    {
+        int radius = 8;
+        uint8_t value = 70;
+        if (index == active)
+        {
+            radius = 13;
+            value = 235;
+        }
+        else if (index == ((active + 7u) & 7u))
+        {
+            radius = 10;
+            value = 145;
+        }
+        draw_disc(surface, LOADING_PITCH, LOADING_PITCH, LOADING_VISIBLE_HEIGHT,
+                  960 + offsets[index][0], 470 + offsets[index][1], radius, value);
+    }
+    if (!draw_loading_font_text(surface, LOADING_PITCH, LOADING_PITCH, LOADING_VISIBLE_HEIGHT,
+                                "LOADING CHANNEL", 557, 220))
+        draw_text(surface, LOADING_PITCH, LOADING_PITCH, LOADING_VISIBLE_HEIGHT, "LOADING CHANNEL",
+                  816, 570, 4, 220);
+    flush_gpu_data(surface, LOADING_SURFACE_BYTES);
+    return iptv_native_agc_present_nv12(surface, loading.surface_bytes, LOADING_PITCH,
+                                        LOADING_SURFACE_HEIGHT, LOADING_PITCH,
+                                        LOADING_VISIBLE_HEIGHT, NULL);
+}
+
+static void *loading_thread_entry(void *argument)
+{
+    uint32_t phase = 0;
+    (void)argument;
+    while (atomic_load_explicit(&loading.active, memory_order_acquire))
+    {
+        if (present_loading_frame(phase++) != 0)
+        {
+            atomic_store_explicit(&loading.active, 0, memory_order_release);
+            break;
+        }
+        for (unsigned slice = 0; slice < 16u; ++slice)
+        {
+            if (!atomic_load_explicit(&loading.active, memory_order_acquire))
+                break;
+            sceKernelUsleep(10000u);
+        }
+    }
+    return NULL;
+}
+
+int32_t iptv_native_agc_loading_start(void)
+{
+    int64_t direct_limit;
+    int32_t result;
+
+    if (loading.thread)
+        return 0;
+    load_loading_font();
+    direct_limit = sceKernelGetDirectMemorySize();
+    if (direct_limit <= 0)
+        return -1;
+    loading.surface_bytes = (LOADING_SURFACE_BYTES + 0x3fffu) & ~(size_t)0x3fffu;
+    result = sceKernelAllocateDirectMemory(0, direct_limit, loading.surface_bytes, 0x4000,
+                                           DIRECT_MEMORY_TYPE, &loading.surface_start);
+    if (result == 0)
+        result = sceKernelMapDirectMemory(&loading.surface, loading.surface_bytes, MAP_PROTECTION,
+                                          0, loading.surface_start, 0x4000);
+    if (result != 0 || !loading.surface)
+    {
+        if (loading.surface)
+            (void)sceKernelMunmap(loading.surface, loading.surface_bytes);
+        if (loading.surface_start >= 0)
+            (void)sceKernelReleaseDirectMemory(loading.surface_start, loading.surface_bytes);
+        loading.surface = NULL;
+        loading.surface_start = -1;
+        loading.surface_bytes = 0;
+        return result != 0 ? result : -2;
+    }
+    atomic_store_explicit(&present_cancelled, 0, memory_order_relaxed);
+    atomic_store_explicit(&loading.active, 1, memory_order_release);
+    result =
+        scePthreadCreate(&loading.thread, NULL, loading_thread_entry, NULL, "prosperotv-loading");
+    if (result != 0)
+    {
+        atomic_store_explicit(&loading.active, 0, memory_order_release);
+        (void)sceKernelMunmap(loading.surface, loading.surface_bytes);
+        (void)sceKernelReleaseDirectMemory(loading.surface_start, loading.surface_bytes);
+        loading.surface = NULL;
+        loading.surface_start = -1;
+        loading.surface_bytes = 0;
+    }
+    return result;
+}
+
+void iptv_native_agc_loading_stop(void)
+{
+    if (loading.thread)
+    {
+        void *thread_result = NULL;
+        atomic_store_explicit(&loading.active, 0, memory_order_release);
+        (void)scePthreadJoin(loading.thread, &thread_result);
+        loading.thread = NULL;
+    }
+    if (loading.surface)
+        (void)sceKernelMunmap(loading.surface, loading.surface_bytes);
+    if (loading.surface_start >= 0)
+        (void)sceKernelReleaseDirectMemory(loading.surface_start, loading.surface_bytes);
+    loading.surface = NULL;
+    loading.surface_start = -1;
+    loading.surface_bytes = 0;
+}
+
+void iptv_native_agc_set_overlay_enabled(int enabled)
+{
+    atomic_store_explicit(&overlay_enabled, enabled != 0, memory_order_relaxed);
+}
+
+int iptv_native_agc_overlay_enabled(void)
+{
+    return atomic_load_explicit(&overlay_enabled, memory_order_relaxed);
+}
+
 void iptv_native_agc_present_set_cancelled(int cancelled)
 {
     atomic_store_explicit(&present_cancelled, cancelled != 0, memory_order_relaxed);
@@ -613,12 +1050,13 @@ void iptv_native_agc_present_set_cancelled(int cancelled)
 
 int32_t iptv_native_agc_present_nv12(const void *source, size_t source_bytes, uint32_t pitch,
                                      uint32_t surface_height, uint32_t visible_width,
-                                     uint32_t visible_height)
+                                     uint32_t visible_height,
+                                     const iptv_native_video_overlay_t *overlay)
 {
     uint64_t status[16] = {0};
     uint32_t frame_number = presenter.frame_number;
     uint32_t buffer_index = frame_number & 1u;
-    int64_t render_marker = INT64_C(0x49505456) + ((int64_t)frame_number << 8);
+    int64_t render_marker = INT64_C(0x49505456) + ((int64_t)++render_sequence << 8);
     void *target;
     unsigned waits;
     int32_t result;
@@ -629,11 +1067,7 @@ int32_t iptv_native_agc_present_nv12(const void *source, size_t source_bytes, ui
         const output_geometry_t output = output_geometry_for(visible_width, visible_height);
         if (presenter.ready &&
             (presenter.output_width != output.width || presenter.output_height != output.height))
-        {
-            result = teardown_presenter(1);
-            if (result != 0)
-                return result;
-        }
+            return -7;
     }
     if (!presenter.ready)
     {
@@ -643,6 +1077,9 @@ int32_t iptv_native_agc_present_nv12(const void *source, size_t source_bytes, ui
     }
 
     target = (uint8_t *)presenter.framebuffer + buffer_index * presenter.framebuffer_bytes;
+    if (overlay && (iptv_native_agc_overlay_enabled() || overlay->show_controls))
+        draw_video_overlay((void *)source, source_bytes, pitch, surface_height, visible_width,
+                           visible_height, overlay);
     result = render_frame(presenter.video, (int)buffer_index, target, presenter.shader_memory,
                           presenter.vertex_shader, presenter.pixel_shader, source, source_bytes,
                           pitch, surface_height, visible_width, visible_height,
@@ -655,7 +1092,7 @@ int32_t iptv_native_agc_present_nv12(const void *source, size_t source_bytes, ui
         if (atomic_load_explicit(&present_cancelled, memory_order_relaxed))
             return -125;
         if (sceVideoOutGetFlipStatus(presenter.video, status) == 0 &&
-            status[3] == (uint64_t)render_marker)
+            (int64_t)status[3] >= render_marker)
             break;
         sceVideoOutWaitVblank(presenter.video);
     }
@@ -683,8 +1120,10 @@ int32_t iptv_native_agc_present_drain(void)
 
 int32_t iptv_native_agc_present_shutdown(void)
 {
-    int32_t result = teardown_presenter(1);
+    int32_t result;
 
+    iptv_native_agc_loading_stop();
+    result = teardown_presenter(1);
     atomic_store_explicit(&present_cancelled, 0, memory_order_relaxed);
     return result;
 }

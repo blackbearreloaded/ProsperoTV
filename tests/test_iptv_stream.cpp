@@ -1,4 +1,4 @@
-/* psiptv - native PS5 IPTV client derived from ps5-native-app-boilerplate.
+/* ProsperoTV - native PS5 IPTV client derived from ps5-native-app-boilerplate.
  * Copyright (C) 2026 BlackBearReloaded
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
@@ -136,7 +136,7 @@ Packet PesPacket(std::uint16_t pid, std::uint8_t counter, std::uint8_t stream_id
     return packet;
 }
 
-Packet H264Packet(std::uint8_t counter, bool parameter_sets)
+Packet H264Packet(std::uint8_t counter, bool parameter_sets, std::uint8_t nal_header = 0x65)
 {
     std::vector<std::uint8_t> payload;
     if (parameter_sets)
@@ -149,8 +149,9 @@ Packet H264Packet(std::uint8_t counter, bool parameter_sets)
         };
         payload.insert(payload.end(), std::begin(setup), std::end(setup));
     }
-    const std::uint8_t frame[] = {0x00, 0x00, 0x00, 0x01, 0x65, 0x80, 0x00, 0x00, 0x00,
-                                  0x01, 0x09, 0xf0, 0x00, 0x00, 0x00, 0x01, 0x09, 0xf0};
+    std::uint8_t frame[] = {0x00, 0x00, 0x00, 0x01, 0x65, 0x80, 0x00, 0x00, 0x00,
+                            0x01, 0x09, 0xf0, 0x00, 0x00, 0x00, 0x01, 0x09, 0xf0};
+    frame[4] = nal_header;
     payload.insert(payload.end(), std::begin(frame), std::end(frame));
     return PesPacket(0x110, counter, 0xe0, payload);
 }
@@ -168,6 +169,7 @@ struct FakeBackend
     unsigned disables = 0;
     unsigned drains = 0;
     unsigned closes = 0;
+    int drain_result = 0;
 };
 
 int FakeOpen(void *context, const iptv_stream_format_t *format)
@@ -200,8 +202,9 @@ int FakeDisableAudio(void *context)
 
 int FakeDrain(void *context)
 {
-    ++static_cast<FakeBackend *>(context)->drains;
-    return 0;
+    auto *fake = static_cast<FakeBackend *>(context);
+    ++fake->drains;
+    return fake->drain_result;
 }
 
 void FakeClose(void *context)
@@ -314,6 +317,65 @@ TEST(IptvStreamTest, AudioProgramChangeDoesNotStopOpenedVideoBackend)
     EXPECT_EQ(fake.disables, 1u);
 
     EXPECT_EQ(iptv_stream_cleanup(&session), IPTV_STREAM_OK);
+}
+
+TEST(IptvStreamTest, WaitsForRandomAccessFrameBeforeOpeningVideoBackend)
+{
+    FakeBackend fake;
+    iptv_stream_backend_t backend{};
+    backend.context = &fake;
+    backend.open = FakeOpen;
+    backend.submit_video = FakeVideo;
+    backend.submit_audio = FakeAudio;
+    backend.disable_audio = FakeDisableAudio;
+    backend.drain = FakeDrain;
+    backend.close = FakeClose;
+
+    iptv_stream_session_t session{};
+    iptv_stream_init(&session);
+    ASSERT_EQ(iptv_stream_open(&session, nullptr, &backend), IPTV_STREAM_OK);
+    ASSERT_EQ(iptv_stream_start(&session), IPTV_STREAM_OK);
+
+    std::vector<std::uint8_t> startup;
+    AppendPacket(&startup, PsiPacket(0, PatSection()));
+    AppendPacket(&startup, PsiPacket(0x100, PmtSection(0x0f)));
+    AppendPacket(&startup, H264Packet(0, true, 0x41));
+    ASSERT_EQ(iptv_stream_push(&session, startup.data(), startup.size()), IPTV_STREAM_OK);
+    EXPECT_EQ(fake.opens, 0u);
+    EXPECT_EQ(fake.videos, 0u);
+
+    const auto random_access = H264Packet(1, false, 0x65);
+    ASSERT_EQ(iptv_stream_push(&session, random_access.data(), random_access.size()),
+              IPTV_STREAM_OK);
+    EXPECT_EQ(fake.opens, 1u);
+    EXPECT_EQ(fake.videos, 1u);
+    EXPECT_EQ(iptv_stream_cleanup(&session), IPTV_STREAM_OK);
+}
+
+TEST(IptvStreamTest, PreservesNativeDrainFailureCode)
+{
+    FakeBackend fake;
+    fake.drain_result = -1004;
+    iptv_stream_backend_t backend{};
+    backend.context = &fake;
+    backend.open = FakeOpen;
+    backend.submit_video = FakeVideo;
+    backend.submit_audio = FakeAudio;
+    backend.disable_audio = FakeDisableAudio;
+    backend.drain = FakeDrain;
+    backend.close = FakeClose;
+
+    iptv_stream_session_t session{};
+    iptv_stream_init(&session);
+    ASSERT_EQ(iptv_stream_open(&session, nullptr, &backend), IPTV_STREAM_OK);
+    ASSERT_EQ(iptv_stream_start(&session), IPTV_STREAM_OK);
+    const auto bytes = StreamBytes(0x0f, H264Packet(0, true));
+    ASSERT_EQ(iptv_stream_push(&session, bytes.data(), bytes.size()), IPTV_STREAM_OK);
+
+    EXPECT_EQ(iptv_stream_cleanup(&session), IPTV_STREAM_NATIVE_ERROR);
+    EXPECT_NE(std::strstr(session.telemetry.last_error, "(-1004)"), nullptr);
+    EXPECT_EQ(fake.drains, 1u);
+    EXPECT_EQ(fake.closes, 1u);
 }
 
 TEST(IptvStreamTest, IgnoresUnknownAudioCodecWhileKeepingSupportedVideo)

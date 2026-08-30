@@ -2,7 +2,7 @@
 
 ## Project lineage and identity
 
-psiptv is a native PS5 application built from
+ProsperoTV is a native PS5 application built from
 [ps5-native-app-boilerplate](https://github.com/blackbearreloaded/ps5-native-app-boilerplate).
 It adopts the application organization and lifecycle practices proven in
 [PSRadio](https://github.com/blackbearreloaded/ps5-radio), especially the
@@ -13,10 +13,10 @@ The application identity is defined in `sce_sys/param.json`:
 
 | Field | Value |
 | --- | --- |
-| Display name | `psiptv` |
-| Title ID | `PPSA88000` |
-| Concept ID | `88000` |
-| Content ID | `UP9000-PPSA88000_00-PS5IPTVAPP000001` |
+| Display name | `ProsperoTV` |
+| Title ID | `PPSA99003` |
+| Concept ID | `99003` |
+| Content ID | `UP9000-PPSA99003_00-PROSPEROTV000001` |
 | Content version | `01.000.001` |
 
 The title metadata includes the high-resolution capability attribute used by
@@ -82,8 +82,8 @@ The built-in and custom caches are deliberately separate:
 
 | Source | Cache |
 | --- | --- |
-| iptv-org | `/download0/psiptv-catalog.sqlite3` |
-| Custom M3U/M3U8 | `/download0/psiptv-custom-catalog.sqlite3` |
+| iptv-org | `/download0/prosperotv-catalog.sqlite3` |
+| Custom M3U/M3U8 | `/download0/prosperotv-custom-catalog.sqlite3` |
 
 The schema has metadata, channels, alternate URL, and alternate group tables,
 plus lookup indexes. SQLite uses an in-memory journal and temporary store for

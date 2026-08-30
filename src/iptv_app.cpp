@@ -1,9 +1,10 @@
-/* psiptv - native PS5 IPTV client derived from ps5-native-app-boilerplate.
+/* ProsperoTV - native PS5 IPTV client derived from ps5-native-app-boilerplate.
  * Copyright (C) 2026 BlackBearReloaded
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "iptv_app.h"
 
+#include "iptv_player.h"
 #include "iptv_store.h"
 
 #include <RmlUi/Core/Element.h>
@@ -12,6 +13,7 @@
 
 #include <SDL2/SDL.h>
 
+#include <algorithm>
 #include <cctype>
 #include <cstdio>
 #include <cstring>
@@ -31,12 +33,13 @@ namespace
 {
 
 constexpr char kCatalogUrl[] = "https://iptv-org.github.io/iptv/index.m3u";
-constexpr char kCatalogCachePath[] = "/download0/psiptv-catalog.sqlite3";
-constexpr char kCustomCatalogCachePath[] = "/download0/psiptv-custom-catalog.sqlite3";
+constexpr char kCatalogCachePath[] = "/download0/prosperotv-catalog.sqlite3";
+constexpr char kCustomCatalogCachePath[] = "/download0/prosperotv-custom-catalog.sqlite3";
 constexpr std::uint64_t kCatalogSourceId = UINT64_C(0x495054562d4f5247);
 constexpr std::uint64_t kCatalogRefreshSeconds = UINT64_C(12) * 60u * 60u;
 constexpr std::size_t kCatalogThreadStackBytes = 4u * 1024u * 1024u;
 constexpr unsigned kChannelCardCount = 8;
+
 bool ContainsCi(const std::string &text, const char *needle)
 {
     if (!needle || !*needle)
@@ -54,6 +57,58 @@ bool ContainsCi(const std::string &text, const char *needle)
         }
         if (!*right)
             return true;
+    }
+    return false;
+}
+
+void FirstValue(const std::string &source, char *output, std::size_t output_bytes)
+{
+    if (!output || !output_bytes)
+        return;
+    std::size_t start = 0;
+    while (start < source.size() && std::isspace(static_cast<unsigned char>(source[start])))
+        ++start;
+    std::size_t end = start;
+    while (end < source.size() && source[end] != ',' && source[end] != ';' && source[end] != '|')
+        ++end;
+    while (end > start && std::isspace(static_cast<unsigned char>(source[end - 1])))
+        --end;
+    const std::size_t bytes = std::min(end - start, output_bytes - 1u);
+    std::memcpy(output, source.data() + start, bytes);
+    output[bytes] = '\0';
+}
+
+bool EqualsCi(std::string_view left, std::string_view right)
+{
+    if (left.size() != right.size())
+        return false;
+    for (std::size_t index = 0; index < left.size(); ++index)
+        if (std::tolower(static_cast<unsigned char>(left[index])) !=
+            std::tolower(static_cast<unsigned char>(right[index])))
+            return false;
+    return true;
+}
+
+bool FieldHasValue(const std::string &field, const char *value)
+{
+    if (!value || !*value)
+        return true;
+    std::size_t start = 0;
+    while (start < field.size())
+    {
+        while (start < field.size() &&
+               (field[start] == ',' || field[start] == ';' || field[start] == '|' ||
+                std::isspace(static_cast<unsigned char>(field[start]))))
+            ++start;
+        std::size_t end = start;
+        while (end < field.size() && field[end] != ',' && field[end] != ';' && field[end] != '|')
+            ++end;
+        std::size_t trimmed = end;
+        while (trimmed > start && std::isspace(static_cast<unsigned char>(field[trimmed - 1])))
+            --trimmed;
+        if (EqualsCi(std::string_view(field).substr(start, trimmed - start), value))
+            return true;
+        start = end + 1u;
     }
     return false;
 }
@@ -98,6 +153,94 @@ void BuildChannelMonogram(const iptv::Channel &channel, char output[3])
     output[count] = '\0';
 }
 
+bool ChannelContainsCi(const iptv::Channel &channel, const char *needle)
+{
+    return ContainsCi(channel.name, needle) || ContainsCi(channel.tvg_name, needle) ||
+           ContainsCi(channel.url, needle);
+}
+
+unsigned ChannelQuality(const iptv::Channel &channel)
+{
+    if (ChannelContainsCi(channel, "2160p") || ChannelContainsCi(channel, "3840x2160") ||
+        ChannelContainsCi(channel, " 4k") || ChannelContainsCi(channel, "uhd"))
+        return 4;
+    if (ChannelContainsCi(channel, "1080p") || ChannelContainsCi(channel, "1920x1080") ||
+        ChannelContainsCi(channel, "fhd"))
+        return 3;
+    if (ChannelContainsCi(channel, "720p") || ChannelContainsCi(channel, "1280x720") ||
+        ChannelContainsCi(channel, " hd"))
+        return 2;
+    if (ChannelContainsCi(channel, "576p") || ChannelContainsCi(channel, "480p") ||
+        ChannelContainsCi(channel, "360p") || ChannelContainsCi(channel, "240p") ||
+        ChannelContainsCi(channel, " sd"))
+        return 1;
+    return 0;
+}
+
+const char *QualityName(unsigned quality)
+{
+    static constexpr const char *names[] = {"Any quality", "SD", "HD / 720p", "Full HD / 1080p",
+                                            "4K / UHD"};
+    return quality < 5 ? names[quality] : names[0];
+}
+
+void BuildChannelTechnicalMeta(const iptv::Channel &channel, char *output, std::size_t output_bytes)
+{
+    const char *codec = "AUTO";
+    const char *resolution = "AUTO";
+    const char *frame_rate = "AUTO";
+
+    if (ChannelContainsCi(channel, ".webm") || ChannelContainsCi(channel, "vp9"))
+        codec = "VP9";
+    else if (ChannelContainsCi(channel, "hevc") || ChannelContainsCi(channel, "h265") ||
+             ChannelContainsCi(channel, "h.265"))
+        codec = "HEVC";
+    else if (ChannelContainsCi(channel, "h264") || ChannelContainsCi(channel, "h.264") ||
+             ChannelContainsCi(channel, "avc"))
+        codec = "H264";
+
+    static constexpr struct
+    {
+        const char *needle;
+        const char *label;
+    } resolutions[] = {{"3840x2160", "2160P"}, {"2160p", "2160P"},     {"2560x1440", "1440P"},
+                       {"1440p", "1440P"},     {"1920x1080", "1080P"}, {"1080p", "1080P"},
+                       {"1280x720", "720P"},   {"720p", "720P"},       {"720x576", "576P"},
+                       {"576p", "576P"},       {"720x480", "480P"},    {"480p", "480P"}};
+    for (const auto &candidate : resolutions)
+        if (ChannelContainsCi(channel, candidate.needle))
+        {
+            resolution = candidate.label;
+            break;
+        }
+
+    static constexpr struct
+    {
+        const char *needle;
+        const char *label;
+    } frame_rates[] = {{"120fps", "120"}, {"60fps", "60"}, {"59.94fps", "59.94"},
+                       {"50fps", "50"},   {"30fps", "30"}, {"29.97fps", "29.97"},
+                       {"25fps", "25"},   {"24fps", "24"}, {"23.976fps", "23.98"}};
+    for (const auto &candidate : frame_rates)
+        if (ChannelContainsCi(channel, candidate.needle))
+        {
+            frame_rate = candidate.label;
+            break;
+        }
+
+    std::snprintf(output, output_bytes, "%s | %s | FPS %s", codec, resolution, frame_rate);
+}
+
+void BuildChannelContext(const iptv::Channel &channel, char *output, std::size_t output_bytes)
+{
+    const char *country = channel.tvg_country.empty() ? "World" : channel.tvg_country.c_str();
+    const char *language =
+        channel.tvg_language.empty() ? "Unknown language" : channel.tvg_language.c_str();
+    const char *category =
+        channel.group_title.empty() ? "Uncategorized" : channel.group_title.c_str();
+    std::snprintf(output, output_bytes, "%.28s  |  %.40s  |  %.52s", country, language, category);
+}
+
 bool MatchesQuery(const iptv::Channel &channel, const char *query)
 {
     if (!query || !*query)
@@ -109,7 +252,11 @@ bool MatchesQuery(const iptv::Channel &channel, const char *query)
     for (const std::string &group : channel.alternate_group_titles)
         if (ContainsCi(group, query))
             return true;
-    return false;
+    const unsigned quality = ChannelQuality(channel);
+    return (quality == 1 && (ContainsCi("SD 480P 576P", query))) ||
+           (quality == 2 && ContainsCi("HD 720P", query)) ||
+           (quality == 3 && ContainsCi("FULL HD FHD 1080P", query)) ||
+           (quality == 4 && ContainsCi("4K UHD 2160P", query));
 }
 
 bool MatchesGroup(const iptv::Channel &channel, unsigned group, const iptv::UserState &user_state)
@@ -118,13 +265,33 @@ bool MatchesGroup(const iptv::Channel &channel, unsigned group, const iptv::User
         return true;
     if (group == 1)
         return iptv::IsFavorite(user_state, channel.id);
-    const char *term = group == 2 ? "news" : group == 3 ? "sport" : "kid";
+    if (group == 2)
+        return iptv::IsRecentChannel(user_state, channel.id);
+    const char *term = group == 3 ? "news" : group == 4 ? "sport" : "kid";
     if (ContainsCi(channel.group_title, term))
         return true;
     for (const std::string &alternate : channel.alternate_group_titles)
         if (ContainsCi(alternate, term))
             return true;
     return false;
+}
+
+bool MatchesFilters(const iptv::Channel &channel, const char *country, const char *category,
+                    const char *language, unsigned quality)
+{
+    if (country && *country && !FieldHasValue(channel.tvg_country, country))
+        return false;
+    if (language && *language && !FieldHasValue(channel.tvg_language, language))
+        return false;
+    if (category && *category)
+    {
+        bool found = FieldHasValue(channel.group_title, category);
+        for (const std::string &alternate : channel.alternate_group_titles)
+            found = found || FieldHasValue(alternate, category);
+        if (!found)
+            return false;
+    }
+    return quality == 0 || ChannelQuality(channel) == quality;
 }
 
 Rml::Element *Find(Rml::ElementDocument *document, const char *id)
@@ -202,13 +369,21 @@ bool IptvApp::Initialize(Rml::ElementDocument *document)
     if (!document)
         return false;
 
+    const bool restore_navigation = navigation_ready_;
     document_ = document;
-    screen_ = Screen::LiveTv;
-    focus_target_ = FocusTarget::Channel;
-    focus_slot_ = selected_slot_ = page_offset_ = 0;
-    selected_group_ = 0;
+    if (!restore_navigation)
+    {
+        screen_ = Screen::LiveTv;
+        focus_target_ = FocusTarget::Channel;
+        focus_slot_ = selected_slot_ = page_offset_ = 0;
+        selected_group_ = last_live_group_ = 0;
+        search_query_[0] = '\0';
+        filter_country_[0] = filter_category_[0] = filter_language_[0] = '\0';
+        filter_quality_ = 0;
+    }
+    search_open_ = false;
+    search_focus_ = 0;
     filtered_count_ = 0;
-    search_query_[0] = '\0';
     active_source_ = SourceSelection::BuiltIn;
     source_health_.fill(SourceHealth::Empty);
     custom_source_url_.clear();
@@ -255,12 +430,13 @@ bool IptvApp::Initialize(Rml::ElementDocument *document)
     source_health_[static_cast<unsigned>(active_source_)] = catalog_loaded_ ? SourceHealth::Cached
                                                             : custom_active ? SourceHealth::Saved
                                                                             : SourceHealth::Empty;
+    RebuildFacets();
     RebuildFilteredChannels();
     ime_ready_ = iptv_ime_init();
 
     document_->Show();
     RefreshCatalogUi();
-    SetScreen(Screen::LiveTv);
+    SetScreen(screen_, !restore_navigation);
     RefreshSourceUi();
 
     if (catalog_loaded_)
@@ -299,6 +475,7 @@ bool IptvApp::Initialize(Rml::ElementDocument *document)
         SetText(document_, "source-status-detail",
                 "The cached catalog is current. Use Options to refresh it now.");
     }
+    navigation_ready_ = true;
     return true;
 }
 
@@ -347,12 +524,15 @@ void IptvApp::ReportPlaybackFailure(const char *channel_id, const char *channel_
 {
     if (!document_ || result >= 0)
         return;
-    char message[240]{};
-    std::snprintf(message, sizeof(message),
-                  "Unable to play %.120s after %u stream attempt%s (error %d). Try the channel "
-                  "again or select another source.",
+    char message[384]{};
+    const char *detail = iptv_player_last_error();
+    std::snprintf(message, sizeof(message), "Unable to play %.120s after %u stream attempt%s. %s",
                   channel_name && *channel_name ? channel_name : "this channel", attempts,
-                  attempts == 1u ? "" : "s", result);
+                  attempts == 1u ? "" : "s",
+                  detail && *detail ? detail : "Try the channel again or select another source.");
+    std::fprintf(stderr, "[ProsperoTV][player] channel=%s result=%d attempts=%u reason=%s\n",
+                 channel_id ? channel_id : "", result, attempts,
+                 detail && *detail ? detail : "unspecified");
     playback_retry_channel_id_ = channel_id ? channel_id : "";
     error_retries_playback_ = FindChannelById(playback_retry_channel_id_) != nullptr;
     SetStatusState("Playback failed", false, true);
@@ -374,8 +554,8 @@ bool IptvApp::JoinRefreshThread()
         if (!refresh_complete_.load(std::memory_order_acquire))
             return false;
         const int detach_result = scePthreadDetach(refresh_thread_);
-        std::fprintf(stderr, "[psiptv] refresh join failed: %d; detach fallback: %d\n", join_result,
-                     detach_result);
+        std::fprintf(stderr, "[ProsperoTV] refresh join failed: %d; detach fallback: %d\n",
+                     join_result, detach_result);
     }
     refresh_thread_ = nullptr;
     return true;
@@ -388,39 +568,47 @@ void IptvApp::DismissPlaybackError()
     ShowCatalogError(false, "", "");
 }
 
-void IptvApp::SetScreen(Screen screen)
+void IptvApp::SetScreen(Screen screen, bool reset_focus)
 {
     if (error_retries_playback_)
         DismissPlaybackError();
+    if (screen_ == Screen::LiveTv && screen != Screen::LiveTv)
+        last_live_group_ = selected_group_;
     screen_ = screen;
-    focus_slot_ = 0;
-    switch (screen_)
+    if (screen_ == Screen::Favorites)
+        selected_group_ = 1;
+    else if (screen_ == Screen::LiveTv)
+        selected_group_ = last_live_group_;
+    if (screen_ != Screen::Sources)
+        RebuildFilteredChannels();
+    if (reset_focus)
     {
-    case Screen::Home:
-        focus_target_ = FocusTarget::Home;
         focus_slot_ = 0;
-        while (focus_slot_ < 7 && !HomeChannelAt(focus_slot_))
-            ++focus_slot_;
-        if (focus_slot_ == 7)
-            focus_slot_ = 0;
-        break;
-    case Screen::LiveTv:
-        focus_target_ = catalog_.channels.empty() ? FocusTarget::Error
-                        : filtered_count_         ? FocusTarget::Channel
-                                                  : FocusTarget::Group;
-        break;
-    case Screen::Sources:
-        focus_target_ = FocusTarget::Source;
-        break;
-    case Screen::Settings:
-        focus_target_ = FocusTarget::Setting;
-        break;
+        switch (screen_)
+        {
+        case Screen::LiveTv:
+            focus_target_ = catalog_.channels.empty() ? FocusTarget::Error
+                            : filtered_count_         ? FocusTarget::Channel
+                                                      : FocusTarget::Group;
+            break;
+        case Screen::Favorites:
+            focus_target_ = filtered_count_ ? FocusTarget::Channel : FocusTarget::Play;
+            break;
+        case Screen::Sources:
+            focus_target_ = FocusTarget::Source;
+            break;
+        }
     }
 
-    static constexpr const char *screens[] = {"screen-home", "screen-live-tv", "screen-sources",
-                                              "screen-settings"};
-    for (unsigned index = 0; index < MenuCount; ++index)
-        SetVisible(document_, screens[index], index == static_cast<unsigned>(screen_));
+    SetVisible(document_, "screen-live-tv", screen_ != Screen::Sources);
+    SetVisible(document_, "screen-sources", screen_ == Screen::Sources);
+    SetClass(document_, "screen-live-tv", "favorites-view", screen_ == Screen::Favorites);
+    SetText(document_, "live-tv-heading", screen_ == Screen::Favorites ? "Favorites" : "Live TV");
+    SetText(document_, "live-tv-subtitle",
+            screen_ == Screen::Favorites
+                ? "Your saved channels. Square removes a favorite; Triangle searches this list."
+                : "Browse the cached catalog instantly. Up and Down continue across every page.");
+    RefreshCatalogUi();
     RefreshFocus();
 }
 
@@ -428,6 +616,50 @@ bool IptvApp::HandleInput(const IptvInputEvent &event)
 {
     if (!event.pressed)
         return true;
+    if (search_open_)
+    {
+        if (event.key == IptvInputKey::Circle || event.key == IptvInputKey::Triangle)
+        {
+            CloseSearch();
+            return true;
+        }
+        if (event.key == IptvInputKey::Up)
+            search_focus_ = search_focus_ ? search_focus_ - 1u : SearchControlCount - 1u;
+        else if (event.key == IptvInputKey::Down)
+            search_focus_ = (search_focus_ + 1u) % SearchControlCount;
+        else if ((event.key == IptvInputKey::Left || event.key == IptvInputKey::Right) &&
+                 search_focus_ >= 1 && search_focus_ <= 4)
+            CycleSearchFilter(search_focus_ - 1u, event.key == IptvInputKey::Left ? -1 : 1);
+        else if ((event.key == IptvInputKey::Left || event.key == IptvInputKey::Right) &&
+                 search_focus_ >= 5)
+            search_focus_ = search_focus_ == 5 ? 6 : 5;
+        else if (event.key == IptvInputKey::Cross)
+        {
+            if (search_focus_ == 0)
+            {
+                if (ime_ready_)
+                    iptv_ime_request(search_query_, &IptvApp::SearchResult, this);
+                else
+                    SetText(document_, "search-help", "Native keyboard unavailable.");
+            }
+            else if (search_focus_ <= 4)
+            {
+                CycleSearchFilter(search_focus_ - 1u, 1);
+            }
+            else if (search_focus_ == 5)
+            {
+                ResetSearch();
+            }
+            else
+            {
+                CloseSearch();
+                return true;
+            }
+        }
+        RefreshSearchUi();
+        RefreshFocus();
+        return true;
+    }
     if (event.key == IptvInputKey::Circle)
     {
         if (error_retries_playback_)
@@ -438,10 +670,11 @@ bool IptvApp::HandleInput(const IptvInputEvent &event)
             RefreshCatalogUi();
             RefreshFocus();
         }
-        else if (search_query_[0])
+        else if (search_query_[0] || filter_country_[0] || filter_category_[0] ||
+                 filter_language_[0] || filter_quality_)
         {
             iptv_ime_cancel();
-            ApplySearch("");
+            ResetSearch();
         }
         else if (screen_ != Screen::LiveTv)
         {
@@ -467,7 +700,7 @@ bool IptvApp::HandleInput(const IptvInputEvent &event)
         return true;
     }
 
-    if (screen_ == Screen::LiveTv)
+    if (screen_ != Screen::Sources)
     {
         const unsigned total = filtered_count_;
         const unsigned available =
@@ -476,20 +709,7 @@ bool IptvApp::HandleInput(const IptvInputEvent &event)
                                  : 0;
         if (event.key == IptvInputKey::Triangle)
         {
-            if (ime_ready_)
-            {
-                iptv_ime_request(search_query_, &IptvApp::SearchResult, this);
-                SetText(document_, "preview-status-title", "Channel search");
-                SetText(document_, "preview-status-message",
-                        "Enter a channel name, TV ID, or group with the native keyboard.");
-            }
-            else
-            {
-                SetStatusState("Search unavailable", true, false);
-                SetText(document_, "preview-status-title", "Native keyboard unavailable");
-                SetText(document_, "preview-status-message",
-                        "The IME module could not be initialized for this launcher session.");
-            }
+            OpenSearch();
         }
         else if (event.key == IptvInputKey::Square)
         {
@@ -513,6 +733,8 @@ bool IptvApp::HandleInput(const IptvInputEvent &event)
                 else
                 {
                     RebuildFilteredChannels();
+                    if (screen_ == Screen::Favorites && !filtered_count_)
+                        focus_target_ = FocusTarget::Play;
                     SetStatusState(favorite ? "Added to favorites" : "Removed from favorites",
                                    false, false);
                     SetText(document_, "preview-status-title",
@@ -542,6 +764,7 @@ bool IptvApp::HandleInput(const IptvInputEvent &event)
             else if (focus_target_ == FocusTarget::Group)
             {
                 selected_group_ = focus_slot_;
+                last_live_group_ = selected_group_;
                 page_offset_ = selected_slot_ = 0;
                 RebuildFilteredChannels();
                 focus_target_ = filtered_count_ ? FocusTarget::Channel : FocusTarget::Group;
@@ -589,21 +812,10 @@ bool IptvApp::HandleInput(const IptvInputEvent &event)
             {
                 focus_slot_ = slot - 1;
             }
-            else if (event.key == IptvInputKey::Left && slot == 0 &&
-                     page_offset_ >= kChannelCardCount)
-            {
-                page_offset_ -= kChannelCardCount;
-                focus_slot_ = kChannelCardCount - 1;
-            }
             else if (event.key == IptvInputKey::Right)
             {
                 if (slot % 4 < 3 && slot + 1 < available && slot + 1 < kChannelCardCount)
                     focus_slot_ = slot + 1;
-                else if (slot + 1 >= available && page_offset_ + available < total)
-                {
-                    page_offset_ += kChannelCardCount;
-                    focus_slot_ = 0;
-                }
                 else
                     focus_target_ = FocusTarget::Play;
             }
@@ -613,18 +825,47 @@ bool IptvApp::HandleInput(const IptvInputEvent &event)
             }
             else if (event.key == IptvInputKey::Up && slot < 4)
             {
-                focus_target_ = FocusTarget::Group;
-                focus_slot_ = selected_group_;
+                if (page_offset_ >= kChannelCardCount)
+                {
+                    page_offset_ -= kChannelCardCount;
+                    const unsigned previous_available = total - page_offset_ < kChannelCardCount
+                                                            ? total - page_offset_
+                                                            : kChannelCardCount;
+                    const unsigned previous_slot = slot + 4;
+                    focus_slot_ = previous_slot < previous_available ? previous_slot
+                                                                     : previous_available - 1u;
+                }
+                else
+                {
+                    if (screen_ == Screen::LiveTv)
+                    {
+                        focus_target_ = FocusTarget::Group;
+                        focus_slot_ = selected_group_;
+                    }
+                }
             }
             else if (event.key == IptvInputKey::Down)
             {
                 if (slot < 4 && slot + 4 < available && slot + 4 < kChannelCardCount)
+                {
                     focus_slot_ = slot + 4;
+                }
+                else if (page_offset_ + available < total)
+                {
+                    page_offset_ += kChannelCardCount;
+                    const unsigned next_available = total - page_offset_ < kChannelCardCount
+                                                        ? total - page_offset_
+                                                        : kChannelCardCount;
+                    const unsigned next_slot = slot % 4;
+                    focus_slot_ = next_slot < next_available ? next_slot : next_available - 1u;
+                }
                 else
+                {
                     focus_target_ = FocusTarget::Play;
+                }
             }
         }
-        else if (focus_target_ == FocusTarget::Play &&
+        else if (focus_target_ == FocusTarget::Play && filtered_count_ &&
                  (event.key == IptvInputKey::Left || event.key == IptvInputKey::Up))
         {
             focus_target_ = FocusTarget::Channel;
@@ -640,7 +881,7 @@ bool IptvApp::HandleInput(const IptvInputEvent &event)
                 focus_target_ = FocusTarget::LiveSource;
                 focus_slot_ = static_cast<unsigned>(active_source_);
             }
-            else if (event.key == IptvInputKey::Right && focus_slot_ < 4)
+            else if (event.key == IptvInputKey::Right && focus_slot_ + 1u < GroupCount)
             {
                 ++focus_slot_;
             }
@@ -681,46 +922,17 @@ bool IptvApp::HandleInput(const IptvInputEvent &event)
                 RequestRefresh();
             }
         }
-        if (focus_target_ == FocusTarget::Channel && focus_slot_ < available)
-            selected_slot_ = CatalogIndexAt(page_offset_ + focus_slot_);
+        if (focus_target_ == FocusTarget::Channel)
+        {
+            const unsigned current_available =
+                page_offset_ < total
+                    ? (total - page_offset_ < kChannelCardCount ? total - page_offset_
+                                                                : kChannelCardCount)
+                    : 0;
+            if (focus_slot_ < current_available)
+                selected_slot_ = CatalogIndexAt(page_offset_ + focus_slot_);
+        }
         RefreshCatalogUi();
-        RefreshFocus();
-        return true;
-    }
-
-    if (screen_ == Screen::Home)
-    {
-        if (event.key == IptvInputKey::Cross)
-        {
-            if (const iptv::Channel *channel = HomeChannelAt(focus_slot_))
-                QueuePlay(*channel);
-        }
-        else
-        {
-            unsigned next = focus_slot_;
-            if (event.key == IptvInputKey::Right)
-            {
-                next = focus_slot_ == 0
-                           ? 1
-                           : (focus_slot_ == 3 || focus_slot_ == 6 ? focus_slot_ : focus_slot_ + 1);
-            }
-            else if (event.key == IptvInputKey::Left)
-            {
-                next = focus_slot_ == 0
-                           ? 0
-                           : (focus_slot_ == 1 || focus_slot_ == 4 ? 0 : focus_slot_ - 1);
-            }
-            else if (event.key == IptvInputKey::Down && focus_slot_ >= 1 && focus_slot_ <= 3)
-            {
-                next = focus_slot_ + 3;
-            }
-            else if (event.key == IptvInputKey::Up && focus_slot_ >= 4)
-            {
-                next = focus_slot_ - 3;
-            }
-            if (HomeChannelAt(next))
-                focus_slot_ = next;
-        }
         RefreshFocus();
         return true;
     }
@@ -774,27 +986,12 @@ bool IptvApp::HandleInput(const IptvInputEvent &event)
         return true;
     }
 
-    if (screen_ == Screen::Settings)
-    {
-        if (event.key == IptvInputKey::Up && focus_slot_)
-            --focus_slot_;
-        else if (event.key == IptvInputKey::Down && focus_slot_ < 3)
-            ++focus_slot_;
-        else if (event.key == IptvInputKey::Cross)
-        {
-            SetStatusState("Settings are read-only", true, false);
-            SetText(document_, "settings-status-detail",
-                    "The displayed controller defaults are fixed for this native build.");
-        }
-        RefreshFocus();
-    }
     return true;
 }
 
 void IptvApp::RefreshFocus()
 {
-    static constexpr const char *nav_ids[] = {"nav-home", "nav-live-tv", "nav-sources",
-                                              "nav-settings"};
+    static constexpr const char *nav_ids[] = {"nav-live-tv", "nav-favorites", "nav-sources"};
     for (unsigned index = 0; index < MenuCount; ++index)
     {
         const bool selected = index == static_cast<unsigned>(screen_);
@@ -812,13 +1009,14 @@ void IptvApp::RefreshFocus()
         SetClass(document_, id, "selected",
                  visible && CatalogIndexAt(filtered_index) == selected_slot_);
         SetClass(document_, id, "focused",
-                 screen_ == Screen::LiveTv && focus_target_ == FocusTarget::Channel &&
+                 screen_ != Screen::Sources && focus_target_ == FocusTarget::Channel &&
                      index == focus_slot_ && visible);
     }
     SetClass(document_, "channel-play-button", "focused",
-             screen_ == Screen::LiveTv && focus_target_ == FocusTarget::Play);
+             screen_ != Screen::Sources && focus_target_ == FocusTarget::Play);
+    SetVisible(document_, "channel-play-button", filtered_count_ != 0);
     SetClass(document_, "error-action", "focused",
-             screen_ == Screen::LiveTv && focus_target_ == FocusTarget::Error);
+             screen_ != Screen::Sources && focus_target_ == FocusTarget::Error);
 
     for (unsigned index = 0; index < 2; ++index)
     {
@@ -828,7 +1026,7 @@ void IptvApp::RefreshFocus()
                  screen_ == Screen::LiveTv && focus_target_ == FocusTarget::LiveSource &&
                      index == focus_slot_);
     }
-    for (unsigned index = 0; index < 5; ++index)
+    for (unsigned index = 0; index < GroupCount; ++index)
     {
         char id[32];
         std::snprintf(id, sizeof(id), "group-slot-%u", index);
@@ -848,27 +1046,11 @@ void IptvApp::RefreshFocus()
     }
     SetClass(document_, "source-refresh-button", "focused",
              screen_ == Screen::Sources && focus_target_ == FocusTarget::SourceRefresh);
-
-    static constexpr const char *setting_ids[] = {"setting-safe-area", "setting-start-screen",
-                                                  "setting-repeat", "setting-cache"};
-    for (unsigned index = 0; index < 4; ++index)
-        SetClass(document_, setting_ids[index], "focused",
-                 screen_ == Screen::Settings && focus_target_ == FocusTarget::Setting &&
-                     index == focus_slot_);
-    SetClass(document_, "home-continue-card", "focused",
-             screen_ == Screen::Home && focus_target_ == FocusTarget::Home && focus_slot_ == 0);
-    for (unsigned list = 0; list < 2; ++list)
-    {
-        for (unsigned slot = 0; slot < 3; ++slot)
-        {
-            char id[40];
-            std::snprintf(id, sizeof(id), "home-%s-slot-%u", list == 0 ? "recent" : "favorite",
-                          slot);
-            SetClass(document_, id, "focused",
-                     screen_ == Screen::Home && focus_target_ == FocusTarget::Home &&
-                         focus_slot_ == 1 + list * 3 + slot);
-        }
-    }
+    static constexpr const char *search_ids[SearchControlCount] = {
+        "search-query-button", "filter-country", "filter-category", "filter-language",
+        "filter-quality",      "search-reset",   "search-apply"};
+    for (unsigned index = 0; index < SearchControlCount; ++index)
+        SetClass(document_, search_ids[index], "focused", search_open_ && search_focus_ == index);
 }
 
 void IptvApp::SetStatusColour(const char *colour)
@@ -964,6 +1146,7 @@ void IptvApp::LoadActiveSourceCache()
                                                             : custom        ? SourceHealth::Saved
                                                                             : SourceHealth::Empty;
     page_offset_ = focus_slot_ = selected_slot_ = 0;
+    RebuildFacets();
     RebuildFilteredChannels();
     RefreshCatalogUi();
     RefreshSourceUi();
@@ -1186,7 +1369,7 @@ void IptvApp::ConsumeRefresh()
     {
         catalog_ = std::move(pending_catalog_);
         catalog_loaded_ = true;
-        page_offset_ = focus_slot_ = 0;
+        RebuildFacets();
         RebuildFilteredChannels();
         if (error_retries_playback_ && !FindChannelById(playback_retry_channel_id_))
         {
@@ -1220,10 +1403,12 @@ void IptvApp::ConsumeRefresh()
                     pending_cache_saved_ ? "Catalog ready" : "Catalog loaded");
             SetText(document_, "preview-status-message", detail);
         }
-        if (!error_retries_playback_ && screen_ == Screen::LiveTv &&
+        if (!error_retries_playback_ && screen_ != Screen::Sources &&
             focus_target_ == FocusTarget::Error)
         {
-            focus_target_ = filtered_count_ ? FocusTarget::Channel : FocusTarget::Group;
+            focus_target_ = filtered_count_                ? FocusTarget::Channel
+                            : screen_ == Screen::Favorites ? FocusTarget::Play
+                                                           : FocusTarget::Group;
             focus_slot_ = filtered_count_ ? 0 : selected_group_;
         }
     }
@@ -1308,6 +1493,71 @@ void IptvApp::ConsumeRefresh()
     }
 }
 
+void IptvApp::RebuildFacets()
+{
+    using Entry = std::pair<std::string, unsigned>;
+    std::vector<Entry> countries;
+    std::vector<Entry> categories;
+    std::vector<Entry> languages;
+    auto add = [](std::vector<Entry> *entries, const std::string &field)
+    {
+        char value[48];
+        FirstValue(field, value, sizeof(value));
+        if (!*value)
+            return;
+        for (Entry &entry : *entries)
+            if (EqualsCi(entry.first, value))
+            {
+                ++entry.second;
+                return;
+            }
+        entries->emplace_back(value, 1u);
+    };
+    for (const iptv::Channel &channel : catalog_.channels)
+    {
+        add(&countries, channel.tvg_country);
+        add(&categories, channel.group_title);
+        add(&languages, channel.tvg_language);
+        for (const std::string &category : channel.alternate_group_titles)
+            add(&categories, category);
+    }
+    auto store = [](std::vector<Entry> *entries, auto *facets, unsigned *count)
+    {
+        std::sort(entries->begin(), entries->end(),
+                  [](const Entry &left, const Entry &right)
+                  {
+                      if (left.second != right.second)
+                          return left.second > right.second;
+                      return left.first < right.first;
+                  });
+        *count = static_cast<unsigned>(std::min<std::size_t>(entries->size(), FacetMax));
+        for (unsigned index = 0; index < *count; ++index)
+        {
+            facets[index].value = (*entries)[index].first;
+            facets[index].count = (*entries)[index].second;
+        }
+    };
+    store(&countries, country_facets_.data(), &country_facet_count_);
+    store(&categories, category_facets_.data(), &category_facet_count_);
+    store(&languages, language_facets_.data(), &language_facet_count_);
+
+    auto retained = [](const auto &facets, unsigned count, const char *selected)
+    {
+        if (!*selected)
+            return true;
+        for (unsigned index = 0; index < count; ++index)
+            if (EqualsCi(facets[index].value, selected))
+                return true;
+        return false;
+    };
+    if (!retained(country_facets_, country_facet_count_, filter_country_))
+        filter_country_[0] = '\0';
+    if (!retained(category_facets_, category_facet_count_, filter_category_))
+        filter_category_[0] = '\0';
+    if (!retained(language_facets_, language_facet_count_, filter_language_))
+        filter_language_[0] = '\0';
+}
+
 void IptvApp::RebuildFilteredChannels()
 {
     filtered_count_ = 0;
@@ -1315,6 +1565,8 @@ void IptvApp::RebuildFilteredChannels()
     for (unsigned index = 0; index < count && filtered_count_ < filtered_indices_.size(); ++index)
     {
         if (MatchesGroup(catalog_.channels[index], selected_group_, user_state_) &&
+            MatchesFilters(catalog_.channels[index], filter_country_, filter_category_,
+                           filter_language_, filter_quality_) &&
             MatchesQuery(catalog_.channels[index], search_query_))
             filtered_indices_[filtered_count_++] = index;
     }
@@ -1351,18 +1603,6 @@ const iptv::Channel *IptvApp::FindChannelById(const std::string &channel_id) con
     return nullptr;
 }
 
-const iptv::Channel *IptvApp::HomeChannelAt(unsigned slot) const
-{
-    if (slot == 0)
-        return user_state_.recent_channel_ids.empty()
-                   ? nullptr
-                   : FindChannelById(user_state_.recent_channel_ids.front());
-    const std::vector<std::string> &ids =
-        slot <= 3 ? user_state_.recent_channel_ids : user_state_.favorite_ids;
-    const unsigned index = slot <= 3 ? slot - 1 : slot - 4;
-    return index < ids.size() ? FindChannelById(ids[index]) : nullptr;
-}
-
 void IptvApp::QueuePlay(const iptv::Channel &channel)
 {
     play_request_.channel_id = channel.id;
@@ -1386,15 +1626,15 @@ void IptvApp::QueuePlay(const iptv::Channel &channel)
 
 void IptvApp::RefreshGroupUi()
 {
-    unsigned counts[5] = {};
+    unsigned counts[GroupCount] = {};
     for (const iptv::Channel &channel : catalog_.channels)
     {
         ++counts[0];
-        for (unsigned group = 1; group < 5; ++group)
+        for (unsigned group = 1; group < GroupCount; ++group)
             if (MatchesGroup(channel, group, user_state_))
                 ++counts[group];
     }
-    for (unsigned group = 0; group < 5; ++group)
+    for (unsigned group = 0; group < GroupCount; ++group)
     {
         char id[32];
         char count[24];
@@ -1411,11 +1651,12 @@ void IptvApp::ApplySearch(const char *query)
     SDL_strlcpy(search_query_, query ? query : "", sizeof(search_query_));
     page_offset_ = focus_slot_ = 0;
     RebuildFilteredChannels();
-    if (screen_ == Screen::LiveTv)
+    if (screen_ != Screen::Sources)
     {
-        focus_target_ = catalog_.channels.empty() ? FocusTarget::Error
-                        : filtered_count_         ? FocusTarget::Channel
-                                                  : FocusTarget::Group;
+        focus_target_ = catalog_.channels.empty()      ? FocusTarget::Error
+                        : filtered_count_              ? FocusTarget::Channel
+                        : screen_ == Screen::Favorites ? FocusTarget::Play
+                                                       : FocusTarget::Group;
         if (focus_target_ == FocusTarget::Group)
             focus_slot_ = selected_group_;
     }
@@ -1437,6 +1678,102 @@ void IptvApp::ApplySearch(const char *query)
                 "The full local catalog is visible. Triangle opens search.");
     }
     RefreshFocus();
+}
+
+void IptvApp::OpenSearch()
+{
+    search_open_ = true;
+    search_focus_ = 0;
+    SetVisible(document_, "search-overlay", true);
+    RefreshSearchUi();
+    RefreshFocus();
+}
+
+void IptvApp::CloseSearch()
+{
+    search_open_ = false;
+    SetVisible(document_, "search-overlay", false);
+    RefreshCatalogUi();
+    RefreshFocus();
+}
+
+void IptvApp::ResetSearch()
+{
+    search_query_[0] = filter_country_[0] = filter_category_[0] = filter_language_[0] = '\0';
+    filter_quality_ = 0;
+    selected_group_ = screen_ == Screen::Favorites ? 1 : 0;
+    if (screen_ == Screen::LiveTv)
+        last_live_group_ = 0;
+    page_offset_ = focus_slot_ = selected_slot_ = 0;
+    RebuildFilteredChannels();
+    focus_target_ = filtered_count_                ? FocusTarget::Channel
+                    : screen_ == Screen::Favorites ? FocusTarget::Play
+                                                   : FocusTarget::Group;
+    RefreshCatalogUi();
+    SetStatusState("Filters cleared", false, false);
+}
+
+void IptvApp::CycleSearchFilter(unsigned filter, int direction)
+{
+    auto cycle =
+        [direction](char *selected, std::size_t selected_bytes, const auto &facets, unsigned count)
+    {
+        int current = -1;
+        for (unsigned index = 0; index < count; ++index)
+            if (EqualsCi(facets[index].value, selected))
+                current = static_cast<int>(index);
+        int next = current + direction;
+        if (next < -1)
+            next = static_cast<int>(count) - 1;
+        if (next >= static_cast<int>(count))
+            next = -1;
+        SDL_strlcpy(selected, next >= 0 ? facets[static_cast<unsigned>(next)].value.c_str() : "",
+                    selected_bytes);
+    };
+    switch (filter)
+    {
+    case 0:
+        cycle(filter_country_, sizeof(filter_country_), country_facets_, country_facet_count_);
+        break;
+    case 1:
+        cycle(filter_category_, sizeof(filter_category_), category_facets_, category_facet_count_);
+        break;
+    case 2:
+        cycle(filter_language_, sizeof(filter_language_), language_facets_, language_facet_count_);
+        break;
+    case 3:
+        filter_quality_ =
+            static_cast<unsigned>((static_cast<int>(filter_quality_) + direction + 5) % 5);
+        break;
+    default:
+        return;
+    }
+    page_offset_ = focus_slot_ = selected_slot_ = 0;
+    RebuildFilteredChannels();
+    focus_target_ = filtered_count_                ? FocusTarget::Channel
+                    : screen_ == Screen::Favorites ? FocusTarget::Play
+                                                   : FocusTarget::Group;
+    RefreshCatalogUi();
+}
+
+void IptvApp::RefreshSearchUi()
+{
+    SetText(document_, "search-query-value",
+            search_query_[0] ? search_query_
+                             : "Type a name, country, language, category or quality");
+    SetText(document_, "filter-country-value",
+            filter_country_[0] ? filter_country_ : "All countries");
+    SetText(document_, "filter-category-value",
+            filter_category_[0] ? filter_category_ : "All categories");
+    SetText(document_, "filter-language-value",
+            filter_language_[0] ? filter_language_ : "All languages");
+    SetText(document_, "filter-quality-value", QualityName(filter_quality_));
+    char result[96];
+    std::snprintf(result, sizeof(result), "%u matching channel%s in the local cache",
+                  filtered_count_, filtered_count_ == 1 ? "" : "s");
+    SetText(document_, "search-result-count", result);
+    SetText(document_, "search-help",
+            "Cross changes a filter. Results update instantly; Circle keeps the current view.");
 }
 
 unsigned IptvApp::CatalogIndexAt(unsigned filtered_index) const
@@ -1463,21 +1800,32 @@ void IptvApp::RefreshCatalogUi()
 {
     char text[160];
     const unsigned channel_count = static_cast<unsigned>(catalog_.channels.size());
-    static constexpr const char *group_names[] = {"All channels", "Favorites", "News", "Sports",
-                                                  "Kids"};
-    if (search_query_[0])
+    const unsigned page_count =
+        filtered_count_ ? (filtered_count_ + kChannelCardCount - 1u) / kChannelCardCount : 0;
+    const unsigned page = filtered_count_ ? page_offset_ / kChannelCardCount + 1u : 0;
+    static constexpr const char *group_names[] = {"All channels", "Favorites", "Recent",
+                                                  "News",         "Sports",    "Kids"};
+    const bool filters_active =
+        filter_country_[0] || filter_category_[0] || filter_language_[0] || filter_quality_;
+    if (search_query_[0] || filters_active)
     {
-        std::snprintf(text, sizeof(text), "1 source  /  %u of %u channels  /  %.72s",
-                      filtered_count_, channel_count, search_query_);
+        std::snprintf(text, sizeof(text),
+                      "%s  /  %u of %u channels  /  Page %u of %u  /  Search filters active",
+                      group_names[selected_group_], filtered_count_, channel_count, page,
+                      page_count);
     }
     else
     {
-        std::snprintf(text, sizeof(text), "%s  /  %u of %u channels", group_names[selected_group_],
-                      filtered_count_, channel_count);
+        std::snprintf(text, sizeof(text), "%s  /  %u of %u channels  /  Page %u of %u",
+                      group_names[selected_group_], filtered_count_, channel_count, page,
+                      page_count);
     }
     SetText(document_, "live-status-detail", text);
-    SetText(document_, "search-query", search_query_[0] ? search_query_ : "Search channels");
-    SetVisible(document_, "search-clear", search_query_[0] != '\0');
+    SetText(document_, "search-query",
+            search_query_[0] ? search_query_
+            : filters_active ? "Filters active"
+                             : "Search and filter channels");
+    SetVisible(document_, "search-clear", search_query_[0] || filters_active);
     SetVisible(document_, "channel-empty", filtered_count_ == 0);
 
     if (filtered_count_ && selected_slot_ >= channel_count)
@@ -1518,8 +1866,13 @@ void IptvApp::RefreshCatalogUi()
         std::snprintf(id, sizeof(id), "channel-name-%u", index);
         SetText(document_, id, channel.name.empty() ? "Unnamed channel" : channel.name);
         std::snprintf(id, sizeof(id), "channel-meta-%u", index);
-        SetText(document_, id,
-                channel.group_title.empty() ? "Public catalog" : channel.group_title);
+        char context[160];
+        BuildChannelContext(channel, context, sizeof(context));
+        SetText(document_, id, context);
+        char technical[64];
+        BuildChannelTechnicalMeta(channel, technical, sizeof(technical));
+        std::snprintf(id, sizeof(id), "channel-tech-%u", index);
+        SetText(document_, id, technical);
     }
 
     if (!filtered_count_)
@@ -1528,13 +1881,14 @@ void IptvApp::RefreshCatalogUi()
         SetClass(document_, "selected-channel-recent", "active", false);
         SetText(document_, "selected-channel-number", "--");
         SetText(document_, "selected-channel-name",
-                search_query_[0]  ? "No matching channels"
-                : selected_group_ ? "No channels in this group"
-                                  : "No channels available");
+                (search_query_[0] || filters_active) ? "No matching channels"
+                : selected_group_                    ? "No channels in this group"
+                                                     : "No channels available");
         SetText(document_, "selected-channel-meta",
-                search_query_[0]  ? "Circle clears the current search."
-                : selected_group_ ? "Choose another group above."
+                (search_query_[0] || filters_active) ? "Circle clears the current search."
+                : selected_group_                    ? "Choose another group above."
                                   : "Refresh the public catalog or use a local cache.");
+        SetText(document_, "selected-channel-tech", "Codec, resolution and FPS unavailable");
     }
     else
     {
@@ -1548,51 +1902,13 @@ void IptvApp::RefreshCatalogUi()
         SetText(document_, "selected-channel-number", number);
         SetText(document_, "selected-channel-name",
                 channel.name.empty() ? "Unnamed channel" : channel.name);
-        SetText(document_, "selected-channel-meta",
-                channel.group_title.empty() ? "Public catalog" : channel.group_title);
+        char context[160];
+        BuildChannelContext(channel, context, sizeof(context));
+        SetText(document_, "selected-channel-meta", context);
+        char technical[64];
+        BuildChannelTechnicalMeta(channel, technical, sizeof(technical));
+        SetText(document_, "selected-channel-tech", technical);
     }
 
-    const iptv::Channel *continue_channel =
-        user_state_.recent_channel_ids.empty()
-            ? nullptr
-            : FindChannelById(user_state_.recent_channel_ids.front());
-    SetVisible(document_, "home-continue-card", continue_channel != nullptr);
-    SetVisible(document_, "home-continue-empty", continue_channel == nullptr);
-    SetClass(document_, "home-continue-marker", "active", continue_channel != nullptr);
-    if (continue_channel)
-    {
-        unsigned number = 0;
-        for (; number < channel_count; ++number)
-            if (&catalog_.channels[number] == continue_channel)
-                break;
-        std::snprintf(text, sizeof(text), "%u", number + 1u);
-        SetText(document_, "home-continue-number", text);
-        SetText(document_, "home-continue-name", continue_channel->name);
-        SetText(document_, "home-continue-meta",
-                continue_channel->group_title.empty() ? "Public catalog"
-                                                      : continue_channel->group_title);
-    }
-
-    const std::vector<std::string> *home_lists[] = {&user_state_.recent_channel_ids,
-                                                    &user_state_.favorite_ids};
-    const char *prefixes[] = {"home-recent", "home-favorite"};
-    for (unsigned list = 0; list < 2; ++list)
-    {
-        for (unsigned slot = 0; slot < 3; ++slot)
-        {
-            const iptv::Channel *channel = slot < home_lists[list]->size()
-                                               ? FindChannelById((*home_lists[list])[slot])
-                                               : nullptr;
-            char slot_id[48];
-            std::snprintf(slot_id, sizeof(slot_id), "%s-slot-%u", prefixes[list], slot);
-            SetVisible(document_, slot_id, channel != nullptr);
-            std::snprintf(slot_id, sizeof(slot_id), "%s-name-%u", prefixes[list], slot);
-            SetText(document_, slot_id, channel ? channel->name : "");
-            std::snprintf(slot_id, sizeof(slot_id), "%s-meta-%u", prefixes[list], slot);
-            SetText(document_, slot_id,
-                    channel
-                        ? (channel->group_title.empty() ? "Public catalog" : channel->group_title)
-                        : "");
-        }
-    }
+    RefreshSearchUi();
 }

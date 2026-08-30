@@ -1,197 +1,56 @@
 <rml>
-    <head>
-        <title>PS5 IPTV</title>
-        <link type="text/rcss" href="styles/app.rcss" />
-    </head>
+    <head><title>ProsperoTV</title><link type="text/rcss" href="styles/app.rcss" /></head>
     <body>
-        <div id="app-shell" class="app-shell">
-            <img id="app-background" src="images/background.tga" />
-            <div id="safe-frame" class="safe-frame">
-                <header id="topbar" class="topbar">
-                    <div id="brand-block" class="brand-block">
-                        <span id="brand-kicker" class="brand-kicker">LIVE TV</span>
-                        <span id="brand-name" class="brand-name">IPTV</span>
-                    </div>
+        <div id="app-shell"><img id="app-background" src="images/background.tga" /><div id="safe-frame">
+            <header id="topbar">
+                <div id="brand-block"><span id="brand-name">ProsperoTV</span><span id="brand-version">v{{PROSPERO_TV_VERSION}}</span></div>
+                <nav id="primary-nav"><button id="nav-live-tv" class="nav-item active"><span>Live TV</span></button><button id="nav-favorites" class="nav-item"><span>Favorites</span></button><button id="nav-sources" class="nav-item"><span>Sources</span></button></nav>
+                <div id="header-status" class="status-inline"><span id="header-status-dot" class="status-dot ready"></span><span id="header-status-label">Ready</span></div>
+            </header>
 
-                    <nav id="primary-nav" class="primary-nav">
-                        <button id="nav-home" class="nav-item" data-route="home"><span id="nav-home-label">Home</span></button>
-                        <button id="nav-live-tv" class="nav-item active" data-route="live-tv"><span id="nav-live-tv-label">Live TV</span></button>
-                        <button id="nav-sources" class="nav-item" data-route="sources"><span id="nav-sources-label">Sources</span></button>
-                        <button id="nav-settings" class="nav-item" data-route="settings"><span id="nav-settings-label">Settings</span></button>
-                    </nav>
+            <main id="content-shell">
+                <section id="screen-live-tv" class="screen">
+                    <div id="live-tv-heading" class="screen-heading">Live TV</div><div id="live-tv-subtitle" class="screen-subtitle">Browse the cached catalog instantly. Up and Down continue across every page.</div>
+                    <section id="source-region" class="rail-panel"><span class="panel-kicker">SOURCE</span><div class="rail-list">
+                        <button id="source-slot-0" class="rail-item selected"><span id="source-name-0">iptv-org</span><span id="source-meta-0">Public M3U</span><span id="source-status-0" class="item-status">LOADING</span></button>
+                        <button id="source-slot-1" class="rail-item"><span id="source-name-1">Custom playlist</span><span id="source-meta-1">Add URL</span><span id="source-status-1" class="item-status">EMPTY</span></button>
+                    </div></section>
+                    <section id="group-region" class="rail-panel"><span class="panel-kicker">QUICK VIEWS</span><div class="rail-list">
+                        <button id="group-slot-0" class="rail-item group-item selected"><span>All</span><span id="group-count-0">--</span></button>
+                        <button id="group-slot-1" class="rail-item group-item"><span>Favorites</span><span id="group-count-1">--</span></button>
+                        <button id="group-slot-2" class="rail-item group-item"><span>Recent</span><span id="group-count-2">--</span></button>
+                        <button id="group-slot-3" class="rail-item group-item"><span>News</span><span id="group-count-3">--</span></button>
+                        <button id="group-slot-4" class="rail-item group-item"><span>Sports</span><span id="group-count-4">--</span></button>
+                        <button id="group-slot-5" class="rail-item group-item"><span>Kids</span><span id="group-count-5">--</span></button>
+                    </div></section>
+                    <section id="search-region" class="rail-panel"><span class="panel-kicker">SEARCH &amp; FILTER</span><button id="search-input"><img src="icons/search.tga" width="32" height="32" alt=""/><span id="search-query">Search and filter channels</span><span id="search-clear" class="hidden">ACTIVE</span></button><span id="search-hint">Triangle opens advanced search</span></section>
 
-                    <div id="header-status" class="status-inline">
-                        <span id="header-status-dot" class="status-dot ready"></span>
-                        <span id="header-status-label">Ready</span>
-                    </div>
-                </header>
+                    <section id="channel-region"><div id="channel-list">
+                        <button id="channel-slot-0" class="channel-card selected"><span id="channel-number-0" class="channel-number">1</span><span id="channel-logo-0" class="channel-logo">TV</span><span id="channel-name-0" class="channel-name">Channel</span><span id="channel-meta-0" class="channel-meta">World</span><span id="channel-live-0" class="live-marker">LIVE</span><span id="channel-favorite-0" class="favorite-marker">FAVORITE</span><span id="channel-recent-0" class="recent-marker">RECENT</span><span id="channel-tech-0" class="channel-tech">AUTO | AUTO | FPS AUTO</span></button>
+                        <button id="channel-slot-1" class="channel-card"><span id="channel-number-1" class="channel-number">2</span><span id="channel-logo-1" class="channel-logo">TV</span><span id="channel-name-1" class="channel-name">Channel</span><span id="channel-meta-1" class="channel-meta">World</span><span id="channel-live-1" class="live-marker">LIVE</span><span id="channel-favorite-1" class="favorite-marker">FAVORITE</span><span id="channel-recent-1" class="recent-marker">RECENT</span><span id="channel-tech-1" class="channel-tech">AUTO | AUTO | FPS AUTO</span></button>
+                        <button id="channel-slot-2" class="channel-card"><span id="channel-number-2" class="channel-number">3</span><span id="channel-logo-2" class="channel-logo">TV</span><span id="channel-name-2" class="channel-name">Channel</span><span id="channel-meta-2" class="channel-meta">World</span><span id="channel-live-2" class="live-marker">LIVE</span><span id="channel-favorite-2" class="favorite-marker">FAVORITE</span><span id="channel-recent-2" class="recent-marker">RECENT</span><span id="channel-tech-2" class="channel-tech">AUTO | AUTO | FPS AUTO</span></button>
+                        <button id="channel-slot-3" class="channel-card"><span id="channel-number-3" class="channel-number">4</span><span id="channel-logo-3" class="channel-logo">TV</span><span id="channel-name-3" class="channel-name">Channel</span><span id="channel-meta-3" class="channel-meta">World</span><span id="channel-live-3" class="live-marker">LIVE</span><span id="channel-favorite-3" class="favorite-marker">FAVORITE</span><span id="channel-recent-3" class="recent-marker">RECENT</span><span id="channel-tech-3" class="channel-tech">AUTO | AUTO | FPS AUTO</span></button>
+                        <button id="channel-slot-4" class="channel-card"><span id="channel-number-4" class="channel-number">5</span><span id="channel-logo-4" class="channel-logo">TV</span><span id="channel-name-4" class="channel-name">Channel</span><span id="channel-meta-4" class="channel-meta">World</span><span id="channel-live-4" class="live-marker">LIVE</span><span id="channel-favorite-4" class="favorite-marker">FAVORITE</span><span id="channel-recent-4" class="recent-marker">RECENT</span><span id="channel-tech-4" class="channel-tech">AUTO | AUTO | FPS AUTO</span></button>
+                        <button id="channel-slot-5" class="channel-card"><span id="channel-number-5" class="channel-number">6</span><span id="channel-logo-5" class="channel-logo">TV</span><span id="channel-name-5" class="channel-name">Channel</span><span id="channel-meta-5" class="channel-meta">World</span><span id="channel-live-5" class="live-marker">LIVE</span><span id="channel-favorite-5" class="favorite-marker">FAVORITE</span><span id="channel-recent-5" class="recent-marker">RECENT</span><span id="channel-tech-5" class="channel-tech">AUTO | AUTO | FPS AUTO</span></button>
+                        <button id="channel-slot-6" class="channel-card"><span id="channel-number-6" class="channel-number">7</span><span id="channel-logo-6" class="channel-logo">TV</span><span id="channel-name-6" class="channel-name">Channel</span><span id="channel-meta-6" class="channel-meta">World</span><span id="channel-live-6" class="live-marker">LIVE</span><span id="channel-favorite-6" class="favorite-marker">FAVORITE</span><span id="channel-recent-6" class="recent-marker">RECENT</span><span id="channel-tech-6" class="channel-tech">AUTO | AUTO | FPS AUTO</span></button>
+                        <button id="channel-slot-7" class="channel-card"><span id="channel-number-7" class="channel-number">8</span><span id="channel-logo-7" class="channel-logo">TV</span><span id="channel-name-7" class="channel-name">Channel</span><span id="channel-meta-7" class="channel-meta">World</span><span id="channel-live-7" class="live-marker">LIVE</span><span id="channel-favorite-7" class="favorite-marker">FAVORITE</span><span id="channel-recent-7" class="recent-marker">RECENT</span><span id="channel-tech-7" class="channel-tech">AUTO | AUTO | FPS AUTO</span></button>
+                    </div><span id="channel-empty" class="empty-state hidden">No channels match this view.</span></section>
 
-                <main id="content-shell" class="content-shell">
-                    <section id="screen-home" class="screen hidden" data-route="home">
-                        <div id="home-heading" class="screen-heading">Home</div>
-                        <div id="home-subtitle" class="screen-subtitle">Pick up where you left off or browse your saved channels.</div>
+                    <aside id="channel-detail-region"><span class="panel-kicker">SELECTED CHANNEL</span><span id="selected-channel-number">--</span><span id="selected-channel-name">Channel name</span><span id="selected-channel-meta">World | Language | Category</span><span id="selected-channel-tech">AUTO | AUTO | FPS AUTO</span><span id="selected-channel-markers"><span id="selected-channel-favorite" class="favorite-marker">FAVORITE</span><span id="selected-channel-recent" class="recent-marker">RECENT</span></span><button id="channel-play-button" class="primary-action"><img src="icons/play.tga" width="24" height="24" alt=""/><span>Open channel</span></button><div id="preview-status-region"><span id="preview-status-dot" class="status-dot ready"></span><span id="preview-status-title">Ready</span><span id="preview-status-message">Cross opens this channel. Circle or Options returns during playback.</span></div></aside>
+                    <div id="live-status-region"><span id="live-status-dot" class="status-dot ready"></span><span id="live-status-label">Catalog ready</span><span id="live-status-detail">Cached channels</span></div>
+                    <div id="error-region" class="hidden"><span id="error-title">Unable to load catalog</span><span id="error-message">Try again or open Sources.</span><button id="error-action"><span id="error-action-label">Retry</span></button></div>
+                </section>
 
-                        <section id="home-continue-region" class="panel home-continue-region" data-region="continue">
-                            <span class="panel-kicker">CONTINUE WATCHING</span>
-                            <button id="home-continue-card" class="continue-card dynamic-slot" data-slot="continue">
-                                <span id="home-continue-number" class="channel-number">--</span>
-                                <span id="home-continue-name" class="continue-name">Nothing watched yet</span>
-                                <span id="home-continue-meta" class="continue-meta">Recent channels will appear here.</span>
-                                <span id="home-continue-marker" class="recent-marker is-recent">RECENT</span>
-                            </button>
-                            <span id="home-continue-empty" class="empty-state hidden">No recent channel.</span>
-                        </section>
+                <section id="screen-sources" class="screen hidden">
+                    <div class="screen-heading">Sources</div><div class="screen-subtitle">Use the free iptv-org catalog or add an HTTP(S) M3U playlist.</div>
+                    <section id="source-management-region"><span class="panel-kicker">PLAYLISTS</span><button id="source-management-slot-0" class="source-management-card selected"><span id="source-management-name-0">iptv-org public catalog</span><span id="source-management-url-0">https://iptv-org.github.io/iptv/index.m3u</span><span id="source-management-health-0" class="item-status">STARTING</span></button><button id="source-management-slot-1" class="source-management-card"><span id="source-management-name-1">Add a custom playlist</span><span id="source-management-url-1">Cross to enter an HTTP(S) M3U URL</span><span id="source-management-health-1" class="item-status">EMPTY</span></button></section>
+                    <section id="source-status-region"><span class="panel-kicker">SOURCE STATUS</span><span id="source-status-label">Starting catalog</span><span id="source-status-detail">Refresh details appear here.</span><button id="source-refresh-button" class="primary-action"><span id="source-refresh-label">Refresh selected source</span></button></section>
+                </section>
+            </main>
 
-                        <section id="home-recent-region" class="panel home-recent-region" data-region="recent">
-                            <span class="panel-kicker">RECENT CHANNELS</span>
-                            <div id="home-recent-list" class="dynamic-list">
-                                <button id="home-recent-slot-0" class="mini-card dynamic-slot" data-slot="recent-0"><span id="home-recent-name-0">Recent channel</span><span id="home-recent-meta-0">--</span></button>
-                                <button id="home-recent-slot-1" class="mini-card dynamic-slot" data-slot="recent-1"><span id="home-recent-name-1">Recent channel</span><span id="home-recent-meta-1">--</span></button>
-                                <button id="home-recent-slot-2" class="mini-card dynamic-slot" data-slot="recent-2"><span id="home-recent-name-2">Recent channel</span><span id="home-recent-meta-2">--</span></button>
-                            </div>
-                        </section>
+            <section id="search-overlay" class="hidden"><div id="search-panel"><span class="overlay-kicker">SEARCH THE LOCAL CATALOG</span><span class="overlay-title">Find your channel</span><span id="search-help">Cross changes a filter. Results update instantly.</span><button id="search-query-button"><span class="filter-label">NAME OR KEYWORD</span><span id="search-query-value">Type a channel, country, language or category</span></button><div id="filter-row"><button id="filter-country" class="filter-button"><span class="filter-label">COUNTRY</span><span id="filter-country-value">All countries</span></button><button id="filter-category" class="filter-button"><span class="filter-label">CATEGORY</span><span id="filter-category-value">All categories</span></button><button id="filter-language" class="filter-button"><span class="filter-label">LANGUAGE</span><span id="filter-language-value">All languages</span></button><button id="filter-quality" class="filter-button"><span class="filter-label">QUALITY</span><span id="filter-quality-value">Any quality</span></button></div><span id="search-result-count">0 matching channels in the local cache</span><button id="search-reset"><span>Reset all</span></button><button id="search-apply" class="primary-action"><span>Show results</span></button></div></section>
 
-                        <section id="home-favorites-region" class="panel home-favorites-region" data-region="favorites">
-                            <span class="panel-kicker">FAVORITES</span>
-                            <div id="home-favorites-list" class="dynamic-list">
-                                <button id="home-favorite-slot-0" class="mini-card dynamic-slot" data-slot="favorite-0"><span id="home-favorite-name-0">Favorite channel</span><span id="home-favorite-meta-0">--</span></button>
-                                <button id="home-favorite-slot-1" class="mini-card dynamic-slot" data-slot="favorite-1"><span id="home-favorite-name-1">Favorite channel</span><span id="home-favorite-meta-1">--</span></button>
-                                <button id="home-favorite-slot-2" class="mini-card dynamic-slot" data-slot="favorite-2"><span id="home-favorite-name-2">Favorite channel</span><span id="home-favorite-meta-2">--</span></button>
-                            </div>
-                        </section>
-                    </section>
-
-                    <section id="screen-live-tv" class="screen active" data-route="live-tv">
-                        <div id="live-tv-heading" class="screen-heading">Live TV</div>
-                        <div id="live-tv-subtitle" class="screen-subtitle">Browse channels with the D-pad or left stick. Cross opens the selected channel.</div>
-
-                        <section id="source-region" class="rail-panel" data-region="sources">
-                            <span id="source-region-label" class="panel-kicker">SOURCE</span>
-                            <div id="source-list" class="rail-list dynamic-list">
-                                <button id="source-slot-0" class="rail-item dynamic-slot selected" data-slot="source-0"><span id="source-name-0">iptv-org public catalog</span><span id="source-meta-0">Public M3U · background refresh</span><span id="source-status-0" class="item-status muted">LOADING</span></button>
-                                <button id="source-slot-1" class="rail-item dynamic-slot" data-slot="source-1"><span id="source-name-1">Source 2</span><span id="source-meta-1">Not configured</span><span id="source-status-1" class="item-status muted">--</span></button>
-                                <button id="source-slot-2" class="rail-item dynamic-slot" data-slot="source-2"><span id="source-name-2">Source 3</span><span id="source-meta-2">Not configured</span><span id="source-status-2" class="item-status muted">--</span></button>
-                            </div>
-                        </section>
-
-                        <section id="group-region" class="rail-panel" data-region="groups">
-                            <span id="group-region-label" class="panel-kicker">GROUP</span>
-                            <div id="group-list" class="rail-list dynamic-list">
-                                <button id="group-slot-0" class="rail-item group-item dynamic-slot selected" data-slot="group-0"><span id="group-name-0">All channels</span><span id="group-count-0">--</span></button>
-                                <button id="group-slot-1" class="rail-item group-item dynamic-slot" data-slot="group-1"><span id="group-name-1">Favorites</span><span id="group-count-1">--</span></button>
-                                <button id="group-slot-2" class="rail-item group-item dynamic-slot" data-slot="group-2"><span id="group-name-2">News</span><span id="group-count-2">--</span></button>
-                                <button id="group-slot-3" class="rail-item group-item dynamic-slot" data-slot="group-3"><span id="group-name-3">Sports</span><span id="group-count-3">--</span></button>
-                                <button id="group-slot-4" class="rail-item group-item dynamic-slot" data-slot="group-4"><span id="group-name-4">Kids</span><span id="group-count-4">--</span></button>
-                            </div>
-                        </section>
-
-                        <section id="search-region" class="rail-panel search-region" data-region="search">
-                            <span id="search-region-label" class="panel-kicker">SEARCH</span>
-                            <button id="search-input" class="search-input dynamic-slot" data-action="search"><span id="search-query">Search channels</span><span id="search-clear" class="search-clear hidden">CLEAR</span></button>
-                            <span id="search-hint">Triangle to type</span>
-                        </section>
-
-                        <section id="channel-region" class="channel-region" data-region="channels">
-                            <div id="channel-list" class="channel-list dynamic-list">
-                                <button id="channel-slot-0" class="channel-card dynamic-slot selected is-live" data-slot="channel-0">
-                                    <span id="channel-logo-0" class="channel-logo">01</span><span id="channel-number-0" class="channel-number">01</span><span id="channel-name-0" class="channel-name">Channel name</span><span id="channel-meta-0" class="channel-meta">Source / Group</span><span id="channel-live-0" class="live-marker is-live">LIVE</span><span id="channel-favorite-0" class="favorite-marker">FAV</span><span id="channel-recent-0" class="recent-marker">RECENT</span>
-                                </button>
-                                <button id="channel-slot-1" class="channel-card dynamic-slot" data-slot="channel-1">
-                                    <span id="channel-logo-1" class="channel-logo">02</span><span id="channel-number-1" class="channel-number">02</span><span id="channel-name-1" class="channel-name">Channel name</span><span id="channel-meta-1" class="channel-meta">Source / Group</span><span id="channel-live-1" class="live-marker is-live">LIVE</span><span id="channel-favorite-1" class="favorite-marker">FAV</span><span id="channel-recent-1" class="recent-marker">RECENT</span>
-                                </button>
-                                <button id="channel-slot-2" class="channel-card dynamic-slot" data-slot="channel-2">
-                                    <span id="channel-logo-2" class="channel-logo">03</span><span id="channel-number-2" class="channel-number">03</span><span id="channel-name-2" class="channel-name">Channel name</span><span id="channel-meta-2" class="channel-meta">Source / Group</span><span id="channel-live-2" class="live-marker is-live">LIVE</span><span id="channel-favorite-2" class="favorite-marker">FAV</span><span id="channel-recent-2" class="recent-marker">RECENT</span>
-                                </button>
-                                <button id="channel-slot-3" class="channel-card dynamic-slot" data-slot="channel-3">
-                                    <span id="channel-logo-3" class="channel-logo">04</span><span id="channel-number-3" class="channel-number">04</span><span id="channel-name-3" class="channel-name">Channel name</span><span id="channel-meta-3" class="channel-meta">Source / Group</span><span id="channel-live-3" class="live-marker is-live">LIVE</span><span id="channel-favorite-3" class="favorite-marker">FAV</span><span id="channel-recent-3" class="recent-marker">RECENT</span>
-                                </button>
-                                <button id="channel-slot-4" class="channel-card dynamic-slot" data-slot="channel-4">
-                                    <span id="channel-logo-4" class="channel-logo">05</span><span id="channel-number-4" class="channel-number">05</span><span id="channel-name-4" class="channel-name">Channel name</span><span id="channel-meta-4" class="channel-meta">Source / Group</span><span id="channel-live-4" class="live-marker is-live">LIVE</span><span id="channel-favorite-4" class="favorite-marker">FAV</span><span id="channel-recent-4" class="recent-marker">RECENT</span>
-                                </button>
-                                <button id="channel-slot-5" class="channel-card dynamic-slot" data-slot="channel-5">
-                                    <span id="channel-logo-5" class="channel-logo">06</span><span id="channel-number-5" class="channel-number">06</span><span id="channel-name-5" class="channel-name">Channel name</span><span id="channel-meta-5" class="channel-meta">Source / Group</span><span id="channel-live-5" class="live-marker is-live">LIVE</span><span id="channel-favorite-5" class="favorite-marker">FAV</span><span id="channel-recent-5" class="recent-marker">RECENT</span>
-                                </button>
-                                <button id="channel-slot-6" class="channel-card dynamic-slot" data-slot="channel-6">
-                                    <span id="channel-logo-6" class="channel-logo">07</span><span id="channel-number-6" class="channel-number">07</span><span id="channel-name-6" class="channel-name">Channel name</span><span id="channel-meta-6" class="channel-meta">Source / Group</span><span id="channel-live-6" class="live-marker is-live">LIVE</span><span id="channel-favorite-6" class="favorite-marker">FAV</span><span id="channel-recent-6" class="recent-marker">RECENT</span>
-                                </button>
-                                <button id="channel-slot-7" class="channel-card dynamic-slot" data-slot="channel-7">
-                                    <span id="channel-logo-7" class="channel-logo">08</span><span id="channel-number-7" class="channel-number">08</span><span id="channel-name-7" class="channel-name">Channel name</span><span id="channel-meta-7" class="channel-meta">Source / Group</span><span id="channel-live-7" class="live-marker is-live">LIVE</span><span id="channel-favorite-7" class="favorite-marker">FAV</span><span id="channel-recent-7" class="recent-marker">RECENT</span>
-                                </button>
-                            </div>
-                            <span id="channel-empty" class="empty-state hidden">No channels match this view.</span>
-                        </section>
-
-                        <aside id="channel-detail-region" class="detail-panel" data-region="selected-channel">
-                            <span id="channel-detail-kicker" class="panel-kicker">SELECTED CHANNEL</span>
-                            <span id="selected-channel-number" class="detail-number">01</span>
-                            <span id="selected-channel-name" class="detail-name">Channel name</span>
-                            <span id="selected-channel-meta" class="detail-meta">Source / Group</span>
-                            <span id="selected-channel-markers" class="detail-markers"><span id="selected-channel-favorite" class="favorite-marker">FAV</span><span id="selected-channel-recent" class="recent-marker">RECENT</span></span>
-                            <button id="channel-play-button" class="primary-action"><span id="channel-play-label">Open channel</span></button>
-                            <div id="preview-status-region" class="preview-status-region">
-                                <span id="preview-status-dot" class="status-dot ready"></span>
-                                <span id="preview-status-title">Ready</span>
-                                <span id="preview-status-message">Cross to open. Playback stays outside this browse shell.</span>
-                            </div>
-                        </aside>
-
-                        <div id="live-status-region" class="status-region">
-                            <span id="live-status-dot" class="status-dot ready"></span>
-                            <span id="live-status-label">Catalog ready</span>
-                            <span id="live-status-detail">-- sources · -- groups · -- channels</span>
-                        </div>
-                        <div id="error-region" class="error-region hidden" data-region="error">
-                            <span id="error-title" class="error-title">Unable to load catalog</span>
-                            <span id="error-message" class="error-message">The source reported an error. Try again or open Sources for details.</span>
-                            <button id="error-action" class="error-action"><span id="error-action-label">Retry</span></button>
-                        </div>
-                    </section>
-
-                    <section id="screen-sources" class="screen hidden" data-route="sources">
-                        <div id="sources-heading" class="screen-heading">Sources</div>
-                        <div id="sources-subtitle" class="screen-subtitle">Manage playlists and see refresh health. Network work stays off the UI thread.</div>
-                        <section id="source-management-region" class="source-management-region panel" data-region="source-management">
-                            <div id="source-management-list" class="dynamic-list">
-                                <button id="source-management-slot-0" class="source-management-card dynamic-slot selected" data-slot="source-0"><span id="source-management-name-0">iptv-org public catalog</span><span id="source-management-url-0">https://iptv-org.github.io/iptv/index.m3u</span><span id="source-management-health-0" class="item-status muted">STARTING</span></button>
-                                <button id="source-management-slot-1" class="source-management-card dynamic-slot" data-slot="source-1"><span id="source-management-name-1">Add a source</span><span id="source-management-url-1">M3U or M3U8 URL</span><span id="source-management-health-1" class="item-status muted">EMPTY</span></button>
-                                <button id="source-management-slot-2" class="source-management-card dynamic-slot" data-slot="source-2"><span id="source-management-name-2">Source diagnostics</span><span id="source-management-url-2">Errors and last refresh</span><span id="source-management-health-2" class="item-status muted">--</span></button>
-                            </div>
-                        </section>
-                        <section id="source-status-region" class="panel source-status-panel" data-region="source-status">
-                            <span id="source-status-heading" class="panel-kicker">SOURCE STATUS</span>
-                            <span id="source-status-label" class="status-value">No source selected</span>
-                            <span id="source-status-detail" class="status-detail">Refresh results and parser errors appear here.</span>
-                            <button id="source-refresh-button" class="primary-action"><span id="source-refresh-label">Refresh selected</span></button>
-                        </section>
-                    </section>
-
-                    <section id="screen-settings" class="screen hidden" data-route="settings">
-                        <div id="settings-heading" class="screen-heading">Settings</div>
-                        <div id="settings-subtitle" class="screen-subtitle">Controller-friendly defaults for a television display.</div>
-                        <section id="settings-region" class="settings-region panel" data-region="settings">
-                            <button id="setting-safe-area" class="setting-row dynamic-slot" data-setting="safe-area"><span id="setting-safe-area-label">Safe area</span><span id="setting-safe-area-value">64 px / 36 px</span></button>
-                            <button id="setting-start-screen" class="setting-row dynamic-slot" data-setting="start-screen"><span id="setting-start-screen-label">Start screen</span><span id="setting-start-screen-value">Live TV</span></button>
-                            <button id="setting-repeat" class="setting-row dynamic-slot" data-setting="repeat"><span id="setting-repeat-label">Navigation repeat</span><span id="setting-repeat-value">350 ms / 110 ms</span></button>
-                            <button id="setting-cache" class="setting-row dynamic-slot" data-setting="cache"><span id="setting-cache-label">Catalog cache</span><span id="setting-cache-value">Managed by app</span></button>
-                        </section>
-                        <section id="settings-status-region" class="panel settings-status-panel" data-region="settings-status">
-                            <span id="settings-status-heading" class="panel-kicker">INPUT</span>
-                            <span id="settings-status-label" class="status-value">DualSense connected</span>
-                            <span id="settings-status-detail" class="status-detail">D-pad and left stick navigation are enabled.</span>
-                        </section>
-                    </section>
-                </main>
-
-                <footer id="controller-footer" class="controller-footer">
-                    <span id="hint-cross" class="controller-hint"><span class="control-glyph">CROSS</span><span id="hint-cross-label">Select</span></span>
-                    <span id="hint-circle" class="controller-hint"><span class="control-glyph">CIRCLE</span><span id="hint-circle-label">Back</span></span>
-                    <span id="hint-square" class="controller-hint"><span class="control-glyph">SQUARE</span><span id="hint-square-label">Favorite</span></span>
-                    <span id="hint-triangle" class="controller-hint"><span class="control-glyph">TRIANGLE</span><span id="hint-triangle-label">Search</span></span>
-                    <span id="hint-shoulders" class="controller-hint"><span class="control-glyph wide">L1 / R1</span><span id="hint-shoulders-label">Section</span></span>
-                    <span id="hint-options" class="controller-hint"><span class="control-glyph">OPTIONS</span><span id="hint-options-label">Refresh</span></span>
-                    <span id="footer-status" class="footer-status"><span id="footer-status-dot" class="status-dot ready"></span><span id="footer-status-label">Input ready</span></span>
-                </footer>
-            </div>
-        </div>
+            <footer id="controller-footer"><span class="controller-hint hint-0"><img src="icons/cross.tga" width="34" height="34" alt=""/><span>Select</span></span><span class="controller-hint hint-1"><img src="icons/circle.tga" width="34" height="34" alt=""/><span>Back / Clear</span></span><span class="controller-hint hint-2"><img src="icons/square.tga" width="34" height="34" alt=""/><span>Favorite</span></span><span class="controller-hint hint-3"><img src="icons/triangle.tga" width="34" height="34" alt=""/><span>Search</span></span><span class="controller-hint hint-4"><span class="control-glyph">L1 / R1</span><span>Section</span></span><span class="controller-hint hint-5"><img src="icons/options.tga" width="34" height="34" alt=""/><span>Refresh</span></span><span id="footer-status"><span id="footer-status-dot" class="status-dot ready"></span><span id="footer-status-label">Ready</span></span></footer>
+        </div></div>
     </body>
 </rml>

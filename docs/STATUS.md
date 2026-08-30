@@ -2,7 +2,7 @@
 
 Status date: 2026-08-29
 
-psiptv has a hardware-proven native shell and local iptv-org catalog cache plus
+ProsperoTV has a hardware-proven native shell and local iptv-org catalog cache plus
 an integrated MPEG-TS/HLS playback and hardware decoder/presenter path. H.264
 and HEVC are hardware-proven from sub-720p through native 4K. Bounded fallback,
 cancellation, repeated decoder teardown, and direct WebM VP9 Profile 0 at
@@ -13,7 +13,7 @@ remaining UI/cache behavior and long-duration soak remain.
 
 | Area | Current state |
 | --- | --- |
-| Identity | Configured as `psiptv`, title `PPSA88000`, concept `88000`, content version `01.000.001` |
+| Identity | Configured as `ProsperoTV`, title `PPSA99003`, concept `99003`, content version `01.000.002` |
 | Native foundation | `ps5-native-app-boilerplate` Makefile, native linker/module writer, SELF signer, title-folder assembler, and deterministic generated `libc.prx`; PSRadio-style SDL/RmlUi shell, controller input, background work, `/download0` state, and explicit cleanup |
 | Public catalog | Built-in iptv-org `index.m3u` source plus a user-entered custom HTTP(S) M3U/M3U8 source |
 | Catalog parser | Extended M3U metadata, deduplication, alternate URLs/groups, country/language fields, and channel HTTP headers |
@@ -107,7 +107,7 @@ possible optimization if measurements show startup latency or memory pressure.
   decoder capacity class; profile, level, bit depth, and chroma are still
   bounded to hardware-proven SDR modes.
 - Stream availability and legality are properties of each third-party listing,
-  not guarantees made by psiptv or iptv-org.
+  not guarantees made by ProsperoTV or iptv-org.
 
 ## Next completion gates
 

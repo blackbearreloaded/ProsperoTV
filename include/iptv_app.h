@@ -1,4 +1,4 @@
-/* psiptv - native PS5 IPTV client derived from ps5-native-app-boilerplate.
+/* ProsperoTV - native PS5 IPTV client derived from ps5-native-app-boilerplate.
  * Copyright (C) 2026 BlackBearReloaded
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
@@ -58,13 +58,15 @@ public:
     void Shutdown();
 
 private:
-    static constexpr unsigned MenuCount = 4;
+    static constexpr unsigned MenuCount = 3;
+    static constexpr unsigned GroupCount = 6;
+    static constexpr unsigned FacetMax = 24;
+    static constexpr unsigned SearchControlCount = 7;
 
     enum class Screen {
-        Home,
         LiveTv,
-        Sources,
-        Settings
+        Favorites,
+        Sources
     };
 
     enum class FocusTarget {
@@ -74,9 +76,12 @@ private:
         LiveSource,
         Group,
         Source,
-        SourceRefresh,
-        Setting,
-        Home
+        SourceRefresh
+    };
+
+    struct Facet {
+        std::string value;
+        unsigned count = 0;
     };
 
     enum class SourceSelection {
@@ -101,9 +106,22 @@ private:
     unsigned selected_slot_ = 0;
     unsigned page_offset_ = 0;
     unsigned selected_group_ = 0;
+    unsigned last_live_group_ = 0;
     std::array<unsigned, iptv::kDefaultMaxChannels> filtered_indices_{};
     unsigned filtered_count_ = 0;
     char search_query_[IPTV_IME_MAX_TEXT_BYTES]{};
+    char filter_country_[48]{};
+    char filter_category_[48]{};
+    char filter_language_[48]{};
+    unsigned filter_quality_ = 0;
+    std::array<Facet, FacetMax> country_facets_{};
+    std::array<Facet, FacetMax> category_facets_{};
+    std::array<Facet, FacetMax> language_facets_{};
+    unsigned country_facet_count_ = 0;
+    unsigned category_facet_count_ = 0;
+    unsigned language_facet_count_ = 0;
+    bool search_open_ = false;
+    unsigned search_focus_ = 0;
     bool ime_ready_ = false;
     SourceSelection active_source_ = SourceSelection::BuiltIn;
     std::array<SourceHealth, 2> source_health_{};
@@ -128,12 +146,13 @@ private:
     std::string playback_retry_channel_id_;
     bool play_requested_ = false;
     IptvPlayRequest play_request_{};
+    bool navigation_ready_ = false;
 
     void RefreshFocus();
     void SetStatusColour(const char* colour);
     void SetStatusState(const char* label, bool warning, bool error);
     void ShowCatalogError(bool visible, const char* title, const char* message);
-    void SetScreen(Screen screen);
+    void SetScreen(Screen screen, bool reset_focus = true);
     void RefreshSourceUi();
     void LoadActiveSourceCache();
     void SelectSource(SourceSelection source);
@@ -143,10 +162,15 @@ private:
     void ConsumeRefresh();
     bool JoinRefreshThread();
     void DismissPlaybackError();
+    void RebuildFacets();
     void RebuildFilteredChannels();
     void ApplySearch(const char* query);
+    void OpenSearch();
+    void CloseSearch();
+    void ResetSearch();
+    void CycleSearchFilter(unsigned filter, int direction = 1);
+    void RefreshSearchUi();
     const iptv::Channel* FindChannelById(const std::string& channel_id) const;
-    const iptv::Channel* HomeChannelAt(unsigned slot) const;
     void QueuePlay(const iptv::Channel& channel);
     void RefreshGroupUi();
     unsigned CatalogIndexAt(unsigned filtered_index) const;

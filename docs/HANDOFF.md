@@ -1,4 +1,4 @@
-# psiptv handoff
+# ProsperoTV handoff
 
 Updated: 2026-08-29 America/New_York
 
@@ -6,20 +6,19 @@ Updated: 2026-08-29 America/New_York
 
 - Goal: `G4` end-to-end VP9 Profile 0 delivery, complete for direct WebM.
 - Source commit: `611765f` (strict G4 hardware acceptance passed).
-- Title: `PPSA88000`, version `01.000.001`, firmware target 6.02.
-- App folder: `dist/PPSA88000/`.
-- FFPFSC: `dist/PPSA88000.ffpfsc`.
+- Title: `PPSA99003`, version `01.000.002`, firmware target 6.02.
+- App folder: `dist/PPSA99003/`.
+- FFPFSC: not rebuilt for the folder-format visual deployment.
 - Host gates: 39 unit tests, 6 tooling tests, lint, native build,
   signed-container integrity, MkPFS creation, and MkPFS verification passed.
 
 | Artifact | Bytes | SHA-256 |
 | --- | ---: | --- |
-| `eboot.bin` | 5,432,066 | `ada059836f626f7d68697eff5af51a89770663d251ae0809d2f3452acdaa3264` |
+| `eboot.bin` | 5,432,066 | `8cf00ee53b3cda1d1616c74111e7f38c1a4bac2783bcb54452012a98dc9ccea6` |
 | `sce_module/libc.prx` | 1,284,674 | `e6ff45d16adf687855cc3b33b0c8a4132b6504360b221e0a34c7e99fb3ba0036` |
-| `sce_sys/param.json` | 883 | `2acfea4e4f7957e254f07d989bb5b97b92e1d4064467c24109befaa73990d856` |
-| `sce_sys/icon0.png` | 355,883 | `282ede549c8118855fc1e1a808703f13ccb1809fdaaaa6f287ac8f2977f053cf` |
-| `sce_sys/pic0.dds` | 8,294,548 | `56a982da83853ffce3cf62f6cc169016a0ad4479a3e6082a2b6390eebdbd264b` |
-| `PPSA88000.ffpfsc` | 37,486,592 | `0dd94e7fc24e1056678f22544f32549e3762616c3bac8c407f0af25d39e4f7e5` |
+| `sce_sys/param.json` | 887 | `187bdf9425c8534990b64b4fc2849843a574e9367a3bbfcae2e1851b63d85778` |
+| `sce_sys/icon0.png` | 499,117 | `ed19ea1cc58c5683af20d0be608bcc84194f0a503e712f9953760bc1affec064` |
+| `sce_sys/pic0.dds` | 8,294,548 | `dae87d09c64371a6cb0ea9899e30654f08fc99457e284055981eaa5fc416f6d9` |
 
 ## Boilerplate invariant
 
@@ -27,7 +26,7 @@ Updated: 2026-08-29 America/New_York
   compile, native link/module-write, SELF-sign, inspection, app-folder, and
   MkPFS verification flow.
 - `runtime/libc.prx` is hash-verified before packaging and copied to
-  `dist/PPSA88000/sce_module/libc.prx`; both copies are 1,284,674 bytes and
+  `dist/PPSA99003/sce_module/libc.prx`; both copies are 1,284,674 bytes and
   SHA-256 `e6ff45d16adf687855cc3b33b0c8a4132b6504360b221e0a34c7e99fb3ba0036`.
 - A host integration test now guards the runtime digest and required title
   layout/signing steps against accidental removal.

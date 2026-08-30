@@ -1,4 +1,4 @@
-/* psiptv - native PS5 IPTV client derived from ps5-native-app-boilerplate.
+/* ProsperoTV - native PS5 IPTV client derived from ps5-native-app-boilerplate.
  * Copyright (C) 2026 BlackBearReloaded
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
@@ -38,7 +38,7 @@ iptv::Channel MakeChannel(std::size_t index, std::uint64_t source_id = kSourceId
     channel.alternate_group_titles = {"Local", "International"};
     channel.tvg_country = "US";
     channel.tvg_language = "English";
-    channel.http_user_agent = "psiptv-test/1.0 (channel " + std::to_string(index) + ")";
+    channel.http_user_agent = "ProsperoTV-test/1.0 (channel " + std::to_string(index) + ")";
     channel.http_referrer = "https://portal.example/watch/" + std::to_string(index);
     channel.source_line = static_cast<std::uint32_t>(index * 2u + 2u);
     return channel;
@@ -80,7 +80,7 @@ class IptvStoreTest : public ::testing::Test
     {
         static std::atomic<unsigned long long> sequence{0};
         const auto tick = std::chrono::steady_clock::now().time_since_epoch().count();
-        root_ = fs::temp_directory_path() / ("psiptv-store-test-" + std::to_string(tick) + "-" +
+        root_ = fs::temp_directory_path() / ("prosperotv-store-test-" + std::to_string(tick) + "-" +
                                              std::to_string(sequence.fetch_add(1)));
         ASSERT_TRUE(fs::create_directories(root_));
         path_ = root_ / "catalog.sqlite3";

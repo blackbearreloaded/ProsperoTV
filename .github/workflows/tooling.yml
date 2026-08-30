@@ -1,4 +1,4 @@
-# ps5-native-app-boilerplate - Lint, build, and release validation.
+# ps5-native-app-boilerplate - ProsperoTV lint, test, build, and release validation.
 # Copyright (C) 2026 BlackBearReloaded
 # SPDX-License-Identifier: GPL-3.0-or-later
 
@@ -22,7 +22,7 @@ concurrency:
 
 jobs:
   build:
-    name: Lint, build, and package
+    name: Lint, test, and build FFPFSC
     runs-on: ubuntu-24.04
     timeout-minutes: 45
 
@@ -38,7 +38,7 @@ jobs:
       - name: Install native toolchain
         run: |
           sudo apt-get update
-          sudo apt-get install --yes clang-18 clang-format-18 clang-tidy-18 lld-18 make pkg-config tar unzip wget
+          sudo apt-get install --yes clang-18 clang-format-18 clang-tidy-18 lld-18 libsqlite3-dev make pkg-config tar unzip wget
 
       - name: Read app identity and version
         shell: bash
@@ -78,7 +78,7 @@ jobs:
       - name: Upload build
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: ps5-native-app-boilerplate-${{ github.sha }}
+          name: prospero-tv-${{ github.sha }}-ffpfsc
           path: |
             dist/${{ env.TITLE_ID }}.ffpfsc
             dist/SHA256SUMS
@@ -102,7 +102,7 @@ jobs:
         run: >-
           gh run download "$GITHUB_RUN_ID"
           --repo "$GITHUB_REPOSITORY"
-          --name "ps5-native-app-boilerplate-$GITHUB_SHA"
+          --name "prospero-tv-$GITHUB_SHA-ffpfsc"
           --dir release
 
       - name: Prepare release assets
@@ -112,20 +112,15 @@ jobs:
           set -euo pipefail
           cd release
           mapfile -d '' files < <(find . -type f -print0)
-          if (( ${#files[@]} != 2 )); then
-            echo "Expected exactly one FFPFSC image and SHA256SUMS." >&2
-            exit 1
-          fi
           shopt -s nullglob
-          images=(PPSA*.ffpfsc dist/PPSA*.ffpfsc)
-          checksums=(SHA256SUMS dist/SHA256SUMS)
-          if (( ${#images[@]} != 1 || ${#checksums[@]} != 1 )); then
-            echo "Release files must be one FFPFSC image and SHA256SUMS." >&2
+          images=(PPSA*.ffpfsc)
+          if (( ${#files[@]} != 2 || ${#images[@]} != 1 )) || [[ ! -f SHA256SUMS ]]; then
+            echo "Expected exactly one FFPFSC image and SHA256SUMS. Files must be at the artifact root." >&2
             exit 1
           fi
-          (cd "$(dirname "${checksums[0]}")" && sha256sum -c SHA256SUMS)
+          sha256sum -c SHA256SUMS
           echo "image=${images[0]}" >> "$GITHUB_OUTPUT"
-          echo "checksum=${checksums[0]}" >> "$GITHUB_OUTPUT"
+          echo "checksum=SHA256SUMS" >> "$GITHUB_OUTPUT"
 
       - name: Publish GitHub release
         env:
@@ -150,5 +145,5 @@ jobs:
               --repo "$GITHUB_REPOSITORY" \
               --verify-tag \
               --generate-notes \
-              --title "PS5 Native App Boilerplate $GITHUB_REF_NAME"
+              --title "ProsperoTV $GITHUB_REF_NAME"
           fi

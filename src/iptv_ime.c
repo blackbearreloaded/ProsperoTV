@@ -1,4 +1,4 @@
-/* psiptv - native PS5 IPTV client derived from ps5-native-app-boilerplate.
+/* ProsperoTV - native PS5 IPTV client derived from ps5-native-app-boilerplate.
  * Copyright (C) 2026 BlackBearReloaded
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
@@ -188,7 +188,7 @@ bool iptv_ime_init(void)
 
 void iptv_ime_request(const char *value, iptv_ime_result_fn callback, void *user_data)
 {
-    iptv_ime_request_prompt(value, "Search IPTV", "Channel name, TV ID, or group",
+    iptv_ime_request_prompt(value, "Search ProsperoTV", "Name, country, language, or category",
                             IPTV_IME_MAX_TEXT_CHARACTERS, callback, user_data);
 }
 

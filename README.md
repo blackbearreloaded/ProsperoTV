@@ -1,105 +1,284 @@
-# psiptv
+<p align="center">
+  <img src="sce_sys/icon0.png" width="128" alt="ProsperoTV icon">
+</p>
 
-`psiptv` is a native IPTV client for PlayStation 5. Its PS5 title ID is
-`PPSA88000`, its display name is `psiptv`, and its current content version is
-`01.000.001`.
+<h1 align="center">ProsperoTV</h1>
 
-The project is derived from
-[ps5-native-app-boilerplate](https://github.com/blackbearreloaded/ps5-native-app-boilerplate)
-and follows the proven application structure and operating patterns of
-[PSRadio](https://github.com/blackbearreloaded/ps5-radio): a native SDL/RmlUi
-shell, controller-first navigation, background network work, persistent state
-under `/download0`, and explicit cleanup of platform resources.
+<p align="center">
+  <strong>A native IPTV client for PlayStation 5 homebrew</strong><br>
+  Browse, search, and save channels from the iptv-org catalog with an
+  offline-first SQLite cache, a controller-first interface, and native PS5
+  video decoding.
+</p>
 
-The built-in channel source is the community-maintained
-[iptv-org/iptv](https://github.com/iptv-org/iptv) catalog, fetched from
-`https://iptv-org.github.io/iptv/index.m3u`. psiptv is an independent client;
-it does not operate or control the streams listed by iptv-org.
+<p align="center">
+  <a href="https://github.com/blackbearreloaded/ProsperoTV/actions/workflows/tooling.yml"><img src="https://github.com/blackbearreloaded/ProsperoTV/actions/workflows/tooling.yml/badge.svg" alt="Build"></a>
+  <a href="https://github.com/blackbearreloaded/ProsperoTV/releases/latest"><img src="https://img.shields.io/github/v/release/blackbearreloaded/ProsperoTV?display_name=tag" alt="Latest release"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-GPL--3.0--or--later-blue.svg" alt="GPL-3.0-or-later"></a>
+</p>
 
-## Current capabilities
+## Highlights
 
-- Loads the last good catalog immediately from
-  `/download0/psiptv-catalog.sqlite3` and refreshes iptv-org in a background
-  thread.
-- Parses extended M3U metadata, alternate URLs and groups, countries,
-  languages, and per-channel user-agent/referrer directives.
-- Supports a separately cached custom HTTP(S) M3U/M3U8 source at
-  `/download0/psiptv-custom-catalog.sqlite3`.
-- Provides native browsing, search, category filters, favorites, recent
-  channels, and source management.
-- Plays HLS or direct MPEG-TS streams carrying H.264 or 8-bit HEVC video, with
-  optional AAC ADTS audio, plus direct WebM streams carrying VP9 Profile 0.
-- Uses the native Videodec2 and AGC path for hardware decode and presentation.
-- Contains a native VP9 Profile 0 backend, including superframe splitting,
-  hidden-frame ordering, and 1080p/1440p/2160p decode modes.
+- Browse thousands of community-maintained IPTV channels from the iptv-org
+  catalog or add a custom HTTP(S) M3U playlist.
+- Search by name and filter by country, language, category, and advertised
+  quality with continuous controller paging.
+- Decode H.264, HEVC, and VP9 through native PS5 video paths at resolutions up
+  to 4K.
+- Keep the catalog, favorites, recent channels, and source state fast and
+  persistent under `/download0`.
+- Handle live HLS buffering, stale segments, alternate URLs, and failed feeds
+  without destabilizing the next playback session.
+- Use a polished full-screen RmlUi interface with DualSense navigation, native
+  text input, dedicated Favorites, and an optional playback statistics overlay.
 
-## Video modes and output
+<p align="center">
+  <img src="sce_sys/launch-background-source.png" alt="ProsperoTV artwork">
+</p>
 
-| Codec | Implemented hardware modes | Current end-to-end channel path |
+## Project foundations
+
+> [!IMPORTANT]
+> **Built on the [PS5 Native App Boilerplate](https://github.com/blackbearreloaded/ps5-native-app-boilerplate).**
+> ProsperoTV retains its C++20 application structure, reproducible clean-room
+> runtime, FSELF tooling, tests, deployment flow, and release automation.
+
+> [!IMPORTANT]
+> **Channel data comes from [iptv-org/iptv](https://github.com/iptv-org/iptv).**
+> ProsperoTV is an independent client. Neither this project nor iptv-org hosts
+> the listed streams, and channel availability can change without notice.
+
+| Identity | Value |
+| --- | --- |
+| Shell title | `ProsperoTV` |
+| Title ID | `PPSA99003` |
+| Shell category | Game |
+| Current release version | `01.000.002` |
+| Release-version source | [`sce_sys/param.json`](sce_sys/param.json) |
+| Built-in catalog | `https://iptv-org.github.io/iptv/index.m3u` |
+| Writable data | `/download0` only |
+
+## Features
+
+- Open the last verified channel catalog immediately from a local SQLite cache
+  while a refresh runs in the background.
+- Browse Live TV, Favorites, Recent, News, Sports, Kids, and other channel
+  groups with continuous controller pagination.
+- Search case-insensitively by channel name and filter by country, language,
+  category, and advertised quality using the native PS5 keyboard.
+- Keep favorites, recent channels, source selection, and catalog data under
+  `/download0`; failed refreshes leave the last good database untouched.
+- Add a custom HTTP(S) M3U or M3U8 playlist alongside the built-in iptv-org
+  source.
+- Return to the same screen, group, page, and channel after playback closes.
+- Play HLS and direct MPEG-TS streams with H.264 or HEVC video and supported
+  AAC audio through the native PS5 media path.
+- Play direct WebM streams containing VP9 Profile 0 video.
+- Adapt read-ahead buffering to live HLS timing and recover from stale live
+  segments without discarding the channel immediately.
+- Display codec, resolution, frame rate, and bitrate during playback; toggle
+  the statistics overlay with Touchpad + R1.
+- Report actionable failures for HTTP status, GeoIP restrictions, unavailable
+  streams, unsupported encryption or codecs, malformed playlists, MPEG-TS
+  synchronization, and native decoder errors.
+- Render a full-screen RmlUi interface with packaged multilingual bitmap fonts
+  and DualSense-focused navigation.
+
+## Video support
+
+| Codec | Supported path | Output classes |
 | --- | --- | --- |
-| H.264/AVC | 720p, 1080p, 1440p, 2160p; Baseline/Main/High within each mode's configured level limit | Yes, through MPEG-TS/HLS |
-| HEVC | Main profile, 8-bit 4:2:0 at 720p, 1080p, 1440p, and 2160p | Yes, through MPEG-TS/HLS |
-| VP9 | Profile 0, 8-bit 4:2:0 at 1080p, 1440p, and 2160p | Yes, through direct WebM |
+| H.264 / AVC | MPEG-TS and HLS; Baseline, Main, and High profiles within the configured level limits | 720p, 1080p, 1440p, 2160p |
+| HEVC | MPEG-TS and HLS; Main profile, 8-bit 4:2:0 | 720p, 1080p, 1440p, 2160p |
+| VP9 | Direct WebM; Profile 0, 8-bit 4:2:0 | 1080p, 1440p, 2160p |
 
-Output geometry is selected from the decoded source size:
+Sources up to 1080p use a 1920×1080 presentation surface. Native 1440p video
+is scaled to the 4K output surface, while 2160p video is decoded and presented
+at 3840×2160. Codec and renderer details are documented in
+[Architecture](docs/ARCHITECTURE.md) and [Testing](docs/TESTING.md).
 
-| Decoded source | VideoOut surface | Presentation |
-| --- | --- | --- |
-| Up to 1920×1080 | 1920×1080 | Native AGC presentation |
-| 2560×1440 | 3840×2160 | Native decode, bilinear GPU scaling to 4K output |
-| 3840×2160 | 3840×2160 | Native 4K decode and output |
+## Controls
 
-“Native” here describes the PS5 hardware decode/presentation pipeline. It does
-not mean that VideoOut is configured to a separate 2560×1440 mode; 1440p video
-is presented on the 4K surface.
+| Input | Action |
+| --- | --- |
+| D-pad / left stick | Move focus and continue across channel pages |
+| Cross | Select, open, or play |
+| Circle | Back, dismiss, or clear active filters |
+| Square | Add or remove a favorite |
+| Triangle | Open advanced search and filters |
+| L1 / R1 | Switch between Live TV, Favorites, and Sources |
+| Options | Refresh the selected catalog source |
+| Circle / Options during playback | Stop playback and return to the browser |
+| Touchpad + R1 during playback | Toggle codec and performance statistics |
 
-## Important limitations
+## Requirements
 
-- VP9 delivery currently supports direct, video-only WebM Profile 0 streams.
-  DASH, fragmented MP4, WebM audio, and more general Matroska features are not
-  implemented. MPEG-TS video remains limited to H.264 and HEVC.
-- VP9 Profile 2 is not supported. Its 10-bit low-aligned output requires a
-  dedicated presentation shader/path; the current presenter is SDR NV12.
-- The catalog is persisted in SQLite but loaded into an in-memory model for UI
-  navigation rather than queried page by page.
-- Merged alternate stream URLs are tried automatically when a primary URL
-  fails or ends without a successful playback result.
-- Startup, H.264/HEVC playback, direct WebM VP9 playback, alternate-URL
-  fallback, timed cancellation, and repeated decoder teardown have passed
-  bounded PS5 acceptance. The remaining controller/cache behavior and soak
-  gates still prevent a release-ready claim.
+Building requires Linux, WSL, or a Linux CI runner. On Ubuntu, Debian, or WSL:
 
-See [Architecture](docs/ARCHITECTURE.md) for component and codec details and
-[Status](docs/STATUS.md) for the implementation boundary and remaining work.
+```bash
+sudo apt update
+sudo apt install clang-18 clang-format-18 clang-tidy-18 curl git lld-18 make \
+  pkg-config python3 python3-pip python3-venv tar unzip wget libsqlite3-dev
+```
 
-## Build
+The build downloads, verifies, and caches the public PS5 Payload SDK, zlib,
+PacBrew's SQLite port, GoogleTest, and the selected packaging tools below the
+ignored `.deps/` directory. No proprietary Sony SDK, firmware module,
+encryption key, or game asset is included or fetched.
 
-Use Linux or WSL with the prerequisites documented by the native boilerplate:
+Run the read-only prerequisite check before building:
 
 ```bash
 make doctor
-make test
-make app
 ```
 
-The complete folder title is emitted at `dist/PPSA88000/`. Optional package
-formats are available through `make ffpkg` and `make ffpfsc`. Deploy the whole
-title, not `eboot.bin` alone. PS5 testing and deployment must follow the shared
-console lock and investigation protocol.
+See [Getting started](docs/GETTING_STARTED.md) and
+[Native tooling](docs/NATIVE_TOOLING.md) for detailed environment setup.
 
-## Persistent files
+## Build
 
-| Path | Purpose |
-| --- | --- |
-| `/download0/psiptv-catalog.sqlite3` | Last good built-in iptv-org catalog |
-| `/download0/psiptv-custom-catalog.sqlite3` | Last good custom catalog |
-| `/download0/iptv-favorites-v1.bin` | Favorite channel IDs |
-| `/download0/iptv-history-v1.bin` | Recent channel IDs |
-| `/download0/iptv-custom-source-v1.txt` | Custom playlist URL |
-| `/download0/iptv-active-source-v1.txt` | Active source selection |
-| `/download0/iptv-last-receipt.txt` | Most recent playback diagnostic receipt |
+[`sce_sys/param.json`](sce_sys/param.json) is the source of truth for the app
+identity and release version. Keep `PPSA99003` when publishing an update;
+changing the title ID creates a separate PS5 title.
 
-## License
+```bash
+# Lint, run all host tests, and build the complete title folder.
+make check
 
-The repository is licensed under GPL-3.0-or-later. Third-party components and
-data retain their own licenses and terms; see [NOTICE.md](NOTICE.md).
+# Build the compressed release image.
+make ffpfsc
+```
+
+Release outputs are written to:
+
+```text
+dist/PPSA99003/           complete title folder
+dist/PPSA99003.ffpfsc     compressed release image
+```
+
+An optional UFS2 `.ffpkg` development target is also available. See
+[Package formats](docs/FFPKG.md).
+
+## Install and development deployment
+
+Install the generated `.ffpfsc` with a compatible PS5 homebrew workflow, or
+stage the complete title folder below `/data/homebrew/PPSA99003`. Do not copy
+`eboot.bin` by itself; the app also requires its runtime module, UI, fonts,
+icons, artwork, and metadata.
+
+For an FTP development deployment to an available PS5:
+
+```bash
+make deploy PS5_HOST=192.168.1.100 DEPLOY_FORMAT=folder
+```
+
+> [!NOTE]
+> The first launch downloads, validates, and caches the iptv-org catalog. Keep
+> the console online and leave ProsperoTV open until the catalog is ready.
+> Later launches load the local database immediately.
+
+Deployment writes only title-scoped paths under `/data/homebrew`. See
+[Deployment](docs/DEPLOYMENT.md) for the complete workflow.
+
+## Test and quality gates
+
+```bash
+make test            # GoogleTest unit suite and Python integration tests
+make lint            # formatting, static analysis, metadata, and shell checks
+make check           # lint + tests + complete folder build
+make ffpfsc          # production folder + compressed release image
+```
+
+Host tests cover catalog parsing and persistence, HLS parsing, HTTP error
+classification, MPEG-TS access-unit handling, VP9/WebM parsing, native-app
+layout, runtime handoff, and presentation constraints. Hardware acceptance is
+performed separately on PS5 with bounded channel samples, decoder telemetry,
+and teardown checks.
+
+GitHub Actions runs linting, all host tests, deterministic runtime
+reproduction, and the FFPFSC build. Pushing a tag that exactly matches
+`contentVersion` publishes the verified `.ffpfsc` image and `SHA256SUMS`.
+
+## Source layout
+
+```text
+src/main.cpp                  Native SDL/RmlUi lifetime and renderer bridge
+src/iptv_app.cpp              Screens, focus, search, paging, and user state
+src/iptv_player.cpp           Stream selection, buffering, playback, and errors
+src/iptv_stream.cpp           MPEG-TS demux and H.264/HEVC access-unit assembly
+src/iptv_native_backend.c     Native video/audio decode and presentation backend
+src/iptv_catalog.cpp          Extended M3U catalog parser
+src/iptv_store.cpp            SQLite last-good catalog persistence
+src/iptv_webm.cpp             Bounded WebM/VP9 parser
+include/                      Public application and media interfaces
+ui/                           RML, RCSS, fonts, controller icons, and artwork
+sce_sys/                      PS5 metadata and launcher assets
+runtime/                      Reproducible clean-room libc.prx output
+tooling/native/               ELF, FSELF, and runtime-generation tooling
+tests/                        Host unit and integration regressions
+docs/                         Architecture, build, testing, and deployment guides
+```
+
+## Versioning and releases
+
+`contentVersion` in [`sce_sys/param.json`](sce_sys/param.json) drives the
+packaged metadata, top-bar version, Git tag, and GitHub Release. It uses the
+PS5 `NN.NNN.NNN` format without a `v` prefix.
+
+```bash
+# After updating param.json and passing the release gates:
+git tag 01.000.002
+git push origin main 01.000.002
+```
+
+The release workflow rejects a mismatched tag. See
+[Configuration](docs/CONFIGURATION.md) for the coordinated metadata fields.
+
+## Stream compatibility and limitations
+
+- Public IPTV URLs can disappear, move, become GeoIP-restricted, require
+  provider-specific headers, or reject access at any time.
+- DRM and encrypted HLS media are intentionally unsupported.
+- VP9 currently supports direct, video-only WebM Profile 0 streams. DASH,
+  fragmented MP4, WebM audio, VP9 Profile 2, and general Matroska features are
+  outside the supported path.
+- MPEG-TS playback supports H.264 and 8-bit HEVC video. Unsupported audio may
+  continue as silent video when the video path remains valid.
+- Catalog metadata describes a channel but cannot guarantee that its current
+  stream is online, correctly labeled, or compatible with the PS5 decoder.
+
+ProsperoTV displays the most specific detected cause when a channel cannot be
+played. A channel failure does not imply that the app, iptv-org, or the
+console is unavailable.
+
+## Credits and licences
+
+ProsperoTV builds on and acknowledges:
+
+- [PS5 Native App Boilerplate](https://github.com/blackbearreloaded/ps5-native-app-boilerplate),
+  [PS5 Payload SDK](https://github.com/ps5-payload-dev/sdk),
+  [PacBrew](https://github.com/ps5-payload-dev/pacbrew-repo),
+  [MkPFS](https://github.com/PSBrew/MkPFS), and
+  [UFS2Tool](https://github.com/SvenGDK/UFS2Tool).
+- [iptv-org/iptv](https://github.com/iptv-org/iptv) for the public channel
+  catalog and metadata.
+- [ProsperoRadio](https://github.com/blackbearreloaded/ProsperoRadio) as the
+  primary native application and user-experience reference.
+- [IPTVnator](https://github.com/4gray/iptvnator) and
+  [Megacubo](https://github.com/EdenwareApps/Megacubo) as IPTV product
+  references.
+- SDL2, RmlUi, FreeType, SQLite, zlib, LLVM, GoogleTest, Montserrat, Noto,
+  DejaVu, and Source Han Sans.
+
+Third-party software and data retain their own licences and terms. See
+[NOTICE.md](NOTICE.md) for dependency and attribution details.
+
+ProsperoTV is licensed under GPL-3.0-or-later. See [LICENSE](LICENSE) and
+[Contributing](CONTRIBUTING.md).
+
+PlayStation and PS5 are trademarks of Sony Interactive Entertainment. This
+project is independent and is not affiliated with or endorsed by Sony.
+
+This project was developed with assistance from OpenAI Codex, including
+original interface artwork. Project maintainers reviewed and validated the
+resulting code, tests, documentation, dependencies, and generated assets.

@@ -180,6 +180,26 @@ class ToolTests(unittest.TestCase):
         ):
             self.assertIn(required, build)
 
+    def test_native_video_handoff_closes_loading_presenter_before_decoder_open(self):
+        player = (ROOT / "src/iptv_player.cpp").read_text(encoding="utf-8")
+        start = player.index("int AdapterOpen(")
+        end = player.index("int AdapterVideo(", start)
+        adapter_open = player[start:end]
+        stop = adapter_open.index("iptv_native_agc_loading_stop();")
+        shutdown = adapter_open.index("iptv_native_agc_present_shutdown();")
+        backend = adapter_open.index("iptv_native_backend_open(")
+        self.assertLess(stop, shutdown)
+        self.assertLess(shutdown, backend)
+
+    def test_presenter_rejects_implicit_geometry_switch_and_uses_unique_markers(self):
+        presenter = (ROOT / "src/iptv_native_agc_present.c").read_text(encoding="utf-8")
+        self.assertIn("static uint64_t render_sequence;", presenter)
+        self.assertIn("++render_sequence << 8", presenter)
+        self.assertNotIn("status[3] == (uint64_t)render_marker", presenter)
+        geometry = presenter.index("presenter.output_width != output.width")
+        initialize = presenter.index("if (!presenter.ready)", geometry)
+        self.assertIn("return -7;", presenter[geometry:initialize])
+
 
 if __name__ == "__main__":
     unittest.main()
