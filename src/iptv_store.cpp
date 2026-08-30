@@ -21,6 +21,7 @@ namespace
 {
 
 constexpr int kSchemaVersion = 1;
+constexpr int kPlaybackSchemaVersion = 1;
 
 StoreStatus MapSqlite(int result)
 {
@@ -158,6 +159,20 @@ bool CreateSchema(sqlite3 *database)
         "CREATE TABLE alternate_groups(channel_id TEXT NOT NULL,position INTEGER NOT NULL,"
         "value TEXT NOT NULL,PRIMARY KEY(channel_id,position)) WITHOUT ROWID;"
         "PRAGMA user_version=1;");
+}
+
+bool CreatePlaybackSchema(sqlite3 *database)
+{
+    return Execute(database, "PRAGMA journal_mode=DELETE;"
+                             "PRAGMA synchronous=FULL;"
+                             "CREATE TABLE IF NOT EXISTS playback_results("
+                             "source_id INTEGER NOT NULL,channel_id TEXT NOT NULL,"
+                             "playable INTEGER NOT NULL CHECK(playable IN(0,1)),"
+                             "result INTEGER NOT NULL,checked_unix INTEGER NOT NULL,"
+                             "PRIMARY KEY(source_id,channel_id)) WITHOUT ROWID;"
+                             "CREATE INDEX IF NOT EXISTS playback_results_checked "
+                             "ON playback_results(checked_unix);"
+                             "PRAGMA user_version=1;");
 }
 
 bool InsertCatalog(sqlite3 *database, const CatalogState &catalog, const StoreLimits &limits)
@@ -532,6 +547,108 @@ StoreStatus LoadCatalog(const std::string &path, CatalogState *catalog, const St
     std::remove(path.c_str());
     (void)std::rename(backup.c_str(), path.c_str());
     return StoreStatus::ok;
+}
+
+StoreStatus RecordPlaybackResult(const std::string &path, std::uint64_t source_id,
+                                 const std::string &channel_id, bool playable, int result)
+{
+    if (path.empty() || channel_id.empty() || !Fits(channel_id, kDefaultMaxFieldBytes))
+        return StoreStatus::invalid_argument;
+
+    sqlite3 *database = nullptr;
+    int sqlite_result = sqlite3_open_v2(
+        path.c_str(), &database, SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_FULLMUTEX,
+        nullptr);
+    if (sqlite_result != SQLITE_OK)
+    {
+        if (database)
+            sqlite3_close_v2(database);
+        return MapSqlite(sqlite_result);
+    }
+    sqlite3_busy_timeout(database, 2000);
+
+    sqlite3_stmt *statement = nullptr;
+    const std::time_t now = std::time(nullptr);
+    bool ok =
+        CreatePlaybackSchema(database) &&
+        Prepare(database,
+                "INSERT OR REPLACE INTO playback_results("
+                "source_id,channel_id,playable,result,checked_unix) VALUES(?,?,?,?,?)",
+                &statement) &&
+        sqlite3_bind_int64(statement, 1, static_cast<sqlite3_int64>(source_id)) == SQLITE_OK &&
+        BindText(statement, 2, channel_id) &&
+        sqlite3_bind_int(statement, 3, playable ? 1 : 0) == SQLITE_OK &&
+        sqlite3_bind_int(statement, 4, result) == SQLITE_OK &&
+        sqlite3_bind_int64(statement, 5, now > 0 ? static_cast<sqlite3_int64>(now) : 0) ==
+            SQLITE_OK &&
+        sqlite3_step(statement) == SQLITE_DONE;
+    sqlite_result = ok ? SQLITE_OK : sqlite3_errcode(database);
+    sqlite3_finalize(statement);
+    sqlite3_close_v2(database);
+    return ok ? StoreStatus::ok : MapSqlite(sqlite_result);
+}
+
+StoreStatus LoadPlaybackResults(const std::string &path, std::uint64_t source_id,
+                                CatalogState *catalog, const StoreLimits &limits)
+{
+    if (path.empty() || !catalog || catalog->source_id != source_id)
+        return StoreStatus::invalid_argument;
+    const std::size_t bytes = FileSize(path);
+    if (bytes == std::numeric_limits<std::size_t>::max())
+        return StoreStatus::not_found;
+    if (bytes > limits.max_file_bytes)
+        return StoreStatus::too_large;
+
+    sqlite3 *database = nullptr;
+    int sqlite_result = sqlite3_open_v2(path.c_str(), &database,
+                                        SQLITE_OPEN_READONLY | SQLITE_OPEN_FULLMUTEX, nullptr);
+    if (sqlite_result != SQLITE_OK)
+    {
+        if (database)
+            sqlite3_close_v2(database);
+        return MapSqlite(sqlite_result);
+    }
+    sqlite3_busy_timeout(database, 2000);
+
+    sqlite3_stmt *statement = nullptr;
+    bool ok = Prepare(database, "PRAGMA user_version", &statement) &&
+              sqlite3_step(statement) == SQLITE_ROW &&
+              sqlite3_column_int(statement, 0) == kPlaybackSchemaVersion;
+    sqlite3_finalize(statement);
+
+    std::unordered_map<std::string, std::size_t> positions;
+    if (ok)
+    {
+        positions.reserve(catalog->channels.size());
+        for (std::size_t index = 0; index < catalog->channels.size(); ++index)
+            positions.emplace(catalog->channels[index].id, index);
+    }
+
+    statement = nullptr;
+    ok = ok &&
+         Prepare(database,
+                 "SELECT channel_id,playable,result,checked_unix FROM playback_results "
+                 "WHERE source_id=?",
+                 &statement) &&
+         sqlite3_bind_int64(statement, 1, static_cast<sqlite3_int64>(source_id)) == SQLITE_OK;
+    int step = SQLITE_DONE;
+    while (ok && (step = sqlite3_step(statement)) == SQLITE_ROW)
+    {
+        const auto found = positions.find(ReadText(statement, 0));
+        if (found == positions.end())
+            continue;
+        Channel &channel = catalog->channels[found->second];
+        channel.playback_status = sqlite3_column_int(statement, 1) != 0 ? PlaybackStatus::playable
+                                                                        : PlaybackStatus::failed;
+        channel.playback_result = sqlite3_column_int(statement, 2);
+        const sqlite3_int64 checked = sqlite3_column_int64(statement, 3);
+        channel.playback_checked_unix = checked > 0 ? static_cast<std::uint64_t>(checked) : 0;
+    }
+    ok = ok && step == SQLITE_DONE;
+    sqlite_result = ok ? SQLITE_OK : sqlite3_errcode(database);
+    sqlite3_finalize(statement);
+    sqlite3_close_v2(database);
+    return ok ? StoreStatus::ok : MapSqlite(sqlite_result);
 }
 
 } // namespace iptv

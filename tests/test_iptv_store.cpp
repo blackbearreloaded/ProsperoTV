@@ -71,6 +71,9 @@ void ExpectChannelEquals(const iptv::Channel &expected, const iptv::Channel &act
     EXPECT_EQ(actual.http_user_agent, expected.http_user_agent);
     EXPECT_EQ(actual.http_referrer, expected.http_referrer);
     EXPECT_EQ(actual.source_line, expected.source_line);
+    EXPECT_EQ(actual.playback_status, expected.playback_status);
+    EXPECT_EQ(actual.playback_result, expected.playback_result);
+    EXPECT_EQ(actual.playback_checked_unix, expected.playback_checked_unix);
 }
 
 class IptvStoreTest : public ::testing::Test
@@ -84,6 +87,7 @@ class IptvStoreTest : public ::testing::Test
                                              std::to_string(sequence.fetch_add(1)));
         ASSERT_TRUE(fs::create_directories(root_));
         path_ = root_ / "catalog.sqlite3";
+        history_path_ = root_ / "playback-history.sqlite3";
     }
 
     void TearDown() override
@@ -111,6 +115,7 @@ class IptvStoreTest : public ::testing::Test
 
     fs::path root_;
     fs::path path_;
+    fs::path history_path_;
 };
 
 TEST_F(IptvStoreTest, RoundTripsEveryChannelFieldAlternatesAndHttpHeaders)
@@ -284,5 +289,29 @@ TEST_F(IptvStoreTest, RoundTripsRepresentativeMultiThousandChannelCache)
     ExpectChannelEquals(expected.channels.front(), actual.channels.front());
     ExpectChannelEquals(expected.channels[kChannelCount / 2u], actual.channels[kChannelCount / 2u]);
     ExpectChannelEquals(expected.channels.back(), actual.channels.back());
+}
+
+TEST_F(IptvStoreTest, PersistsPlaybackResultsAcrossCatalogRefreshesAndSources)
+{
+    ASSERT_EQ(iptv::RecordPlaybackResult(history_path_.string(), kSourceId, "channel-0", true, 0),
+              iptv::StoreStatus::ok);
+    ASSERT_EQ(iptv::RecordPlaybackResult(history_path_.string(), kSourceId, "channel-1", false, -6),
+              iptv::StoreStatus::ok);
+
+    iptv::CatalogState refreshed = MakeCatalog(3);
+    ASSERT_EQ(iptv::LoadPlaybackResults(history_path_.string(), kSourceId, &refreshed),
+              iptv::StoreStatus::ok);
+    EXPECT_EQ(refreshed.channels[0].playback_status, iptv::PlaybackStatus::playable);
+    EXPECT_EQ(refreshed.channels[0].playback_result, 0);
+    EXPECT_GT(refreshed.channels[0].playback_checked_unix, 0u);
+    EXPECT_EQ(refreshed.channels[1].playback_status, iptv::PlaybackStatus::failed);
+    EXPECT_EQ(refreshed.channels[1].playback_result, -6);
+    EXPECT_GT(refreshed.channels[1].playback_checked_unix, 0u);
+    EXPECT_EQ(refreshed.channels[2].playback_status, iptv::PlaybackStatus::unknown);
+
+    iptv::CatalogState other_source = MakeCatalog(1, 99);
+    ASSERT_EQ(iptv::LoadPlaybackResults(history_path_.string(), 99, &other_source),
+              iptv::StoreStatus::ok);
+    EXPECT_EQ(other_source.channels[0].playback_status, iptv::PlaybackStatus::unknown);
 }
 } // namespace

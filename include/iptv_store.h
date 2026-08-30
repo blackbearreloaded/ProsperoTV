@@ -15,6 +15,8 @@ namespace iptv {
 
 inline constexpr std::size_t kDefaultMaxStoreBytes = 64u * 1024u * 1024u;
 inline constexpr std::size_t kDefaultMaxStoredRecordBytes = 32u * 1024u;
+inline constexpr char kDefaultPlaybackHistoryPath[] =
+    "/download0/prosperotv-playback-history.sqlite3";
 
 struct StoreLimits {
     std::size_t max_file_bytes = kDefaultMaxStoreBytes;
@@ -52,6 +54,17 @@ StoreStatus LoadCatalog(const std::string& path,
                         CatalogState* catalog,
                         const StoreLimits& limits = StoreLimits{},
                         StoreReport* report = nullptr);
+
+StoreStatus RecordPlaybackResult(const std::string& path,
+                                 std::uint64_t source_id,
+                                 const std::string& channel_id,
+                                 bool playable,
+                                 int result);
+
+StoreStatus LoadPlaybackResults(const std::string& path,
+                                std::uint64_t source_id,
+                                CatalogState* catalog,
+                                const StoreLimits& limits = StoreLimits{});
 
 }  // namespace iptv
 

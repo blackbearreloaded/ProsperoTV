@@ -61,6 +61,12 @@ struct ParseReport {
     std::vector<ParseDiagnostic> diagnostics;
 };
 
+enum class PlaybackStatus : std::uint8_t {
+    unknown,
+    playable,
+    failed,
+};
+
 struct Channel {
     std::string id;
     std::uint64_t source_id = 0;
@@ -77,6 +83,9 @@ struct Channel {
     std::string http_user_agent;
     std::string http_referrer;
     std::uint32_t source_line = 0;
+    PlaybackStatus playback_status = PlaybackStatus::unknown;
+    int playback_result = 0;
+    std::uint64_t playback_checked_unix = 0;
 };
 
 struct CatalogState {

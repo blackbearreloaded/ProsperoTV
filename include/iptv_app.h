@@ -45,6 +45,7 @@ struct IptvPlayRequest {
     std::vector<std::string> urls;
     std::string user_agent;
     std::string referrer;
+    std::uint64_t source_id = 0;
 };
 
 class IptvApp {
@@ -73,7 +74,6 @@ private:
         Channel,
         Play,
         Error,
-        LiveSource,
         Group,
         Source,
         SourceRefresh

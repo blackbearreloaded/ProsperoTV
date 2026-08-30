@@ -16,6 +16,7 @@
 #include "iptv_input.h"
 #include "iptv_memory.h"
 #include "iptv_player.h"
+#include "iptv_store.h"
 #include "bitmap_font_engine.h"
 
 #include <cstdlib>
@@ -1229,6 +1230,13 @@ int main()
         const PlaybackOutcome outcome = RunPlaybackCandidates(request, 0, nullptr);
         playback_result = outcome.result;
         playback_attempts = outcome.attempts;
+        const iptv::StoreStatus history_status =
+            iptv::RecordPlaybackResult(iptv::kDefaultPlaybackHistoryPath, request.source_id,
+                                       request.channel_id, playback_result >= 0, playback_result);
+        if (history_status != iptv::StoreStatus::ok)
+            std::fprintf(stderr, "[ProsperoTV][history] channel=%s result=%d store=%u\n",
+                         request.channel_id.c_str(), playback_result,
+                         static_cast<unsigned>(history_status));
         if (playback_result < 0)
         {
             failed_channel_id = request.channel_id;

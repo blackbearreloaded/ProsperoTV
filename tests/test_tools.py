@@ -196,6 +196,28 @@ class ToolTests(unittest.TestCase):
         initialize = presenter.index("if (!presenter.ready)", geometry)
         self.assertIn("return -7;", presenter[geometry:initialize])
 
+    def test_live_tv_back_and_source_layout_are_kept_simple(self):
+        app = (ROOT / "src/iptv_app.cpp").read_text(encoding="utf-8")
+        circle = app.index(
+            "if (event.key == IptvInputKey::Circle)\n"
+            "    {\n"
+            "        if (error_retries_playback_)"
+        )
+        l1 = app.index("if (event.key == IptvInputKey::L1", circle)
+        circle_handler = app[circle:l1]
+        self.assertIn("page_offset_ = 0;", circle_handler)
+        self.assertIn("focus_target_ = FocusTarget::Group;", circle_handler)
+        self.assertIn("focus_slot_ = selected_group_;", circle_handler)
+        self.assertNotIn("FocusTarget::LiveSource", app)
+
+        rml = (ROOT / "ui/main.rml").read_text(encoding="utf-8")
+        self.assertIn('<div id="source-slot-0" class="rail-item selected">', rml)
+        self.assertIn('<div id="source-slot-1" class="rail-item hidden">', rml)
+
+        styles = (ROOT / "ui/styles/app.rcss").read_text(encoding="utf-8")
+        self.assertIn("#source-region { left: 0px; width: 299px; }", styles)
+        self.assertIn("#group-region { left: 315px; width: 931px; }", styles)
+
 
 if __name__ == "__main__":
     unittest.main()

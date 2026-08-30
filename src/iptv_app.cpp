@@ -328,6 +328,16 @@ void SetProperty(Rml::ElementDocument *document, const char *id, const char *nam
         element->SetProperty(name, value);
 }
 
+void SetPlaybackBadge(Rml::ElementDocument *document, const char *id, iptv::PlaybackStatus status)
+{
+    const bool visited = status != iptv::PlaybackStatus::unknown;
+    const bool playable = status == iptv::PlaybackStatus::playable;
+    SetText(document, id, playable ? "PLAYABLE" : "FAILED");
+    SetClass(document, id, "active", visited);
+    SetClass(document, id, "playable", playable);
+    SetClass(document, id, "failed", visited && !playable);
+}
+
 const char *FetchStatusName(iptv::http::Status status)
 {
     switch (status)
@@ -427,6 +437,9 @@ bool IptvApp::Initialize(Rml::ElementDocument *document)
                       catalog_.source_id == active_source_id && !catalog_.channels.empty();
     if (!catalog_loaded_)
         catalog_ = {};
+    else
+        (void)iptv::LoadPlaybackResults(iptv::kDefaultPlaybackHistoryPath, active_source_id,
+                                        &catalog_);
     source_health_[static_cast<unsigned>(active_source_)] = catalog_loaded_ ? SourceHealth::Cached
                                                             : custom_active ? SourceHealth::Saved
                                                                             : SourceHealth::Empty;
@@ -607,7 +620,8 @@ void IptvApp::SetScreen(Screen screen, bool reset_focus)
     SetText(document_, "live-tv-subtitle",
             screen_ == Screen::Favorites
                 ? "Your saved channels. Square removes a favorite; Triangle searches this list."
-                : "Browse the cached catalog instantly. Up and Down continue across every page.");
+                : "Browse the cached catalog instantly. Circle returns to Quick Views from any "
+                  "channel page.");
     RefreshCatalogUi();
     RefreshFocus();
 }
@@ -679,6 +693,16 @@ bool IptvApp::HandleInput(const IptvInputEvent &event)
         else if (screen_ != Screen::LiveTv)
         {
             SetScreen(Screen::LiveTv);
+        }
+        else if (focus_target_ == FocusTarget::Channel || focus_target_ == FocusTarget::Play)
+        {
+            page_offset_ = 0;
+            if (filtered_count_)
+                selected_slot_ = CatalogIndexAt(0);
+            focus_target_ = FocusTarget::Group;
+            focus_slot_ = selected_group_;
+            RefreshCatalogUi();
+            RefreshFocus();
         }
         return true;
     }
@@ -770,25 +794,6 @@ bool IptvApp::HandleInput(const IptvInputEvent &event)
                 focus_target_ = filtered_count_ ? FocusTarget::Channel : FocusTarget::Group;
                 focus_slot_ = filtered_count_ ? 0 : selected_group_;
             }
-            else if (focus_target_ == FocusTarget::LiveSource)
-            {
-                if (refresh_thread_)
-                {
-                    SetStatusState("Refresh in progress", true, false);
-                }
-                else if (focus_slot_ == 0)
-                {
-                    SelectSource(SourceSelection::BuiltIn);
-                }
-                else if (custom_source_url_.empty())
-                {
-                    OpenCustomSourceEditor();
-                }
-                else
-                {
-                    SelectSource(SourceSelection::Custom);
-                }
-            }
             else if (focus_target_ == FocusTarget::Channel && focus_slot_ < available &&
                      focus_slot_ < kChannelCardCount)
             {
@@ -876,11 +881,6 @@ bool IptvApp::HandleInput(const IptvInputEvent &event)
             {
                 --focus_slot_;
             }
-            else if (event.key == IptvInputKey::Left)
-            {
-                focus_target_ = FocusTarget::LiveSource;
-                focus_slot_ = static_cast<unsigned>(active_source_);
-            }
             else if (event.key == IptvInputKey::Right && focus_slot_ + 1u < GroupCount)
             {
                 ++focus_slot_;
@@ -889,22 +889,6 @@ bool IptvApp::HandleInput(const IptvInputEvent &event)
             {
                 focus_target_ = filtered_count_ ? FocusTarget::Channel : FocusTarget::Group;
                 focus_slot_ = 0;
-            }
-        }
-        else if (focus_target_ == FocusTarget::LiveSource)
-        {
-            if (event.key == IptvInputKey::Left && focus_slot_)
-            {
-                --focus_slot_;
-            }
-            else if (event.key == IptvInputKey::Right && focus_slot_ < 1)
-            {
-                ++focus_slot_;
-            }
-            else if (event.key == IptvInputKey::Right || event.key == IptvInputKey::Down)
-            {
-                focus_target_ = FocusTarget::Group;
-                focus_slot_ = selected_group_;
             }
         }
         else if (focus_target_ == FocusTarget::Error &&
@@ -1018,14 +1002,6 @@ void IptvApp::RefreshFocus()
     SetClass(document_, "error-action", "focused",
              screen_ != Screen::Sources && focus_target_ == FocusTarget::Error);
 
-    for (unsigned index = 0; index < 2; ++index)
-    {
-        char id[32];
-        std::snprintf(id, sizeof(id), "source-slot-%u", index);
-        SetClass(document_, id, "focused",
-                 screen_ == Screen::LiveTv && focus_target_ == FocusTarget::LiveSource &&
-                     index == focus_slot_);
-    }
     for (unsigned index = 0; index < GroupCount; ++index)
     {
         char id[32];
@@ -1123,6 +1099,7 @@ void IptvApp::RefreshSourceUi()
         std::snprintf(id, sizeof(id), "source-management-health-%u", index);
         SetText(document_, id, health);
         std::snprintf(id, sizeof(id), "source-slot-%u", index);
+        SetVisible(document_, id, index == static_cast<unsigned>(active_source_));
         SetClass(document_, id, "selected", index == static_cast<unsigned>(active_source_));
         std::snprintf(id, sizeof(id), "source-management-slot-%u", index);
         SetClass(document_, id, "selected", index == static_cast<unsigned>(active_source_));
@@ -1142,6 +1119,8 @@ void IptvApp::LoadActiveSourceCache()
     catalog_loaded_ = status == iptv::StoreStatus::ok && cached.source_id == source_id &&
                       !cached.channels.empty();
     catalog_ = catalog_loaded_ ? std::move(cached) : iptv::CatalogState{};
+    if (catalog_loaded_)
+        (void)iptv::LoadPlaybackResults(iptv::kDefaultPlaybackHistoryPath, source_id, &catalog_);
     source_health_[static_cast<unsigned>(active_source_)] = catalog_loaded_ ? SourceHealth::Cached
                                                             : custom        ? SourceHealth::Saved
                                                                             : SourceHealth::Empty;
@@ -1369,6 +1348,8 @@ void IptvApp::ConsumeRefresh()
     {
         catalog_ = std::move(pending_catalog_);
         catalog_loaded_ = true;
+        (void)iptv::LoadPlaybackResults(iptv::kDefaultPlaybackHistoryPath, catalog_.source_id,
+                                        &catalog_);
         RebuildFacets();
         RebuildFilteredChannels();
         if (error_retries_playback_ && !FindChannelById(playback_retry_channel_id_))
@@ -1615,6 +1596,7 @@ void IptvApp::QueuePlay(const iptv::Channel &channel)
             play_request_.urls.push_back(alternate);
     play_request_.user_agent = channel.http_user_agent;
     play_request_.referrer = channel.http_referrer;
+    play_request_.source_id = channel.source_id;
     play_requested_ = !play_request_.urls.empty();
     if (!play_requested_)
         return;
@@ -1856,6 +1838,8 @@ void IptvApp::RefreshCatalogUi()
         SetClass(document_, id, "active", favorite);
         std::snprintf(id, sizeof(id), "channel-recent-%u", index);
         SetClass(document_, id, "active", recent);
+        std::snprintf(id, sizeof(id), "channel-playback-%u", index);
+        SetPlaybackBadge(document_, id, channel.playback_status);
         std::snprintf(id, sizeof(id), "channel-logo-%u", index);
         char monogram[3];
         BuildChannelMonogram(channel, monogram);
@@ -1879,6 +1863,7 @@ void IptvApp::RefreshCatalogUi()
     {
         SetClass(document_, "selected-channel-favorite", "active", false);
         SetClass(document_, "selected-channel-recent", "active", false);
+        SetPlaybackBadge(document_, "selected-channel-playback", iptv::PlaybackStatus::unknown);
         SetText(document_, "selected-channel-number", "--");
         SetText(document_, "selected-channel-name",
                 (search_query_[0] || filters_active) ? "No matching channels"
@@ -1897,6 +1882,7 @@ void IptvApp::RefreshCatalogUi()
                  iptv::IsFavorite(user_state_, channel.id));
         SetClass(document_, "selected-channel-recent", "active",
                  iptv::IsRecentChannel(user_state_, channel.id));
+        SetPlaybackBadge(document_, "selected-channel-playback", channel.playback_status);
         char number[16];
         std::snprintf(number, sizeof(number), "%02u", selected_slot_ + 1u);
         SetText(document_, "selected-channel-number", number);
