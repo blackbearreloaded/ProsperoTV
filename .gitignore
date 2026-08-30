@@ -6,6 +6,11 @@
 .deps/
 results/
 assets/private/*.bin
+!assets/private/geometry.header.bin
+!assets/private/geometry.text.bin
+!assets/private/netflix-video-resources.bin
+!assets/private/pixel.header.bin
+!assets/private/pixel.text.linear-buffer.bin
 .env
 __pycache__/
 *.pyc
