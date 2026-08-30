@@ -17,6 +17,10 @@
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-GPL--3.0--or--later-blue.svg" alt="GPL-3.0-or-later"></a>
 </p>
 
+Demo available by clicking the image below.
+
+[![ProsperoTV Live TV screen](docs/images/prosperotv.png)](https://i.imgur.com/oziiCgb.mp4)
+
 ## Highlights
 
 - Browse thousands of community-maintained IPTV channels from the iptv-org
@@ -52,7 +56,7 @@
 | --- | --- |
 | Shell title | `ProsperoTV` |
 | Title ID | `PPSA99003` |
-| Shell category | Game |
+| Shell category | Media |
 | Current release version | `01.000.002` |
 | Release-version source | [`sce_sys/param.json`](sce_sys/param.json) |
 | Built-in catalog | `https://iptv-org.github.io/iptv/index.m3u` |
