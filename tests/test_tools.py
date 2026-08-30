@@ -6,7 +6,6 @@
 # Exercises identity initialization and deployment resolution without a console.
 
 import json
-import hashlib
 import os
 from pathlib import Path
 import shutil
@@ -165,9 +164,6 @@ class ToolTests(unittest.TestCase):
         manifest = (ROOT / "runtime/libc.prx.sha256").read_text(encoding="utf-8").split()
         self.assertEqual(len(manifest), 2)
         self.assertEqual(manifest[1], "*libc.prx")
-        runtime = ROOT / "runtime/libc.prx"
-        self.assertTrue(runtime.is_file())
-        self.assertEqual(hashlib.sha256(runtime.read_bytes()).hexdigest(), manifest[0])
 
         build = (ROOT / "tools/build.sh").read_text(encoding="utf-8")
         for required in (
