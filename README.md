@@ -36,16 +36,23 @@ Demo available by clicking the image below.
 - Use a polished full-screen RmlUi interface with DualSense navigation, native
   text input, dedicated Favorites, and an optional playback statistics overlay.
 
-<p align="center">
-  <img src="sce_sys/launch-background-source.png" alt="ProsperoTV artwork">
-</p>
-
 ## Project foundations
 
 > [!IMPORTANT]
 > **Built on the [PS5 Native App Boilerplate](https://github.com/blackbearreloaded/ps5-native-app-boilerplate).**
 > ProsperoTV retains its C++20 application structure, reproducible clean-room
 > runtime, FSELF tooling, tests, deployment flow, and release automation.
+
+> [!IMPORTANT]
+> **Video work is documented in [PS5 Hardware Video Decoding Research](https://github.com/blackbearreloaded/ps5-hardware-video-decoding-research).**
+> The companion repository records VideoDec2, H.264, HEVC, VP9, zero-copy AGC,
+> resolution, and performance findings that informed ProsperoTV's native video
+> pipeline.
+
+> [!IMPORTANT]
+> **Audio work is documented in [PS5 Audio Decoding Research](https://github.com/blackbearreloaded/ps5-audio-decoding-research).**
+> The companion repository records codec, AJM, hardware and firmware offload,
+> and output-path research that informed ProsperoTV's audio implementation.
 
 > [!IMPORTANT]
 > **Channel data comes from [iptv-org/iptv](https://github.com/iptv-org/iptv).**
