@@ -193,7 +193,12 @@ class ToolTests(unittest.TestCase):
             "height: 56px; }",
             styles,
         )
-        self.assertTrue((ROOT / "ui/icons/prosperotv.tga").is_file())
+        icon = (ROOT / "ui/icons/prosperotv.tga").read_bytes()
+        self.assertEqual(len(icon), 18 + 56 * 56 * 4 + 26)
+        self.assertEqual(icon[:3], b"\x00\x00\x02")
+        self.assertEqual(int.from_bytes(icon[12:14], "little"), 56)
+        self.assertEqual(int.from_bytes(icon[14:16], "little"), 56)
+        self.assertEqual(icon[16:18], b"\x20\x28")
 
     def test_native_video_handoff_closes_loading_presenter_before_decoder_open(self):
         player = (ROOT / "src/iptv_player.cpp").read_text(encoding="utf-8")
