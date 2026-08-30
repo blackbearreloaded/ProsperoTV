@@ -176,6 +176,25 @@ class ToolTests(unittest.TestCase):
         ):
             self.assertIn(required, build)
 
+    def test_release_is_media_and_topbar_uses_the_app_icon(self):
+        param = json.loads((ROOT / "sce_sys/param.json").read_text(encoding="utf-8"))
+        self.assertEqual(param["applicationCategoryType"], 65536)
+        self.assertEqual(param["contentBadgeType"], 2)
+        self.assertNotIn("gameIntent", param)
+
+        rml = (ROOT / "ui/main.rml").read_text(encoding="utf-8")
+        self.assertIn(
+            '<img id="brand-mark" src="icons/prosperotv.tga" width="56" height="56"',
+            rml,
+        )
+        styles = (ROOT / "ui/styles/app.rcss").read_text(encoding="utf-8")
+        self.assertIn(
+            "#brand-mark { position: absolute; left: 64px; top: 20px; width: 56px; "
+            "height: 56px; }",
+            styles,
+        )
+        self.assertTrue((ROOT / "ui/icons/prosperotv.tga").is_file())
+
     def test_native_video_handoff_closes_loading_presenter_before_decoder_open(self):
         player = (ROOT / "src/iptv_player.cpp").read_text(encoding="utf-8")
         start = player.index("int AdapterOpen(")

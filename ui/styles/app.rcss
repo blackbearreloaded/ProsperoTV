@@ -8,9 +8,10 @@ button { margin: 0; padding: 0; overflow: hidden; border: 1px #6f4a61; border-ra
 #app-background { position: absolute; left: 0px; top: 0px; width: 1920px; height: 1080px; }
 
 #topbar { position: absolute; left: 0px; top: 0px; width: 1920px; height: 96px; border-bottom: 2px #6f4a61; background-color: #171321; }
-#brand-block { position: absolute; left: 64px; top: 12px; width: 260px; height: 72px; }
-#brand-name { position: absolute; left: 0px; top: 0px; width: 260px; height: 42px; font-size: 36px; line-height: 42px; }
-#brand-version { position: absolute; left: 0px; top: 42px; width: 200px; height: 26px; color: #f3a447; font-size: 18px; line-height: 26px; }
+#brand-mark { position: absolute; left: 64px; top: 20px; width: 56px; height: 56px; }
+#brand-block { position: absolute; left: 140px; top: 14px; width: 250px; height: 68px; }
+#brand-name { position: absolute; left: 0px; top: 0px; width: 250px; height: 38px; font-size: 32px; line-height: 38px; letter-spacing: 1px; }
+#brand-version { position: absolute; left: 0px; top: 38px; width: 180px; height: 30px; color: #f3a447; font-size: 20px; line-height: 30px; }
 #primary-nav { position: absolute; left: 510px; top: 18px; width: 790px; height: 60px; }
 .nav-item { position: absolute; top: 0px; width: 250px; height: 60px; border-color: #171321; background-color: #171321; color: #c8afb6; text-align: center; }
 .nav-item span { position: absolute; left: 0px; top: 14px; width: 250px; text-align: center; }

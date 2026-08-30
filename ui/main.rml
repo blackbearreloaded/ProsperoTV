@@ -3,6 +3,7 @@
     <body>
         <div id="app-shell"><img id="app-background" src="images/background.tga" /><div id="safe-frame">
             <header id="topbar">
+                <img id="brand-mark" src="icons/prosperotv.tga" width="56" height="56" alt="" />
                 <div id="brand-block"><span id="brand-name">ProsperoTV</span><span id="brand-version">v{{PROSPERO_TV_VERSION}}</span></div>
                 <nav id="primary-nav"><button id="nav-live-tv" class="nav-item active"><span>Live TV</span></button><button id="nav-favorites" class="nav-item"><span>Favorites</span></button><button id="nav-sources" class="nav-item"><span>Sources</span></button></nav>
                 <div id="header-status" class="status-inline"><span id="header-status-dot" class="status-dot ready"></span><span id="header-status-label">Ready</span></div>

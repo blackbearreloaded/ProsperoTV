@@ -2,23 +2,16 @@
   "ageLevel": {
     "default": 0
   },
-  "applicationCategoryType": 0,
+  "applicationCategoryType": 65536,
   "applicationDrmType": "free",
   "attribute": 1644167168,
   "attribute2": 0,
   "attribute3": 0,
   "conceptId": "99003",
-  "contentBadgeType": 1,
+  "contentBadgeType": 2,
   "contentId": "UP9000-PPSA99003_00-PROSPEROTV000001",
   "contentVersion": "01.000.002",
   "downloadDataSize": 256,
-  "gameIntent": {
-    "permittedIntents": [
-      {
-        "intentType": "launchActivity"
-      }
-    ]
-  },
   "localizedParameters": {
     "defaultLanguage": "en-US",
     "en-US": {
