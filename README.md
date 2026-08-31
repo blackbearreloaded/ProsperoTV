@@ -6,9 +6,9 @@
 
 <p align="center">
   <strong>A native IPTV client for PlayStation 5 homebrew</strong><br>
-  Browse, search, and save channels from the iptv-org catalog with an
-  offline-first SQLite cache, a controller-first interface, and native PS5
-  video decoding.
+  Browse, search, and save channels from iptv-org, custom M3U playlists, or
+  your own Xtream Codes provider with an offline-first SQLite cache, a
+  controller-first interface, and native PS5 video decoding.
 </p>
 
 <p align="center">
@@ -24,7 +24,8 @@ Demo available by clicking the image below.
 ## Highlights
 
 - Browse thousands of community-maintained IPTV channels from the iptv-org
-  catalog or add a custom HTTP(S) M3U playlist.
+  catalog, add a custom HTTP(S) M3U playlist, or connect an Xtream Codes
+  account.
 - Search by name and filter by country, language, category, and advertised
   quality with continuous controller paging.
 - Decode H.264, HEVC, and VP9 through native PS5 video paths at resolutions up
@@ -64,7 +65,7 @@ Demo available by clicking the image below.
 | Shell title | `ProsperoTV` |
 | Title ID | `PPSA99003` |
 | Shell category | Media |
-| Current release version | `01.000.002` |
+| Current beta version | `01.000.003` |
 | Release-version source | [`sce_sys/param.json`](sce_sys/param.json) |
 | Built-in catalog | `https://iptv-org.github.io/iptv/index.m3u` |
 | Writable data | `/download0` only |
@@ -81,6 +82,9 @@ Demo available by clicking the image below.
   `/download0`; failed refreshes leave the last good database untouched.
 - Add a custom HTTP(S) M3U or M3U8 playlist alongside the built-in iptv-org
   source.
+- Add a user-supplied Xtream server, username, and password through masked
+  native password entry; authenticate with the Player API and cache its live
+  categories and channels locally.
 - Return to the same screen, group, page, and channel after playback closes.
 - Play HLS and direct MPEG-TS streams with H.264 or HEVC video and supported
   AAC audio through the native PS5 media path.
@@ -118,6 +122,7 @@ at 3840×2160. Codec and renderer details are documented in
 | Square | Add or remove a favorite |
 | Triangle | Open advanced search and filters |
 | L1 / R1 | Switch between Live TV, Favorites, and Sources |
+| Triangle on a configurable source | Edit the custom M3U URL or Xtream account |
 | Options | Refresh the selected catalog source |
 | Circle / Options during playback | Stop playback and return to the browser |
 | Touchpad + R1 during playback | Toggle codec and performance statistics |
@@ -188,6 +193,12 @@ make deploy PS5_HOST=192.168.1.100 DEPLOY_FORMAT=folder
 > the console online and leave ProsperoTV open until the catalog is ready.
 > Later launches load the local database immediately.
 
+Xtream support is for credentials supplied by the user. ProsperoTV does not
+include, sell, or discover provider accounts. The server, username, and
+password are stored in a local `/download0` record and are never written to the
+application log; the credential record is not encrypted, so do not share title
+data copied from the console.
+
 Deployment writes only title-scoped paths under `/data/homebrew`. See
 [Deployment](docs/DEPLOYMENT.md) for the complete workflow.
 
@@ -200,11 +211,11 @@ make check           # lint + tests + complete folder build
 make ffpfsc          # production folder + compressed release image
 ```
 
-Host tests cover catalog parsing and persistence, HLS parsing, HTTP error
-classification, MPEG-TS access-unit handling, VP9/WebM parsing, native-app
-layout, runtime handoff, and presentation constraints. Hardware acceptance is
-performed separately on PS5 with bounded channel samples, decoder telemetry,
-and teardown checks.
+Host tests cover M3U and Xtream catalog parsing and persistence, HLS parsing,
+HTTP error classification, MPEG-TS access-unit handling, VP9/WebM parsing,
+native-app layout, runtime handoff, and presentation constraints. Hardware
+acceptance is performed separately on PS5 with bounded channel samples,
+decoder telemetry, and teardown checks.
 
 GitHub Actions runs linting, all host tests, deterministic runtime
 reproduction, and the FFPFSC build. Pushing a tag that exactly matches
@@ -215,6 +226,7 @@ reproduction, and the FFPFSC build. Pushing a tag that exactly matches
 ```text
 src/main.cpp                  Native SDL/RmlUi lifetime and renderer bridge
 src/iptv_app.cpp              Screens, focus, search, paging, and user state
+src/iptv_xtream.cpp           Xtream credentials, Player API parsing, and live URLs
 src/iptv_player.cpp           Stream selection, buffering, playback, and errors
 src/iptv_stream.cpp           MPEG-TS demux and H.264/HEVC access-unit assembly
 src/iptv_native_backend.c     Native video/audio decode and presentation backend
@@ -238,8 +250,8 @@ PS5 `NN.NNN.NNN` format without a `v` prefix.
 
 ```bash
 # After updating param.json and passing the release gates:
-git tag 01.000.002
-git push origin main 01.000.002
+git tag 01.000.003
+git push origin main 01.000.003
 ```
 
 The release workflow rejects a mismatched tag. See

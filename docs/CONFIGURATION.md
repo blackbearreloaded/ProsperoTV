@@ -141,5 +141,22 @@ temporary file and rename it into place to avoid partial writes. Provide an
 application-level export/import mechanism for important data because retention
 after title deletion or cache-management actions is not guaranteed.
 
+ProsperoTV offers three channel sources from its Sources screen:
+
+- The built-in iptv-org M3U catalog.
+- One custom HTTP(S) M3U or M3U8 URL.
+- One user-supplied Xtream Codes account, entered as a server base URL,
+  username, and password. The native PS5 keyboard masks password entry.
+
+Xtream setup accepts either the provider base URL or a URL ending in
+`/player_api.php`. It authenticates with the Player API, imports live
+categories and streams, and stores the resulting channel catalog in the same
+SQLite format used by the M3U sources. VOD, series, catch-up, and account
+discovery are outside the current live-TV scope.
+
+The Xtream credential record is written atomically below `/download0` and is
+never logged or packaged. It is local but not encrypted; users should not share
+copied title data containing `prosperotv-xtream-v1.txt`.
+
 Native SaveData initialization is not part of this baseline; see
 [Platform findings](PLATFORM_NOTES.md).

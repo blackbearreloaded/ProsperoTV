@@ -12,6 +12,9 @@
 
 #define SCE_SYSMODULE_IME_DIALOG UINT16_C(0x0096)
 #define SCE_COMMON_DIALOG_ALREADY_INITIALIZED UINT32_C(0x80B80002)
+#define SCE_IME_TYPE_DEFAULT INT32_C(0)
+#define SCE_IME_TYPE_BASIC_LATIN INT32_C(1)
+#define SCE_IME_OPTION_PASSWORD UINT32_C(0x00000004)
 #define IME_TITLE_CHARACTERS 47U
 #define IME_PLACEHOLDER_CHARACTERS 95U
 
@@ -65,8 +68,17 @@ static uint16_t text_buffer[IPTV_IME_BUFFER_CHARACTERS + 1U];
 static uint16_t placeholder[IME_PLACEHOLDER_CHARACTERS + 1U];
 static uint16_t title[IME_TITLE_CHARACTERS + 1U];
 static unsigned requested_characters;
+static int32_t requested_type;
+static uint32_t requested_option;
 static iptv_ime_result_fn result_callback;
 static void *result_user_data;
+
+static void clear_sensitive(void *memory, size_t size)
+{
+    volatile unsigned char *bytes = memory;
+    while (size-- != 0)
+        *bytes++ = 0;
+}
 
 static void utf8_to_utf16(const char *source, uint16_t *output, size_t capacity)
 {
@@ -192,9 +204,10 @@ void iptv_ime_request(const char *value, iptv_ime_result_fn callback, void *user
                             IPTV_IME_MAX_TEXT_CHARACTERS, callback, user_data);
 }
 
-void iptv_ime_request_prompt(const char *value, const char *dialog_title,
-                             const char *dialog_placeholder, unsigned max_text_characters,
-                             iptv_ime_result_fn callback, void *user_data)
+static void request_with_options(const char *value, const char *dialog_title,
+                                 const char *dialog_placeholder, unsigned max_text_characters,
+                                 int32_t type, uint32_t option, iptv_ime_result_fn callback,
+                                 void *user_data)
 {
     if (active || requested || !module_loaded)
         return;
@@ -205,9 +218,27 @@ void iptv_ime_request_prompt(const char *value, const char *dialog_title,
     SDL_strlcpy(requested_placeholder, dialog_placeholder != NULL ? dialog_placeholder : "",
                 sizeof(requested_placeholder));
     requested_characters = max_text_characters;
+    requested_type = type;
+    requested_option = option;
     result_callback = callback;
     result_user_data = user_data;
     requested = true;
+}
+
+void iptv_ime_request_prompt(const char *value, const char *dialog_title,
+                             const char *dialog_placeholder, unsigned max_text_characters,
+                             iptv_ime_result_fn callback, void *user_data)
+{
+    request_with_options(value, dialog_title, dialog_placeholder, max_text_characters,
+                         SCE_IME_TYPE_DEFAULT, 0, callback, user_data);
+}
+
+void iptv_ime_request_password(const char *dialog_title, const char *dialog_placeholder,
+                               unsigned max_text_characters, iptv_ime_result_fn callback,
+                               void *user_data)
+{
+    request_with_options("", dialog_title, dialog_placeholder, max_text_characters,
+                         SCE_IME_TYPE_BASIC_LATIN, SCE_IME_OPTION_PASSWORD, callback, user_data);
 }
 
 static void start_requested(void)
@@ -216,6 +247,8 @@ static void start_requested(void)
     if (sceUserServiceGetForegroundUser(&user_id) < 0)
     {
         requested = false;
+        clear_sensitive(initial_text, sizeof(initial_text));
+        clear_sensitive(text_buffer, sizeof(text_buffer));
         return;
     }
     utf8_to_utf16(initial_text, text_buffer, sizeof(text_buffer) / sizeof(text_buffer[0]));
@@ -223,8 +256,9 @@ static void start_requested(void)
     utf8_to_utf16(requested_title, title, sizeof(title) / sizeof(title[0]));
     const sce_ime_dialog_param_t param = {
         .user_id = user_id,
-        .type = 0,
+        .type = requested_type,
         .enter_label = 2,
+        .option = requested_option,
         .max_text_length = requested_characters,
         .input_text_buffer = text_buffer,
         .horizontal_alignment = 1,
@@ -255,9 +289,14 @@ void iptv_ime_poll(void)
             char text[IPTV_IME_BUFFER_BYTES];
             utf16_to_utf8(text_buffer, text, sizeof(text));
             result_callback(text, result_user_data);
+            clear_sensitive(text, sizeof(text));
         }
         sceImeDialogTerm();
     }
+    clear_sensitive(initial_text, sizeof(initial_text));
+    clear_sensitive(text_buffer, sizeof(text_buffer));
+    requested_type = SCE_IME_TYPE_DEFAULT;
+    requested_option = 0;
     active = false;
 }
 
@@ -266,6 +305,10 @@ void iptv_ime_cancel(void)
     requested = false;
     if (active)
         sceImeDialogAbort();
+    clear_sensitive(initial_text, sizeof(initial_text));
+    clear_sensitive(text_buffer, sizeof(text_buffer));
+    requested_type = SCE_IME_TYPE_DEFAULT;
+    requested_option = 0;
 }
 
 void iptv_ime_shutdown(void)

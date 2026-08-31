@@ -25,6 +25,9 @@ void iptv_ime_request_prompt(const char *initial_text, const char *title,
                              const char *placeholder,
                              unsigned max_text_characters,
                              iptv_ime_result_fn callback, void *user_data);
+void iptv_ime_request_password(const char *title, const char *placeholder,
+                               unsigned max_text_characters,
+                               iptv_ime_result_fn callback, void *user_data);
 void iptv_ime_poll(void);
 void iptv_ime_cancel(void);
 void iptv_ime_shutdown(void);

@@ -9,6 +9,7 @@
 #include "iptv_ime.h"
 #include "iptv_source_state.h"
 #include "iptv_user_state.h"
+#include "iptv_xtream.h"
 
 #include <array>
 #include <atomic>
@@ -84,10 +85,8 @@ private:
         unsigned count = 0;
     };
 
-    enum class SourceSelection {
-        BuiltIn,
-        Custom
-    };
+    using SourceSelection = iptv::SourceKind;
+    static constexpr unsigned SourceCount = 3;
 
     enum class SourceHealth {
         Empty,
@@ -124,8 +123,13 @@ private:
     unsigned search_focus_ = 0;
     bool ime_ready_ = false;
     SourceSelection active_source_ = SourceSelection::BuiltIn;
-    std::array<SourceHealth, 2> source_health_{};
+    std::array<SourceHealth, SourceCount> source_health_{};
     std::string custom_source_url_;
+    iptv::XtreamCredentials xtream_credentials_{};
+    iptv::XtreamCredentials xtream_editor_{};
+    enum class XtreamEditorStage { None, Server, Username, Password };
+    XtreamEditorStage xtream_editor_stage_ = XtreamEditorStage::None;
+    bool xtream_editor_prompt_pending_ = false;
     SourceSelection refresh_source_ = SourceSelection::BuiltIn;
     std::string refresh_url_;
     std::string refresh_cache_path_;
@@ -138,6 +142,8 @@ private:
     iptv::http::FetchResult pending_fetch_{};
     iptv::ParseReport pending_report_{};
     iptv::CatalogState pending_catalog_{};
+    iptv::XtreamStatus pending_xtream_status_ = iptv::XtreamStatus::ok;
+    std::string pending_xtream_message_;
     bool pending_cache_saved_ = false;
     iptv::CatalogState catalog_{};
     iptv::UserState user_state_{};
@@ -158,6 +164,11 @@ private:
     void SelectSource(SourceSelection source);
     void OpenCustomSourceEditor();
     void ApplyCustomSourceUrl(const char* url);
+    void OpenXtreamEditor();
+    void ContinueXtreamEditor();
+    void ApplyXtreamServer(const char* server);
+    void ApplyXtreamUsername(const char* username);
+    void ApplyXtreamPassword(const char* password);
     void RequestRefresh();
     void ConsumeRefresh();
     bool JoinRefreshThread();
@@ -178,4 +189,7 @@ private:
     static void* RefreshThreadEntry(void* argument);
     static void SearchResult(const char* text, void* user_data);
     static void CustomSourceResult(const char* text, void* user_data);
+    static void XtreamServerResult(const char* text, void* user_data);
+    static void XtreamUsernameResult(const char* text, void* user_data);
+    static void XtreamPasswordResult(const char* text, void* user_data);
 };

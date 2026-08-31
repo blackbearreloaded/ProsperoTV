@@ -15,6 +15,7 @@
                     <section id="source-region" class="rail-panel"><span class="panel-kicker">SOURCE</span><div class="rail-list">
                         <div id="source-slot-0" class="rail-item selected"><span id="source-name-0">iptv-org</span><span id="source-meta-0">Public M3U</span><span id="source-status-0" class="item-status">LOADING</span></div>
                         <div id="source-slot-1" class="rail-item hidden"><span id="source-name-1">Custom playlist</span><span id="source-meta-1">Add URL</span><span id="source-status-1" class="item-status">EMPTY</span></div>
+                        <div id="source-slot-2" class="rail-item hidden"><span id="source-name-2">Xtream Codes</span><span id="source-meta-2">Add account</span><span id="source-status-2" class="item-status">EMPTY</span></div>
                     </div></section>
                     <section id="group-region" class="rail-panel"><span class="panel-kicker">QUICK VIEWS</span><div class="rail-list">
                         <button id="group-slot-0" class="rail-item group-item selected"><span>All</span><span id="group-count-0">--</span></button>
@@ -43,8 +44,8 @@
                 </section>
 
                 <section id="screen-sources" class="screen hidden">
-                    <div class="screen-heading">Sources</div><div class="screen-subtitle">Use the free iptv-org catalog or add an HTTP(S) M3U playlist.</div>
-                    <section id="source-management-region"><span class="panel-kicker">PLAYLISTS</span><button id="source-management-slot-0" class="source-management-card selected"><span id="source-management-name-0">iptv-org public catalog</span><span id="source-management-url-0">https://iptv-org.github.io/iptv/index.m3u</span><span id="source-management-health-0" class="item-status">STARTING</span></button><button id="source-management-slot-1" class="source-management-card"><span id="source-management-name-1">Add a custom playlist</span><span id="source-management-url-1">Cross to enter an HTTP(S) M3U URL</span><span id="source-management-health-1" class="item-status">EMPTY</span></button></section>
+                    <div class="screen-heading">Sources</div><div class="screen-subtitle">Use iptv-org, add an HTTP(S) M3U playlist, or connect your own Xtream Codes account. Triangle edits a saved source.</div>
+                    <section id="source-management-region"><span class="panel-kicker">CHANNEL SOURCES</span><button id="source-management-slot-0" class="source-management-card selected"><span id="source-management-name-0">iptv-org public catalog</span><span id="source-management-url-0">https://iptv-org.github.io/iptv/index.m3u</span><span id="source-management-health-0" class="item-status">STARTING</span></button><button id="source-management-slot-1" class="source-management-card"><span id="source-management-name-1">Add a custom playlist</span><span id="source-management-url-1">Cross to enter an HTTP(S) M3U URL</span><span id="source-management-health-1" class="item-status">EMPTY</span></button><button id="source-management-slot-2" class="source-management-card"><span id="source-management-name-2">Add an Xtream Codes account</span><span id="source-management-url-2">Cross to enter server URL, username and password</span><span id="source-management-health-2" class="item-status">EMPTY</span></button></section>
                     <section id="source-status-region"><span class="panel-kicker">SOURCE STATUS</span><span id="source-status-label">Starting catalog</span><span id="source-status-detail">Refresh details appear here.</span><button id="source-refresh-button" class="primary-action"><span id="source-refresh-label">Refresh selected source</span></button></section>
                 </section>
             </main>

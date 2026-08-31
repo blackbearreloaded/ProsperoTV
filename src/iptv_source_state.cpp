@@ -113,14 +113,17 @@ SourceStateStatus LoadCustomSourceUrl(const std::string &path, std::string *url)
     return SourceStateStatus::ok;
 }
 
-SourceStateStatus SaveActiveSource(const std::string &path, bool custom)
+SourceStateStatus SaveActiveSource(const std::string &path, SourceKind source)
 {
     if (path.empty())
         return SourceStateStatus::invalid_argument;
     constexpr char built_in[] = "built-in\n";
     constexpr char custom_source[] = "custom\n";
-    const char *value = custom ? custom_source : built_in;
-    const std::size_t bytes = custom ? sizeof(custom_source) - 1u : sizeof(built_in) - 1u;
+    constexpr char xtream_source[] = "xtream\n";
+    const char *value = source == SourceKind::Custom   ? custom_source
+                        : source == SourceKind::Xtream ? xtream_source
+                                                       : built_in;
+    const std::size_t bytes = std::strlen(value);
     const std::string temporary = path + ".tmp";
     std::FILE *output = std::fopen(temporary.c_str(), "wb");
     if (!output)
@@ -139,14 +142,14 @@ SourceStateStatus SaveActiveSource(const std::string &path, bool custom)
     return replaced;
 }
 
-SourceStateStatus LoadActiveSource(const std::string &path, bool *custom)
+SourceStateStatus LoadActiveSource(const std::string &path, SourceKind *source)
 {
-    if (path.empty() || !custom)
+    if (path.empty() || !source)
         return SourceStateStatus::invalid_argument;
     std::FILE *input = std::fopen(path.c_str(), "rb");
     if (!input)
         return SourceStateStatus::not_found;
-    char value[10] = {};
+    char value[16] = {};
     const std::size_t bytes = std::fread(value, 1, sizeof(value), input);
     const bool failed = std::ferror(input) != 0 || std::fclose(input) != 0;
     if (failed)
@@ -155,12 +158,17 @@ SourceStateStatus LoadActiveSource(const std::string &path, bool *custom)
         return SourceStateStatus::corrupt;
     if (std::strcmp(value, "built-in\n") == 0)
     {
-        *custom = false;
+        *source = SourceKind::BuiltIn;
         return SourceStateStatus::ok;
     }
     if (std::strcmp(value, "custom\n") == 0)
     {
-        *custom = true;
+        *source = SourceKind::Custom;
+        return SourceStateStatus::ok;
+    }
+    if (std::strcmp(value, "xtream\n") == 0)
+    {
+        *source = SourceKind::Xtream;
         return SourceStateStatus::ok;
     }
     return SourceStateStatus::corrupt;
@@ -176,14 +184,14 @@ SourceStateStatus LoadCustomSourceUrl(std::string *url)
     return LoadCustomSourceUrl(kDefaultCustomSourcePath, url);
 }
 
-SourceStateStatus SaveActiveSource(bool custom)
+SourceStateStatus SaveActiveSource(SourceKind source)
 {
-    return SaveActiveSource(kDefaultActiveSourcePath, custom);
+    return SaveActiveSource(kDefaultActiveSourcePath, source);
 }
 
-SourceStateStatus LoadActiveSource(bool *custom)
+SourceStateStatus LoadActiveSource(SourceKind *source)
 {
-    return LoadActiveSource(kDefaultActiveSourcePath, custom);
+    return LoadActiveSource(kDefaultActiveSourcePath, source);
 }
 
 std::uint64_t CustomSourceId(std::string_view url)

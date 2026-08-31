@@ -27,6 +27,12 @@ enum class SourceStateStatus : std::uint8_t {
     corrupt,
 };
 
+enum class SourceKind : std::uint8_t {
+    BuiltIn,
+    Custom,
+    Xtream,
+};
+
 SourceStateStatus SaveCustomSourceUrl(
     const std::string& path, std::string_view url);
 SourceStateStatus LoadCustomSourceUrl(
@@ -34,10 +40,10 @@ SourceStateStatus LoadCustomSourceUrl(
 
 SourceStateStatus SaveCustomSourceUrl(std::string_view url);
 SourceStateStatus LoadCustomSourceUrl(std::string* url);
-SourceStateStatus SaveActiveSource(const std::string& path, bool custom);
-SourceStateStatus LoadActiveSource(const std::string& path, bool* custom);
-SourceStateStatus SaveActiveSource(bool custom);
-SourceStateStatus LoadActiveSource(bool* custom);
+SourceStateStatus SaveActiveSource(const std::string& path, SourceKind source);
+SourceStateStatus LoadActiveSource(const std::string& path, SourceKind* source);
+SourceStateStatus SaveActiveSource(SourceKind source);
+SourceStateStatus LoadActiveSource(SourceKind* source);
 std::uint64_t CustomSourceId(std::string_view url);
 
 }  // namespace iptv

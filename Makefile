@@ -77,10 +77,13 @@ test-unit: $(HOST_UNIT_TEST)
 $(HOST_UNIT_TEST): tests/test_vp9_packet.cpp tests/test_iptv_catalog.cpp \
 		tests/test_iptv_hls.cpp tests/test_iptv_http.cpp \
 		tests/test_iptv_store.cpp tests/test_iptv_stream.cpp tests/test_iptv_webm.cpp \
+		tests/test_iptv_xtream.cpp \
 		src/iptv_vp9_packet.c src/iptv_catalog.cpp \
-		src/iptv_hls.cpp src/iptv_http.cpp src/iptv_store.cpp src/iptv_stream.cpp src/iptv_webm.cpp \
+		src/iptv_hls.cpp src/iptv_http.cpp src/iptv_source_state.cpp src/iptv_store.cpp \
+		src/iptv_stream.cpp src/iptv_webm.cpp src/iptv_xtream.cpp \
 		include/iptv_vp9_packet.h include/iptv_catalog.h \
-		include/iptv_hls.h include/iptv_http.h include/iptv_store.h include/iptv_stream.h include/iptv_webm.h \
+		include/iptv_hls.h include/iptv_http.h include/iptv_source_state.h include/iptv_store.h \
+		include/iptv_stream.h include/iptv_webm.h include/iptv_xtream.h \
 		tools/setup-test-dependencies.sh | test-deps
 	@printf '%s\n' '==> [test-unit] Compiling the host-native GoogleTest binary'
 	@mkdir -p -- $(@D)
@@ -97,8 +100,9 @@ $(HOST_UNIT_TEST): tests/test_vp9_packet.cpp tests/test_iptv_catalog.cpp \
 			-isystem "$$gtest/googletest/include" \
 			tests/test_vp9_packet.cpp tests/test_iptv_catalog.cpp tests/test_iptv_http.cpp \
 			tests/test_iptv_hls.cpp tests/test_iptv_store.cpp tests/test_iptv_stream.cpp \
-			tests/test_iptv_webm.cpp src/iptv_catalog.cpp src/iptv_hls.cpp \
-			src/iptv_http.cpp src/iptv_store.cpp src/iptv_stream.cpp src/iptv_webm.cpp \
+			tests/test_iptv_webm.cpp tests/test_iptv_xtream.cpp src/iptv_catalog.cpp \
+			src/iptv_hls.cpp src/iptv_http.cpp src/iptv_source_state.cpp src/iptv_store.cpp \
+			src/iptv_stream.cpp src/iptv_webm.cpp src/iptv_xtream.cpp \
 			$(@D)/iptv-vp9-packet.o \
 			$(@D)/gtest-all.o $(@D)/gtest-main.o \
 			$(HOST_TEST_LDFLAGS) $(HOST_TEST_LIBS) -o $@

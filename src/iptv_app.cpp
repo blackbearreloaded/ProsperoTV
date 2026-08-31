@@ -35,6 +35,7 @@ namespace
 constexpr char kCatalogUrl[] = "https://iptv-org.github.io/iptv/index.m3u";
 constexpr char kCatalogCachePath[] = "/download0/prosperotv-catalog.sqlite3";
 constexpr char kCustomCatalogCachePath[] = "/download0/prosperotv-custom-catalog.sqlite3";
+constexpr char kXtreamCatalogCachePath[] = "/download0/prosperotv-xtream-catalog.sqlite3";
 constexpr std::uint64_t kCatalogSourceId = UINT64_C(0x495054562d4f5247);
 constexpr std::uint64_t kCatalogRefreshSeconds = UINT64_C(12) * 60u * 60u;
 constexpr std::size_t kCatalogThreadStackBytes = 4u * 1024u * 1024u;
@@ -86,6 +87,22 @@ bool EqualsCi(std::string_view left, std::string_view right)
         if (std::tolower(static_cast<unsigned char>(left[index])) !=
             std::tolower(static_cast<unsigned char>(right[index])))
             return false;
+    return true;
+}
+
+bool ValidCredentialInput(const char *value)
+{
+    if (!value || !*value)
+        return false;
+    const std::size_t bytes = std::strlen(value);
+    if (bytes > iptv::kMaxXtreamCredentialBytes)
+        return false;
+    for (std::size_t index = 0; index < bytes; ++index)
+    {
+        const unsigned char byte = static_cast<unsigned char>(value[index]);
+        if (byte < 0x20u || byte == 0x7fu)
+            return false;
+    }
     return true;
 }
 
@@ -397,6 +414,10 @@ bool IptvApp::Initialize(Rml::ElementDocument *document)
     active_source_ = SourceSelection::BuiltIn;
     source_health_.fill(SourceHealth::Empty);
     custom_source_url_.clear();
+    xtream_credentials_ = {};
+    xtream_editor_ = {};
+    xtream_editor_stage_ = XtreamEditorStage::None;
+    xtream_editor_prompt_pending_ = false;
     refresh_url_.clear();
     refresh_cache_path_.clear();
     refresh_source_id_ = 0;
@@ -410,6 +431,8 @@ bool IptvApp::Initialize(Rml::ElementDocument *document)
     refresh_queued_ = false;
     refresh_complete_.store(false, std::memory_order_relaxed);
     shutdown_requested_.store(false, std::memory_order_relaxed);
+    pending_xtream_status_ = iptv::XtreamStatus::ok;
+    pending_xtream_message_.clear();
 
     std::string saved_custom_url;
     if (iptv::LoadCustomSourceUrl(&saved_custom_url) == iptv::SourceStateStatus::ok)
@@ -418,17 +441,28 @@ bool IptvApp::Initialize(Rml::ElementDocument *document)
         source_health_[1] = SourceHealth::Saved;
     }
 
-    bool saved_custom_active = false;
-    if (iptv::LoadActiveSource(&saved_custom_active) == iptv::SourceStateStatus::ok &&
-        saved_custom_active && !custom_source_url_.empty())
+    if (iptv::LoadXtreamCredentials(&xtream_credentials_) == iptv::XtreamStatus::ok)
+        source_health_[2] = SourceHealth::Saved;
+
+    SourceSelection saved_source = SourceSelection::BuiltIn;
+    if (iptv::LoadActiveSource(&saved_source) == iptv::SourceStateStatus::ok)
     {
-        active_source_ = SourceSelection::Custom;
+        if ((saved_source == SourceSelection::Custom && !custom_source_url_.empty()) ||
+            (saved_source == SourceSelection::Xtream &&
+             iptv::ValidateXtreamCredentials(xtream_credentials_)) ||
+            saved_source == SourceSelection::BuiltIn)
+            active_source_ = saved_source;
     }
 
     const bool custom_active = active_source_ == SourceSelection::Custom;
-    const char *active_cache_path = custom_active ? kCustomCatalogCachePath : kCatalogCachePath;
-    const std::uint64_t active_source_id =
-        custom_active ? iptv::CustomSourceId(custom_source_url_) : kCatalogSourceId;
+    const bool xtream_active = active_source_ == SourceSelection::Xtream;
+    const char *active_cache_path = custom_active   ? kCustomCatalogCachePath
+                                    : xtream_active ? kXtreamCatalogCachePath
+                                                    : kCatalogCachePath;
+    const std::uint64_t active_source_id = custom_active ? iptv::CustomSourceId(custom_source_url_)
+                                           : xtream_active
+                                               ? iptv::XtreamSourceId(xtream_credentials_)
+                                               : kCatalogSourceId;
     iptv::StoreReport cache_report;
     const iptv::StoreStatus cache_status =
         iptv::LoadCatalog(active_cache_path, &catalog_, {}, &cache_report);
@@ -441,8 +475,9 @@ bool IptvApp::Initialize(Rml::ElementDocument *document)
         (void)iptv::LoadPlaybackResults(iptv::kDefaultPlaybackHistoryPath, active_source_id,
                                         &catalog_);
     source_health_[static_cast<unsigned>(active_source_)] = catalog_loaded_ ? SourceHealth::Cached
-                                                            : custom_active ? SourceHealth::Saved
-                                                                            : SourceHealth::Empty;
+                                                            : custom_active || xtream_active
+                                                                ? SourceHealth::Saved
+                                                                : SourceHealth::Empty;
     RebuildFacets();
     RebuildFilteredChannels();
     ime_ready_ = iptv_ime_init();
@@ -456,9 +491,12 @@ bool IptvApp::Initialize(Rml::ElementDocument *document)
     {
         SetStatusState("Cached catalog", true, false);
         SetText(document_, "source-status-label",
-                custom_active ? "Cached custom playlist ready" : "Cached catalog ready");
-        SetText(document_, "source-status-detail",
-                "Using the last good catalog while the public source refreshes in the background.");
+                custom_active   ? "Cached custom playlist ready"
+                : xtream_active ? "Cached Xtream catalog ready"
+                                : "Cached catalog ready");
+        SetText(
+            document_, "source-status-detail",
+            "Using the last good catalog while the selected source refreshes in the background.");
         SetText(document_, "source-status-0", "CACHED");
     }
     else
@@ -519,6 +557,7 @@ void IptvApp::Poll()
 {
     if (ime_ready_)
         iptv_ime_poll();
+    ContinueXtreamEditor();
     ConsumeRefresh();
 }
 
@@ -934,7 +973,7 @@ bool IptvApp::HandleInput(const IptvInputEvent &event)
         {
             if (event.key == IptvInputKey::Up && focus_slot_)
                 --focus_slot_;
-            else if (event.key == IptvInputKey::Down && focus_slot_ < 1)
+            else if (event.key == IptvInputKey::Down && focus_slot_ + 1u < SourceCount)
                 ++focus_slot_;
             else if (event.key == IptvInputKey::Right)
                 focus_target_ = FocusTarget::SourceRefresh;
@@ -942,7 +981,11 @@ bool IptvApp::HandleInput(const IptvInputEvent &event)
             {
                 OpenCustomSourceEditor();
             }
-            else if (event.key == IptvInputKey::Cross && focus_slot_ < 2)
+            else if (event.key == IptvInputKey::Triangle && focus_slot_ == 2)
+            {
+                OpenXtreamEditor();
+            }
+            else if (event.key == IptvInputKey::Cross && focus_slot_ < SourceCount)
             {
                 if (refresh_thread_)
                 {
@@ -956,9 +999,17 @@ bool IptvApp::HandleInput(const IptvInputEvent &event)
                 {
                     SelectSource(SourceSelection::BuiltIn);
                 }
-                else if (!custom_source_url_.empty())
+                else if (focus_slot_ == 1 && !custom_source_url_.empty())
                 {
                     SelectSource(SourceSelection::Custom);
+                }
+                else if (focus_slot_ == 2 && iptv::ValidateXtreamCredentials(xtream_credentials_))
+                {
+                    SelectSource(SourceSelection::Xtream);
+                }
+                else if (focus_slot_ == 2)
+                {
+                    OpenXtreamEditor();
                 }
                 else
                 {
@@ -1012,7 +1063,7 @@ void IptvApp::RefreshFocus()
         SetClass(document_, id, "selected", index == selected_group_);
     }
 
-    for (unsigned index = 0; index < 2; ++index)
+    for (unsigned index = 0; index < SourceCount; ++index)
     {
         char id[40];
         std::snprintf(id, sizeof(id), "source-management-slot-%u", index);
@@ -1090,7 +1141,16 @@ void IptvApp::RefreshSourceUi()
             custom_source_url_.empty() ? "Cross to enter an HTTP(S) M3U/M3U8 URL"
                                        : custom_source_url_);
 
-    for (unsigned index = 0; index < 2; ++index)
+    const bool xtream_ready = iptv::ValidateXtreamCredentials(xtream_credentials_);
+    SetText(document_, "source-name-2", "Xtream Codes");
+    SetText(document_, "source-meta-2", xtream_ready ? "Provider account" : "Add account");
+    SetText(document_, "source-management-name-2",
+            xtream_ready ? "Xtream Codes account" : "Add an Xtream Codes account");
+    SetText(document_, "source-management-url-2",
+            xtream_ready ? xtream_credentials_.server_url
+                         : "Cross to enter server URL, username and password");
+
+    for (unsigned index = 0; index < SourceCount; ++index)
     {
         char id[48];
         const char *health = health_names[static_cast<unsigned>(source_health_[index])];
@@ -1104,16 +1164,18 @@ void IptvApp::RefreshSourceUi()
         std::snprintf(id, sizeof(id), "source-management-slot-%u", index);
         SetClass(document_, id, "selected", index == static_cast<unsigned>(active_source_));
     }
-    SetVisible(document_, "source-slot-2", false);
-    SetVisible(document_, "source-management-slot-2", false);
 }
 
 void IptvApp::LoadActiveSourceCache()
 {
     const bool custom = active_source_ == SourceSelection::Custom;
-    const char *path = custom ? kCustomCatalogCachePath : kCatalogCachePath;
-    const std::uint64_t source_id =
-        custom ? iptv::CustomSourceId(custom_source_url_) : kCatalogSourceId;
+    const bool xtream = active_source_ == SourceSelection::Xtream;
+    const char *path = custom   ? kCustomCatalogCachePath
+                       : xtream ? kXtreamCatalogCachePath
+                                : kCatalogCachePath;
+    const std::uint64_t source_id = custom   ? iptv::CustomSourceId(custom_source_url_)
+                                    : xtream ? iptv::XtreamSourceId(xtream_credentials_)
+                                             : kCatalogSourceId;
     iptv::CatalogState cached;
     const iptv::StoreStatus status = iptv::LoadCatalog(path, &cached);
     catalog_loaded_ = status == iptv::StoreStatus::ok && cached.source_id == source_id &&
@@ -1122,8 +1184,9 @@ void IptvApp::LoadActiveSourceCache()
     if (catalog_loaded_)
         (void)iptv::LoadPlaybackResults(iptv::kDefaultPlaybackHistoryPath, source_id, &catalog_);
     source_health_[static_cast<unsigned>(active_source_)] = catalog_loaded_ ? SourceHealth::Cached
-                                                            : custom        ? SourceHealth::Saved
-                                                                            : SourceHealth::Empty;
+                                                            : custom || xtream
+                                                                ? SourceHealth::Saved
+                                                                : SourceHealth::Empty;
     page_offset_ = focus_slot_ = selected_slot_ = 0;
     RebuildFacets();
     RebuildFilteredChannels();
@@ -1140,17 +1203,24 @@ void IptvApp::SelectSource(SourceSelection source)
         OpenCustomSourceEditor();
         return;
     }
+    if (source == SourceSelection::Xtream && !iptv::ValidateXtreamCredentials(xtream_credentials_))
+    {
+        OpenXtreamEditor();
+        return;
+    }
     if (source != active_source_)
     {
         active_source_ = source;
         LoadActiveSourceCache();
     }
-    if (iptv::SaveActiveSource(source == SourceSelection::Custom) != iptv::SourceStateStatus::ok)
+    if (iptv::SaveActiveSource(source) != iptv::SourceStateStatus::ok)
     {
         SetStatusState("Source selected; preference not saved", true, false);
     }
     SetText(document_, "source-status-label",
-            source == SourceSelection::Custom ? "Custom playlist selected" : "iptv-org selected");
+            source == SourceSelection::Custom   ? "Custom playlist selected"
+            : source == SourceSelection::Xtream ? "Xtream Codes selected"
+                                                : "iptv-org selected");
     SetText(document_, "source-status-detail",
             catalog_loaded_ ? "Showing the saved cache while the selected playlist refreshes."
                             : "No cache is available; downloading the selected playlist now.");
@@ -1216,6 +1286,125 @@ void IptvApp::ApplyCustomSourceUrl(const char *url)
     SelectSource(SourceSelection::Custom);
 }
 
+void IptvApp::OpenXtreamEditor()
+{
+    if (refresh_thread_)
+        return;
+    if (!ime_ready_)
+    {
+        SetStatusState("Account entry unavailable", true, false);
+        SetText(document_, "source-status-label", "Native keyboard unavailable");
+        SetText(document_, "source-status-detail",
+                "The IME module could not be initialized for this launcher session.");
+        return;
+    }
+    xtream_editor_ = xtream_credentials_;
+    xtream_editor_stage_ = XtreamEditorStage::Server;
+    xtream_editor_prompt_pending_ = true;
+    SetStatusState("Configuring Xtream", true, false);
+    SetText(document_, "source-status-label", "Enter Xtream server URL");
+    SetText(document_, "source-status-detail",
+            "ProsperoTV will ask for the server, username and password in sequence.");
+}
+
+void IptvApp::ContinueXtreamEditor()
+{
+    if (!xtream_editor_prompt_pending_ || !ime_ready_)
+        return;
+    xtream_editor_prompt_pending_ = false;
+    switch (xtream_editor_stage_)
+    {
+    case XtreamEditorStage::Server:
+        iptv_ime_request_prompt(xtream_editor_.server_url.c_str(), "Xtream server URL",
+                                "http(s)://provider.example:port", IPTV_IME_BUFFER_CHARACTERS,
+                                &IptvApp::XtreamServerResult, this);
+        break;
+    case XtreamEditorStage::Username:
+        iptv_ime_request_prompt(xtream_editor_.username.c_str(), "Xtream username", "Username",
+                                IPTV_IME_BUFFER_CHARACTERS, &IptvApp::XtreamUsernameResult, this);
+        break;
+    case XtreamEditorStage::Password:
+        iptv_ime_request_password("Xtream password", "Password", IPTV_IME_BUFFER_CHARACTERS,
+                                  &IptvApp::XtreamPasswordResult, this);
+        break;
+    case XtreamEditorStage::None:
+        break;
+    }
+}
+
+void IptvApp::ApplyXtreamServer(const char *server)
+{
+    std::string normalized;
+    if (!server || !iptv::NormalizeXtreamServerUrl(server, &normalized))
+    {
+        xtream_editor_stage_ = XtreamEditorStage::None;
+        SetStatusState("Invalid Xtream server", false, true);
+        SetText(document_, "source-status-label", "Xtream server rejected");
+        SetText(document_, "source-status-detail",
+                "Enter an HTTP(S) base URL, optionally ending in /player_api.php.");
+        return;
+    }
+    xtream_editor_.server_url = std::move(normalized);
+    xtream_editor_stage_ = XtreamEditorStage::Username;
+    xtream_editor_prompt_pending_ = true;
+    SetText(document_, "source-status-label", "Enter Xtream username");
+}
+
+void IptvApp::ApplyXtreamUsername(const char *username)
+{
+    if (!ValidCredentialInput(username))
+    {
+        xtream_editor_stage_ = XtreamEditorStage::None;
+        SetStatusState("Invalid Xtream username", false, true);
+        SetText(document_, "source-status-label", "Xtream username rejected");
+        SetText(document_, "source-status-detail",
+                "The username cannot be empty or contain controls.");
+        return;
+    }
+    xtream_editor_.username = username;
+    xtream_editor_stage_ = XtreamEditorStage::Password;
+    xtream_editor_prompt_pending_ = true;
+    SetText(document_, "source-status-label", "Enter Xtream password");
+}
+
+void IptvApp::ApplyXtreamPassword(const char *password)
+{
+    xtream_editor_stage_ = XtreamEditorStage::None;
+    if (!ValidCredentialInput(password))
+    {
+        SetStatusState("Invalid Xtream password", false, true);
+        SetText(document_, "source-status-label", "Xtream password rejected");
+        SetText(document_, "source-status-detail",
+                "The password cannot be empty or contain controls.");
+        return;
+    }
+    xtream_editor_.password = password;
+    if (!iptv::ValidateXtreamCredentials(xtream_editor_))
+    {
+        SetStatusState("Invalid Xtream account", false, true);
+        SetText(document_, "source-status-label", "Xtream account rejected");
+        SetText(document_, "source-status-detail", "Check the server URL, username and password.");
+        return;
+    }
+    const bool changed =
+        !iptv::ValidateXtreamCredentials(xtream_credentials_) ||
+        iptv::XtreamSourceId(xtream_credentials_) != iptv::XtreamSourceId(xtream_editor_);
+    const iptv::XtreamStatus saved = iptv::SaveXtreamCredentials(xtream_editor_);
+    if (saved != iptv::XtreamStatus::ok)
+    {
+        SetStatusState("Unable to save Xtream account", false, true);
+        SetText(document_, "source-status-label", "Xtream account was not saved");
+        SetText(document_, "source-status-detail", iptv::XtreamStatusDescription(saved));
+        return;
+    }
+    xtream_credentials_ = std::move(xtream_editor_);
+    source_health_[2] = SourceHealth::Saved;
+    if (changed && active_source_ == SourceSelection::Xtream)
+        LoadActiveSourceCache();
+    RefreshSourceUi();
+    SelectSource(SourceSelection::Xtream);
+}
+
 void IptvApp::RequestRefresh()
 {
     if (!document_)
@@ -1230,25 +1419,39 @@ void IptvApp::RequestRefresh()
     refresh_queued_ = false;
 
     const bool custom = active_source_ == SourceSelection::Custom;
+    const bool xtream = active_source_ == SourceSelection::Xtream;
     if (custom && custom_source_url_.empty())
         return;
+    if (xtream && !iptv::ValidateXtreamCredentials(xtream_credentials_))
+    {
+        OpenXtreamEditor();
+        return;
+    }
     refresh_source_ = active_source_;
-    refresh_url_ = custom ? custom_source_url_ : kCatalogUrl;
-    refresh_cache_path_ = custom ? kCustomCatalogCachePath : kCatalogCachePath;
-    refresh_source_id_ = custom ? iptv::CustomSourceId(custom_source_url_) : kCatalogSourceId;
+    refresh_url_ = custom ? custom_source_url_ : xtream ? "" : kCatalogUrl;
+    refresh_cache_path_ = custom   ? kCustomCatalogCachePath
+                          : xtream ? kXtreamCatalogCachePath
+                                   : kCatalogCachePath;
+    refresh_source_id_ = custom   ? iptv::CustomSourceId(custom_source_url_)
+                         : xtream ? iptv::XtreamSourceId(xtream_credentials_)
+                                  : kCatalogSourceId;
     source_health_[static_cast<unsigned>(active_source_)] = SourceHealth::Refreshing;
 
     refresh_complete_.store(false, std::memory_order_relaxed);
     shutdown_requested_.store(false, std::memory_order_relaxed);
     pending_cache_saved_ = false;
+    pending_xtream_status_ = iptv::XtreamStatus::ok;
+    pending_xtream_message_.clear();
     SetStatusState("Refreshing", true, false);
     SetText(document_, "source-status-label",
-            custom ? "Refreshing custom playlist" : "Refreshing iptv-org catalog");
+            custom   ? "Refreshing custom playlist"
+            : xtream ? "Refreshing Xtream live channels"
+                     : "Refreshing iptv-org catalog");
     SetText(document_, "source-status-detail",
             catalog_loaded_
-                ? "Cached channels remain available while the bounded M3U request runs off the UI "
-                  "thread."
-                : "Downloading and parsing the bounded M3U response off the UI thread.");
+                ? "Cached channels remain available while the selected source refreshes."
+            : xtream ? "Authenticating and downloading the bounded Xtream live catalog."
+                     : "Downloading and parsing the bounded M3U response off the UI thread.");
     RefreshSourceUi();
     if (!error_retries_playback_)
         ShowCatalogError(false, "", "");
@@ -1292,12 +1495,13 @@ void *IptvApp::RefreshThreadEntry(void *argument)
     app->pending_catalog_ = {};
     app->pending_report_ = {};
     app->pending_cache_saved_ = false;
+    app->pending_xtream_status_ = iptv::XtreamStatus::ok;
+    app->pending_xtream_message_.clear();
     app->pending_network_status_ = iptv::http::NetworkInit();
 
     if (app->pending_network_status_ == iptv::http::Status::ok &&
         !app->shutdown_requested_.load(std::memory_order_acquire))
     {
-        std::vector<char> playlist(iptv::http::kDefaultMaxPlaylistBytes + 1u);
         const iptv::http::RequestControl control{
             [](void *context)
             {
@@ -1305,23 +1509,73 @@ void *IptvApp::RefreshThreadEntry(void *argument)
                 return current->shutdown_requested_.load(std::memory_order_acquire);
             },
             app};
-        app->pending_fetch_ =
-            iptv::http::GetM3u(app->refresh_url_.c_str(), playlist.data(), playlist.size(),
-                               iptv::http::kDefaultMaxPlaylistBytes, nullptr, &control);
-        if (app->pending_fetch_.status == iptv::http::Status::ok &&
-            !app->shutdown_requested_.load(std::memory_order_acquire))
+        if (app->refresh_source_ == SourceSelection::Xtream)
         {
-            const std::string_view input(playlist.data(), app->pending_fetch_.bytes);
-            app->pending_catalog_ =
-                iptv::ParseExtendedM3u(input, app->refresh_source_id_, {}, &app->pending_report_);
-            if (!app->pending_catalog_.channels.empty() &&
-                !app->shutdown_requested_.load(std::memory_order_acquire))
+            std::vector<char> response(iptv::kMaxXtreamResponseBytes + 1u);
+            std::string endpoint;
+            std::vector<iptv::XtreamCategory> categories;
+            iptv::XtreamAuth auth;
+            bool api_ready = true;
+            const auto fetch = [&](std::string_view action)
             {
-                app->pending_cache_saved_ =
-                    iptv::SaveCatalog(app->refresh_cache_path_, app->pending_catalog_) ==
-                    iptv::StoreStatus::ok;
+                if (!iptv::BuildXtreamApiUrl(app->xtream_credentials_, action, &endpoint))
+                {
+                    app->pending_xtream_status_ = iptv::XtreamStatus::invalid_argument;
+                    return false;
+                }
+                app->pending_fetch_ =
+                    iptv::http::GetM3u(endpoint.c_str(), response.data(), response.size(),
+                                       iptv::kMaxXtreamResponseBytes, nullptr, &control);
+                return app->pending_fetch_.status == iptv::http::Status::ok &&
+                       !app->shutdown_requested_.load(std::memory_order_acquire);
+            };
+            if (fetch(""))
+            {
+                app->pending_xtream_status_ = iptv::ParseXtreamAuth(
+                    std::string_view(response.data(), app->pending_fetch_.bytes), &auth);
+                if (app->pending_xtream_status_ != iptv::XtreamStatus::ok)
+                    app->pending_xtream_message_ = auth.message;
+            }
+            else
+            {
+                api_ready = false;
+            }
+            if (api_ready && app->pending_xtream_status_ == iptv::XtreamStatus::ok)
+            {
+                if (fetch("get_live_categories"))
+                    app->pending_xtream_status_ = iptv::ParseXtreamCategories(
+                        std::string_view(response.data(), app->pending_fetch_.bytes), &categories);
+                else
+                    api_ready = false;
+            }
+            if (api_ready && app->pending_xtream_status_ == iptv::XtreamStatus::ok)
+            {
+                if (fetch("get_live_streams"))
+                    app->pending_xtream_status_ = iptv::ParseXtreamLiveStreams(
+                        std::string_view(response.data(), app->pending_fetch_.bytes),
+                        app->xtream_credentials_, categories, app->refresh_source_id_,
+                        &app->pending_catalog_, &app->pending_report_);
             }
         }
+        else
+        {
+            std::vector<char> playlist(iptv::http::kDefaultMaxPlaylistBytes + 1u);
+            app->pending_fetch_ =
+                iptv::http::GetM3u(app->refresh_url_.c_str(), playlist.data(), playlist.size(),
+                                   iptv::http::kDefaultMaxPlaylistBytes, nullptr, &control);
+            if (app->pending_fetch_.status == iptv::http::Status::ok &&
+                !app->shutdown_requested_.load(std::memory_order_acquire))
+            {
+                const std::string_view input(playlist.data(), app->pending_fetch_.bytes);
+                app->pending_catalog_ = iptv::ParseExtendedM3u(input, app->refresh_source_id_, {},
+                                                               &app->pending_report_);
+            }
+        }
+        if (!app->pending_catalog_.channels.empty() &&
+            !app->shutdown_requested_.load(std::memory_order_acquire))
+            app->pending_cache_saved_ =
+                iptv::SaveCatalog(app->refresh_cache_path_, app->pending_catalog_) ==
+                iptv::StoreStatus::ok;
     }
     if (app->pending_network_status_ == iptv::http::Status::ok)
         iptv::http::NetworkShutdown();
@@ -1339,8 +1593,10 @@ void IptvApp::ConsumeRefresh()
         return;
     refresh_complete_.store(false, std::memory_order_relaxed);
 
+    const bool xtream = refresh_source_ == SourceSelection::Xtream;
     const bool success = pending_network_status_ == iptv::http::Status::ok &&
                          pending_fetch_.status == iptv::http::Status::ok &&
+                         (!xtream || pending_xtream_status_ == iptv::XtreamStatus::ok) &&
                          !pending_catalog_.channels.empty();
     const bool custom = refresh_source_ == SourceSelection::Custom;
     const unsigned source_index = static_cast<unsigned>(refresh_source_);
@@ -1367,16 +1623,18 @@ void IptvApp::ConsumeRefresh()
             SetStatusState(pending_cache_saved_ ? "Catalog ready" : "Catalog not cached",
                            !pending_cache_saved_, false);
         SetText(document_, "source-status-label",
-                custom ? (pending_cache_saved_ ? "Custom playlist ready"
-                                               : "Custom playlist loaded in memory")
-                       : (pending_cache_saved_ ? "Public catalog ready"
-                                               : "Public catalog loaded in memory"));
+                custom   ? (pending_cache_saved_ ? "Custom playlist ready"
+                                                 : "Custom playlist loaded in memory")
+                : xtream ? (pending_cache_saved_ ? "Xtream live catalog ready"
+                                                 : "Xtream catalog loaded in memory")
+                         : (pending_cache_saved_ ? "Public catalog ready"
+                                                 : "Public catalog loaded in memory"));
         char detail[160];
-        std::snprintf(
-            detail, sizeof(detail), "%u channels accepted; %u malformed records skipped.%s",
-            static_cast<unsigned>(catalog_.channels.size()),
-            static_cast<unsigned>(pending_report_.skipped),
-            pending_cache_saved_ ? "" : " Cache write failed; this catalog lasts until exit.");
+        std::snprintf(detail, sizeof(detail), "%u channels accepted; %u records skipped.%s",
+                      static_cast<unsigned>(catalog_.channels.size()),
+                      static_cast<unsigned>(pending_report_.skipped),
+                      pending_cache_saved_ ? ""
+                                           : " Cache write failed; this catalog lasts until exit.");
         SetText(document_, "source-status-detail", detail);
         if (!error_retries_playback_)
         {
@@ -1400,6 +1658,14 @@ void IptvApp::ConsumeRefresh()
         {
             std::snprintf(detail, sizeof(detail), "%s. Showing %u cached channels.",
                           FetchStatusName(pending_network_status_),
+                          static_cast<unsigned>(catalog_.channels.size()));
+        }
+        else if (xtream && pending_xtream_status_ != iptv::XtreamStatus::ok)
+        {
+            std::snprintf(detail, sizeof(detail), "%s%s%.96s. Showing %u cached channels.",
+                          iptv::XtreamStatusDescription(pending_xtream_status_),
+                          pending_xtream_message_.empty() ? "" : ": ",
+                          pending_xtream_message_.c_str(),
                           static_cast<unsigned>(catalog_.channels.size()));
         }
         else if (pending_fetch_.status == iptv::http::Status::http_status_error)
@@ -1439,6 +1705,13 @@ void IptvApp::ConsumeRefresh()
                           "%s. Connect the console and press Cross to retry.",
                           FetchStatusName(pending_network_status_));
         }
+        else if (xtream && pending_xtream_status_ != iptv::XtreamStatus::ok)
+        {
+            std::snprintf(detail, sizeof(detail), "%s%s%.112s. Press Cross to retry.",
+                          iptv::XtreamStatusDescription(pending_xtream_status_),
+                          pending_xtream_message_.empty() ? "" : ": ",
+                          pending_xtream_message_.c_str());
+        }
         else if (pending_fetch_.status == iptv::http::Status::http_status_error)
         {
             std::snprintf(detail, sizeof(detail), "HTTP returned %d. Press Cross to retry.",
@@ -1459,7 +1732,9 @@ void IptvApp::ConsumeRefresh()
         source_health_[source_index] = SourceHealth::Error;
         SetStatusState("Catalog unavailable", false, true);
         SetText(document_, "source-status-label",
-                custom ? "Unable to load custom playlist" : "Unable to load public catalog");
+                custom   ? "Unable to load custom playlist"
+                : xtream ? "Unable to load Xtream live channels"
+                         : "Unable to load public catalog");
         SetText(document_, "source-status-detail", detail);
         ShowCatalogError(true, "Unable to load catalog", detail);
         focus_target_ = FocusTarget::Error;
@@ -1776,6 +2051,27 @@ void IptvApp::CustomSourceResult(const char *text, void *user_data)
     IptvApp *app = static_cast<IptvApp *>(user_data);
     if (app && text)
         app->ApplyCustomSourceUrl(text);
+}
+
+void IptvApp::XtreamServerResult(const char *text, void *user_data)
+{
+    IptvApp *app = static_cast<IptvApp *>(user_data);
+    if (app && text)
+        app->ApplyXtreamServer(text);
+}
+
+void IptvApp::XtreamUsernameResult(const char *text, void *user_data)
+{
+    IptvApp *app = static_cast<IptvApp *>(user_data);
+    if (app && text)
+        app->ApplyXtreamUsername(text);
+}
+
+void IptvApp::XtreamPasswordResult(const char *text, void *user_data)
+{
+    IptvApp *app = static_cast<IptvApp *>(user_data);
+    if (app && text)
+        app->ApplyXtreamPassword(text);
 }
 
 void IptvApp::RefreshCatalogUi()

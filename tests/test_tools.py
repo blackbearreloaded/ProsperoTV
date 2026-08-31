@@ -237,10 +237,19 @@ class ToolTests(unittest.TestCase):
         rml = (ROOT / "ui/main.rml").read_text(encoding="utf-8")
         self.assertIn('<div id="source-slot-0" class="rail-item selected">', rml)
         self.assertIn('<div id="source-slot-1" class="rail-item hidden">', rml)
+        self.assertIn('<div id="source-slot-2" class="rail-item hidden">', rml)
+        self.assertIn('id="source-management-name-2">Add an Xtream Codes account', rml)
 
         styles = (ROOT / "ui/styles/app.rcss").read_text(encoding="utf-8")
         self.assertIn("#source-region { left: 0px; width: 299px; }", styles)
         self.assertIn("#group-region { left: 315px; width: 931px; }", styles)
+
+    def test_xtream_password_uses_masked_native_ime(self):
+        ime = (ROOT / "src/iptv_ime.c").read_text(encoding="utf-8")
+        app = (ROOT / "src/iptv_app.cpp").read_text(encoding="utf-8")
+        self.assertIn("#define SCE_IME_OPTION_PASSWORD UINT32_C(0x00000004)", ime)
+        self.assertIn(".option = requested_option", ime)
+        self.assertIn('iptv_ime_request_password("Xtream password"', app)
 
 
 if __name__ == "__main__":
