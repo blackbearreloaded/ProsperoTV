@@ -239,6 +239,10 @@ class ToolTests(unittest.TestCase):
         self.assertIn('<div id="source-slot-1" class="rail-item hidden">', rml)
         self.assertIn('<div id="source-slot-2" class="rail-item hidden">', rml)
         self.assertIn('id="source-management-name-2">Add an Xtream Codes account', rml)
+        self.assertIn('id="source-management-action-1" class="source-action"', rml)
+        self.assertIn('id="source-management-action-2" class="source-action"', rml)
+        self.assertIn('id="triangle-hint-label">Search', rml)
+        self.assertIn('screen_ == Screen::Sources ? "Add / Edit source" : "Search"', app)
 
         styles = (ROOT / "ui/styles/app.rcss").read_text(encoding="utf-8")
         self.assertIn("#source-region { left: 0px; width: 299px; }", styles)
@@ -250,6 +254,9 @@ class ToolTests(unittest.TestCase):
         self.assertIn("#define SCE_IME_OPTION_PASSWORD UINT32_C(0x00000004)", ime)
         self.assertIn(".option = requested_option", ime)
         self.assertIn('iptv_ime_request_password("Xtream password"', app)
+        self.assertIn("SCE_IME_ENTER_LABEL_SEARCH", ime)
+        self.assertIn(".enter_label = requested_enter_label", ime)
+        self.assertNotIn(".enter_label = 2", ime)
 
 
 if __name__ == "__main__":

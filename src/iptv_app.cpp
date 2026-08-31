@@ -661,6 +661,8 @@ void IptvApp::SetScreen(Screen screen, bool reset_focus)
                 ? "Your saved channels. Square removes a favorite; Triangle searches this list."
                 : "Browse the cached catalog instantly. Circle returns to Quick Views from any "
                   "channel page.");
+    SetText(document_, "triangle-hint-label",
+            screen_ == Screen::Sources ? "Add / Edit source" : "Search");
     RefreshCatalogUi();
     RefreshFocus();
 }
@@ -1140,6 +1142,8 @@ void IptvApp::RefreshSourceUi()
     SetText(document_, "source-management-url-1",
             custom_source_url_.empty() ? "Cross to enter an HTTP(S) M3U/M3U8 URL"
                                        : custom_source_url_);
+    SetText(document_, "source-management-action-1",
+            custom_source_url_.empty() ? "CROSS: ADD" : "TRIANGLE: EDIT");
 
     const bool xtream_ready = iptv::ValidateXtreamCredentials(xtream_credentials_);
     SetText(document_, "source-name-2", "Xtream Codes");
@@ -1149,6 +1153,8 @@ void IptvApp::RefreshSourceUi()
     SetText(document_, "source-management-url-2",
             xtream_ready ? xtream_credentials_.server_url
                          : "Cross to enter server URL, username and password");
+    SetText(document_, "source-management-action-2",
+            xtream_ready ? "TRIANGLE: EDIT" : "CROSS: ADD");
 
     for (unsigned index = 0; index < SourceCount; ++index)
     {

@@ -119,6 +119,7 @@ button { margin: 0; padding: 0; overflow: hidden; border: 1px #6f4a61; border-ra
 .source-management-card span:first-child { position: absolute; left: 24px; top: 26px; width: 780px; height: 38px; font-size: 24px; line-height: 34px; }
 .source-management-card span:nth-child(2) { position: absolute; left: 24px; top: 78px; width: 920px; height: 32px; overflow: hidden; color: #c8afb6; font-size: 16px; white-space: nowrap; text-overflow: ellipsis; }
 .source-management-card .item-status { position: absolute; right: 24px; top: 28px; width: 180px; color: #e8b968; text-align: right; }
+.source-management-card .source-action { position: absolute; right: 24px; top: 118px; width: 220px; color: #e8b968; font-size: 14px; letter-spacing: 1px; text-align: right; }
 .source-management-card.selected, .source-management-card.focused { border: 2px #f3a447; background-color: #573047; }
 .source-management-card.focused { border-color: #fff2df; }
 #source-status-region { position: absolute; left: 1078px; top: 98px; width: 714px; height: 640px; background-color: #31263b; }
