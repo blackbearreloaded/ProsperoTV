@@ -182,6 +182,16 @@ stage the complete title folder below `/data/homebrew/PPSA99003`. Do not copy
 `eboot.bin` by itself; the app also requires its runtime module, UI, fonts,
 icons, artwork, and metadata.
 
+### Updating ProsperoTV
+
+Fully close ProsperoTV before replacing `/data/homebrew/PPSA99003.ffpfsc`;
+ShadowMountPlus may otherwise keep the previous image mounted. Copy the new
+release file to the same path, then restart ShadowMountPlus cleanly or restart
+the PS5. Wait for ShadowMountPlus to rediscover the title before launching it.
+
+Keeping the `PPSA99003` title ID preserves the separate `/download0` data used
+for the channel cache, favorites, history, and configured sources.
+
 For an FTP development deployment to an available PS5:
 
 ```bash
