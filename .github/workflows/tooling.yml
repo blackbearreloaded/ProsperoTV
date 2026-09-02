@@ -22,7 +22,7 @@ concurrency:
 
 jobs:
   build:
-    name: Lint, test, and build FFPFSC
+    name: Lint, test, and build release artifacts
     runs-on: ubuntu-24.04
     timeout-minutes: 45
 
@@ -72,15 +72,22 @@ jobs:
       - name: Build compressed release image
         run: make ffpfsc
 
-      - name: Write release checksum
-        run: cd dist && sha256sum "$TITLE_ID.ffpfsc" > SHA256SUMS
+      - name: Package folder release
+        run: |
+          cd dist
+          python3 -m zipfile -c "$TITLE_ID.zip" "$TITLE_ID"
+          python3 -m zipfile -t "$TITLE_ID.zip"
 
-      - name: Upload build
+      - name: Write release checksums
+        run: cd dist && sha256sum "$TITLE_ID.ffpfsc" "$TITLE_ID.zip" > SHA256SUMS
+
+      - name: Upload release artifacts
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: prospero-tv-${{ github.sha }}-ffpfsc
+          name: prospero-tv-${{ github.sha }}-release
           path: |
             dist/${{ env.TITLE_ID }}.ffpfsc
+            dist/${{ env.TITLE_ID }}.zip
             dist/SHA256SUMS
           if-no-files-found: error
           compression-level: 0
@@ -102,7 +109,7 @@ jobs:
         run: >-
           gh run download "$GITHUB_RUN_ID"
           --repo "$GITHUB_REPOSITORY"
-          --name "prospero-tv-$GITHUB_SHA-ffpfsc"
+          --name "prospero-tv-$GITHUB_SHA-release"
           --dir release
 
       - name: Prepare release assets
@@ -114,28 +121,32 @@ jobs:
           mapfile -d '' files < <(find . -type f -print0)
           shopt -s nullglob
           images=(PPSA*.ffpfsc)
-          if (( ${#files[@]} != 2 || ${#images[@]} != 1 )) || [[ ! -f SHA256SUMS ]]; then
-            echo "Expected exactly one FFPFSC image and SHA256SUMS. Files must be at the artifact root." >&2
+          folders=(PPSA*.zip)
+          if (( ${#files[@]} != 3 || ${#images[@]} != 1 || ${#folders[@]} != 1 )) || [[ ! -f SHA256SUMS ]]; then
+            echo "Expected exactly one FFPFSC image, one folder ZIP, and SHA256SUMS at the artifact root." >&2
             exit 1
           fi
           sha256sum -c SHA256SUMS
           echo "image=${images[0]}" >> "$GITHUB_OUTPUT"
+          echo "folder=${folders[0]}" >> "$GITHUB_OUTPUT"
           echo "checksum=SHA256SUMS" >> "$GITHUB_OUTPUT"
 
       - name: Publish GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
           IMAGE: ${{ steps.package.outputs.image }}
+          FOLDER: ${{ steps.package.outputs.folder }}
           CHECKSUM: ${{ steps.package.outputs.checksum }}
         shell: bash
         run: |
           set -euo pipefail
-          assets=("release/$IMAGE" "release/$CHECKSUM")
+          assets=("release/$IMAGE" "release/$FOLDER" "release/$CHECKSUM")
           image_name="${IMAGE##*/}"
+          folder_name="${FOLDER##*/}"
           checksum_name="${CHECKSUM##*/}"
           if gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             while IFS= read -r old_asset; do
-              if [[ $old_asset != "$image_name" && $old_asset != "$checksum_name" ]]; then
+              if [[ $old_asset != "$image_name" && $old_asset != "$folder_name" && $old_asset != "$checksum_name" ]]; then
                 gh release delete-asset "$GITHUB_REF_NAME" "$old_asset" --yes --repo "$GITHUB_REPOSITORY"
               fi
             done < <(gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name')

@@ -114,6 +114,17 @@ and avoids replacing a package while its previous title remains active.
 
 ## Manual build and stage
 
+Tagged GitHub Releases provide two equivalent ShadowMountPlus layouts:
+
+- copy `<TITLE_ID>.ffpfsc` directly to `/data/homebrew`; or
+- extract `<TITLE_ID>.zip` locally and upload the contained `<TITLE_ID>` folder
+  to `/data/homebrew`, producing `/data/homebrew/<TITLE_ID>/eboot.bin`.
+
+Do not upload the ZIP itself, upload only `eboot.bin`, or keep folder and image
+forms with the same title ID in scan paths simultaneously. Fully close the app
+before replacement, then restart ShadowMountPlus or the PS5 and wait for the
+title to be rediscovered before launching it.
+
 1. Build the exact format accepted by your loader:
 
    ```bash
@@ -131,7 +142,7 @@ and avoids replacing a package while its previous title remains active.
 3. For directory deployment, stage the entire `dist/<TITLE_ID>/` tree. Do not
    upload only `eboot.bin`.
 4. Wait for the loader to report that the title is ready, then launch it from
-   the Games section of the home screen.
+   the Media section of the home screen.
 
 Use `make packages` only when both optional image formats are needed. Rebuild
 the selected format immediately before deployment so an older package is not

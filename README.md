@@ -172,21 +172,29 @@ dist/PPSA99003/           complete title folder
 dist/PPSA99003.ffpfsc     compressed release image
 ```
 
+Tagged GitHub Releases provide both `PPSA99003.ffpfsc` and
+`PPSA99003.zip`, which contains the complete `PPSA99003` title folder.
+
 An optional UFS2 `.ffpkg` development target is also available. See
 [Package formats](docs/FFPKG.md).
 
 ## Install and development deployment
 
-Install the generated `.ffpfsc` with a compatible PS5 homebrew workflow, or
-stage the complete title folder below `/data/homebrew/PPSA99003`. Do not copy
-`eboot.bin` by itself; the app also requires its runtime module, UI, fonts,
-icons, artwork, and metadata.
+Choose one release format:
+
+- copy `PPSA99003.ffpfsc` to `/data/homebrew`; or
+- extract `PPSA99003.zip` and upload its complete `PPSA99003` folder to
+  `/data/homebrew`, producing `/data/homebrew/PPSA99003/eboot.bin`.
+
+Do not upload the ZIP itself or copy only `eboot.bin`; the app also requires
+its runtime module, UI, fonts, icons, artwork, and metadata. Do not keep the
+folder and `.ffpfsc` forms in ShadowMountPlus scan paths at the same time.
 
 ### Updating ProsperoTV
 
-Fully close ProsperoTV before replacing `/data/homebrew/PPSA99003.ffpfsc`;
-ShadowMountPlus may otherwise keep the previous image mounted. Copy the new
-release file to the same path, then restart ShadowMountPlus cleanly or restart
+Fully close ProsperoTV before replacing its `.ffpfsc` or complete title folder;
+ShadowMountPlus may otherwise keep the previous version mounted. Replace the
+same format at the same path, then restart ShadowMountPlus cleanly or restart
 the PS5. Wait for ShadowMountPlus to rediscover the title before launching it.
 
 Keeping the `PPSA99003` title ID preserves the separate `/download0` data used
@@ -228,8 +236,9 @@ acceptance is performed separately on PS5 with bounded channel samples,
 decoder telemetry, and teardown checks.
 
 GitHub Actions runs linting, all host tests, deterministic runtime
-reproduction, and the FFPFSC build. Pushing a tag that exactly matches
-`contentVersion` publishes the verified `.ffpfsc` image and `SHA256SUMS`.
+reproduction, and release packaging. Pushing a tag that exactly matches
+`contentVersion` publishes the verified `.ffpfsc` image, complete-folder ZIP,
+and `SHA256SUMS`.
 
 ## Source layout
 
