@@ -36,10 +36,44 @@ constexpr char kCatalogUrl[] = "https://iptv-org.github.io/iptv/index.m3u";
 constexpr char kCatalogCachePath[] = "/download0/prosperotv-catalog.sqlite3";
 constexpr char kCustomCatalogCachePath[] = "/download0/prosperotv-custom-catalog.sqlite3";
 constexpr char kXtreamCatalogCachePath[] = "/download0/prosperotv-xtream-catalog.sqlite3";
+constexpr char kXtreamReceiptPath[] = "/download0/prosperotv-xtream-receipt.txt";
 constexpr std::uint64_t kCatalogSourceId = UINT64_C(0x495054562d4f5247);
 constexpr std::uint64_t kCatalogRefreshSeconds = UINT64_C(12) * 60u * 60u;
 constexpr std::size_t kCatalogThreadStackBytes = 4u * 1024u * 1024u;
 constexpr unsigned kChannelCardCount = 8;
+
+void SaveXtreamReceipt(const char *stage, iptv::http::Status network,
+                       const iptv::http::FetchResult &fetch, iptv::XtreamStatus xtream,
+                       const iptv::ParseReport &report, std::size_t channels)
+{
+    char temporary[96]{};
+    std::snprintf(temporary, sizeof(temporary), "%s.tmp", kXtreamReceiptPath);
+    std::FILE *file = std::fopen(temporary, "wb");
+    if (!file)
+        return;
+    std::fprintf(file,
+                 "PROSPEROTV_XTREAM_RECEIPT_V1\n"
+                 "stage=%s\nnetwork_status=%u\nfetch_status=%u\nhttp_status=%d\n"
+                 "native_error=0x%08x\nresponse_bytes=%llu\nxtream_status=%u\n"
+                 "xtream_description=%s\nlines_seen=%u\naccepted=%u\nskipped=%u\nchannels=%llu\n",
+                 stage && *stage ? stage : "none", static_cast<unsigned>(network),
+                 static_cast<unsigned>(fetch.status), fetch.http_status,
+                 static_cast<unsigned>(fetch.native_error),
+                 static_cast<unsigned long long>(fetch.bytes), static_cast<unsigned>(xtream),
+                 iptv::XtreamStatusDescription(xtream), static_cast<unsigned>(report.lines_seen),
+                 static_cast<unsigned>(report.accepted), static_cast<unsigned>(report.skipped),
+                 static_cast<unsigned long long>(channels));
+    const bool written = std::ferror(file) == 0 && std::fflush(file) == 0;
+    const bool closed = std::fclose(file) == 0;
+    if (!written || !closed)
+    {
+        std::remove(temporary);
+        return;
+    }
+    std::remove(kXtreamReceiptPath);
+    if (std::rename(temporary, kXtreamReceiptPath) != 0)
+        std::remove(temporary);
+}
 
 bool ContainsCi(const std::string &text, const char *needle)
 {
@@ -1502,6 +1536,7 @@ void *IptvApp::RefreshThreadEntry(void *argument)
     app->pending_report_ = {};
     app->pending_cache_saved_ = false;
     app->pending_xtream_status_ = iptv::XtreamStatus::ok;
+    app->pending_xtream_stage_.clear();
     app->pending_xtream_message_.clear();
     app->pending_network_status_ = iptv::http::NetworkInit();
 
@@ -1535,6 +1570,7 @@ void *IptvApp::RefreshThreadEntry(void *argument)
                 return app->pending_fetch_.status == iptv::http::Status::ok &&
                        !app->shutdown_requested_.load(std::memory_order_acquire);
             };
+            app->pending_xtream_stage_ = "authentication";
             if (fetch(""))
             {
                 app->pending_xtream_status_ = iptv::ParseXtreamAuth(
@@ -1548,6 +1584,7 @@ void *IptvApp::RefreshThreadEntry(void *argument)
             }
             if (api_ready && app->pending_xtream_status_ == iptv::XtreamStatus::ok)
             {
+                app->pending_xtream_stage_ = "categories";
                 if (fetch("get_live_categories"))
                     app->pending_xtream_status_ = iptv::ParseXtreamCategories(
                         std::string_view(response.data(), app->pending_fetch_.bytes), &categories);
@@ -1556,6 +1593,7 @@ void *IptvApp::RefreshThreadEntry(void *argument)
             }
             if (api_ready && app->pending_xtream_status_ == iptv::XtreamStatus::ok)
             {
+                app->pending_xtream_stage_ = "live-streams";
                 if (fetch("get_live_streams"))
                     app->pending_xtream_status_ = iptv::ParseXtreamLiveStreams(
                         std::string_view(response.data(), app->pending_fetch_.bytes),
@@ -1600,6 +1638,10 @@ void IptvApp::ConsumeRefresh()
     refresh_complete_.store(false, std::memory_order_relaxed);
 
     const bool xtream = refresh_source_ == SourceSelection::Xtream;
+    if (xtream)
+        SaveXtreamReceipt(pending_xtream_stage_.c_str(), pending_network_status_, pending_fetch_,
+                          pending_xtream_status_, pending_report_,
+                          pending_catalog_.channels.size());
     const bool success = pending_network_status_ == iptv::http::Status::ok &&
                          pending_fetch_.status == iptv::http::Status::ok &&
                          (!xtream || pending_xtream_status_ == iptv::XtreamStatus::ok) &&
@@ -1878,6 +1920,7 @@ void IptvApp::QueuePlay(const iptv::Channel &channel)
     play_request_.user_agent = channel.http_user_agent;
     play_request_.referrer = channel.http_referrer;
     play_request_.source_id = channel.source_id;
+    play_request_.reconnect_live = active_source_ == SourceSelection::Xtream;
     play_requested_ = !play_request_.urls.empty();
     if (!play_requested_)
         return;

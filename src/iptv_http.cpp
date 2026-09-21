@@ -584,7 +584,7 @@ namespace
 constexpr int kHttpVersion11 = 2;
 constexpr int kHttpMethodGet = 0;
 constexpr std::uint32_t kHeaderOverwrite = 0u;
-constexpr std::uint32_t kStreamReceiveTimeoutUsec = 2000000u;
+constexpr std::uint32_t kStreamReceiveTimeoutUsec = 5000000u;
 constexpr std::size_t kMaxResponseHeaderBytes = 64u * 1024u;
 
 extern "C"

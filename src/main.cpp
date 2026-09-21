@@ -1109,7 +1109,8 @@ PlaybackOutcome RunPlaybackCandidates(const IptvPlayRequest &request, unsigned s
                           : iptv_player_run_with_headers(
                                 request.urls[candidate].c_str(), request.channel_name.c_str(),
                                 request.user_agent.empty() ? nullptr : request.user_agent.c_str(),
-                                request.referrer.empty() ? nullptr : request.referrer.c_str());
+                                request.referrer.empty() ? nullptr : request.referrer.c_str(),
+                                request.reconnect_live ? 1 : 0);
         if (archive_path)
         {
             AppendAutotestReceipt(archive_path, kLatestReceiptPath);

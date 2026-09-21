@@ -65,7 +65,7 @@ Demo available by clicking the image below.
 | Shell title | `ProsperoTV` |
 | Title ID | `PPSA99003` |
 | Shell category | Media |
-| Current beta version | `01.000.004` |
+| Current beta version | `01.000.005` |
 | Release-version source | [`sce_sys/param.json`](sce_sys/param.json) |
 | Built-in catalog | `https://iptv-org.github.io/iptv/index.m3u` |
 | Writable data | `/download0` only |
@@ -269,8 +269,8 @@ PS5 `NN.NNN.NNN` format without a `v` prefix.
 
 ```bash
 # After updating param.json and passing the release gates:
-git tag 01.000.004
-git push origin main 01.000.004
+git tag 01.000.005
+git push origin main 01.000.005
 ```
 
 The release workflow rejects a mismatched tag. See

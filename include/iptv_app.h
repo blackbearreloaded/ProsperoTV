@@ -47,6 +47,7 @@ struct IptvPlayRequest {
     std::string user_agent;
     std::string referrer;
     std::uint64_t source_id = 0;
+    bool reconnect_live = false;
 };
 
 class IptvApp {
@@ -143,6 +144,7 @@ private:
     iptv::ParseReport pending_report_{};
     iptv::CatalogState pending_catalog_{};
     iptv::XtreamStatus pending_xtream_status_ = iptv::XtreamStatus::ok;
+    std::string pending_xtream_stage_;
     std::string pending_xtream_message_;
     bool pending_cache_saved_ = false;
     iptv::CatalogState catalog_{};

@@ -48,6 +48,59 @@ constexpr std::size_t kPlaylistBytes = IPTV_HLS_DEFAULT_MAX_INPUT_BYTES;
 constexpr std::uint64_t kVideoProgressTimeoutUsec = UINT64_C(15000000);
 constexpr char kReceiptPath[] = "/download0/iptv-last-receipt.txt";
 
+enum class DirectEnd : std::uint8_t
+{
+    none,
+    eof,
+    stopped,
+    read_error,
+    decoder_reopen,
+    decoder_error,
+    video_stall,
+    no_data,
+    finish_error,
+};
+
+struct DirectDiagnostics
+{
+    std::uint64_t started_usec = 0;
+    std::uint64_t bytes = 0;
+    std::uint64_t reads = 0;
+    unsigned open_attempts = 0;
+    unsigned reconnects = 0;
+    unsigned read_errors = 0;
+    int last_native_error = 0;
+    DirectEnd end = DirectEnd::none;
+};
+
+DirectDiagnostics gDirectDiagnostics{};
+
+const char *DirectEndName(DirectEnd end)
+{
+    switch (end)
+    {
+    case DirectEnd::none:
+        return "none";
+    case DirectEnd::eof:
+        return "eof";
+    case DirectEnd::stopped:
+        return "user-stop";
+    case DirectEnd::read_error:
+        return "read-error";
+    case DirectEnd::decoder_reopen:
+        return "decoder-reopen";
+    case DirectEnd::decoder_error:
+        return "decoder-error";
+    case DirectEnd::video_stall:
+        return "video-stall";
+    case DirectEnd::no_data:
+        return "no-data";
+    case DirectEnd::finish_error:
+        return "finish-error";
+    }
+    return "unknown";
+}
+
 constexpr std::uint64_t ClampUsec(std::uint64_t value, std::uint64_t minimum, std::uint64_t maximum)
 {
     return value < minimum ? minimum : value > maximum ? maximum : value;
@@ -179,6 +232,10 @@ void SaveReceipt(int result, const iptv_stream_telemetry_t &stream,
         "stream_error=%s\n"
         "stream_audio_disabled=%u\n"
         "stream_audio_warning=%s\n"
+        "audio_stream_type=0x%02x\naudio_pid=%u\naudio_rate=%u\naudio_channels=%u\n"
+        "direct_end=%s\ndirect_elapsed_ms=%llu\ndirect_bytes=%llu\ndirect_reads=%llu\n"
+        "direct_open_attempts=%u\ndirect_reconnects=%u\ndirect_read_errors=%u\n"
+        "direct_native_error=0x%08x\n"
         "codec=%u\nprofile=%u\nlevel=%u\n"
         "coded=%ux%u\nvisible=%ux%u\nbit_depth=%u\nchroma=%u\n"
         "video_access_units=%llu\naudio_frames=%llu\n"
@@ -212,7 +269,17 @@ void SaveReceipt(int result, const iptv_stream_telemetry_t &stream,
         "hardware_validated=%u\nstream_acceptance_validated=%u\n"
         "playback_stop_requested=%u\n",
         result, gLastPlaybackError, static_cast<int>(stream.state), stream.last_result,
-        stream.last_error, stream.audio_disabled, stream.audio_warning, stream.format.video_codec,
+        stream.last_error, stream.audio_disabled, stream.audio_warning,
+        stream.format.audio_stream_type, stream.format.audio_pid, stream.format.audio_sample_rate,
+        stream.format.audio_channels, DirectEndName(gDirectDiagnostics.end),
+        static_cast<unsigned long long>(
+            gDirectDiagnostics.started_usec && MonotonicUsec() >= gDirectDiagnostics.started_usec
+                ? (MonotonicUsec() - gDirectDiagnostics.started_usec) / UINT64_C(1000)
+                : 0),
+        static_cast<unsigned long long>(gDirectDiagnostics.bytes),
+        static_cast<unsigned long long>(gDirectDiagnostics.reads), gDirectDiagnostics.open_attempts,
+        gDirectDiagnostics.reconnects, gDirectDiagnostics.read_errors,
+        static_cast<unsigned>(gDirectDiagnostics.last_native_error), stream.format.video_codec,
         stream.format.video_profile, stream.format.video_level, stream.format.coded_width,
         stream.format.coded_height, stream.format.visible_width, stream.format.visible_height,
         stream.format.video_bit_depth, stream.format.video_chroma_format,
@@ -462,6 +529,12 @@ int AdapterDisableAudio(void *context)
     return adapter && adapter->opened ? iptv_native_backend_disable_audio(&adapter->backend) : 0;
 }
 
+int AdapterDiscontinuity(void *context)
+{
+    auto *adapter = static_cast<NativeAdapter *>(context);
+    return adapter && adapter->opened ? iptv_native_backend_discontinuity(&adapter->backend) : -1;
+}
+
 int AdapterDrain(void *context)
 {
     auto *adapter = static_cast<NativeAdapter *>(context);
@@ -524,6 +597,7 @@ class StreamRunner
         backend.submit_video = AdapterVideo;
         backend.submit_audio = AdapterAudio;
         backend.disable_audio = AdapterDisableAudio;
+        backend.discontinuity = AdapterDiscontinuity;
         backend.drain = AdapterDrain;
         backend.close = AdapterClose;
         backend.hardware_validated = 0;
@@ -619,6 +693,11 @@ class StreamRunner
         }
         read_ahead_flush_.store(false, std::memory_order_release);
         return read_ahead_result_.load(std::memory_order_acquire) == IPTV_STREAM_OK;
+    }
+
+    bool Discontinuity()
+    {
+        return FlushInput() && iptv_stream_discontinuity(&session_) == IPTV_STREAM_OK;
     }
 
     int PushWebm(const iptv_webm_video_info_t &video, const iptv_webm_block_t &block)
@@ -1005,8 +1084,27 @@ enum class FeedResult
     failed
 };
 
+constexpr bool ShouldReconnectLive(bool reconnect_live, bool presented, FeedResult result)
+{
+    return reconnect_live && presented && result != FeedResult::stopped;
+}
+
+constexpr bool CanReconnectTransport(DirectEnd end)
+{
+    return end == DirectEnd::eof || end == DirectEnd::read_error;
+}
+
+static_assert(ShouldReconnectLive(true, true, FeedResult::ok));
+static_assert(ShouldReconnectLive(true, true, FeedResult::failed));
+static_assert(!ShouldReconnectLive(false, true, FeedResult::ok));
+static_assert(!ShouldReconnectLive(true, false, FeedResult::failed));
+static_assert(CanReconnectTransport(DirectEnd::eof));
+static_assert(CanReconnectTransport(DirectEnd::read_error));
+static_assert(!CanReconnectTransport(DirectEnd::decoder_reopen));
+
 FeedResult FeedRequest(iptv::http::StreamRequest *request, StreamRunner *runner,
-                       std::uint8_t *buffer, std::size_t buffer_bytes)
+                       std::uint8_t *buffer, std::size_t buffer_bytes,
+                       DirectDiagnostics *diagnostics = nullptr)
 {
     if (!request || !runner || !buffer || !buffer_bytes)
         return FeedResult::failed;
@@ -1017,11 +1115,22 @@ FeedResult FeedRequest(iptv::http::StreamRequest *request, StreamRunner *runner,
     {
         const int read = iptv::http::ReadStream(request, buffer, buffer_bytes);
         if (read == 0)
+        {
+            if (diagnostics)
+                diagnostics->end = DirectEnd::eof;
             return FeedResult::ok;
+        }
         if (read < 0)
         {
+            if (diagnostics)
+            {
+                ++diagnostics->read_errors;
+                diagnostics->last_native_error = request->native_error;
+            }
             if (++read_failures >= 3u)
             {
+                if (diagnostics)
+                    diagnostics->end = DirectEnd::read_error;
                 SetLastPlaybackError("The channel connection was interrupted while streaming.");
                 return FeedResult::failed;
             }
@@ -1029,11 +1138,22 @@ FeedResult FeedRequest(iptv::http::StreamRequest *request, StreamRunner *runner,
             continue;
         }
         read_failures = 0;
+        if (diagnostics)
+        {
+            ++diagnostics->reads;
+            diagnostics->bytes += static_cast<std::size_t>(read);
+        }
         const int pushed = runner->Push(buffer, static_cast<std::size_t>(read));
         if (pushed == IPTV_STREAM_REOPEN_REQUIRED)
+        {
+            if (diagnostics)
+                diagnostics->end = DirectEnd::decoder_reopen;
             return FeedResult::reopen;
+        }
         if (pushed != IPTV_STREAM_OK)
         {
+            if (diagnostics)
+                diagnostics->end = DirectEnd::decoder_error;
             const iptv_stream_telemetry_t *telemetry = runner->Telemetry();
             SetLastPlaybackError("%s", telemetry && telemetry->last_error[0]
                                            ? telemetry->last_error
@@ -1050,10 +1170,14 @@ FeedResult FeedRequest(iptv::http::StreamRequest *request, StreamRunner *runner,
         else if (last_progress != 0 && now >= last_progress &&
                  now - last_progress >= kVideoProgressTimeoutUsec)
         {
+            if (diagnostics)
+                diagnostics->end = DirectEnd::video_stall;
             SetLastPlaybackError("The channel stalled without producing video for 15 seconds.");
             return FeedResult::failed;
         }
     }
+    if (diagnostics)
+        diagnostics->end = DirectEnd::stopped;
     return FeedResult::stopped;
 }
 
@@ -1412,16 +1536,20 @@ int RunHls(const char *source_url, StreamRunner *runner, std::uint8_t *read_buff
 }
 
 int RunDirect(const char *url, StreamRunner *runner, std::uint8_t *read_buffer, char *playlist_data,
-              const iptv::http::RequestHeaders *headers)
+              const iptv::http::RequestHeaders *headers, bool reconnect_live)
 {
-    for (unsigned attempt = 0; attempt < 3u; ++attempt)
+    gDirectDiagnostics.started_usec = MonotonicUsec();
+    unsigned attempt = 0;
+    bool discontinuity_on_open = false;
+    while (attempt < 3u)
     {
+        ++gDirectDiagnostics.open_attempts;
         iptv::http::StreamRequest request{};
         const auto status = iptv::http::OpenStream(
             url, "video/mp2t, video/webm, application/vnd.apple.mpegurl, */*", &request, headers);
         if (status != iptv::http::Status::ok)
         {
-            if (attempt == 2u)
+            if (++attempt == 3u)
             {
                 SetRequestFailure("Channel request failed", status, request.http_status,
                                   request.native_error, request.error_response);
@@ -1434,14 +1562,28 @@ int RunDirect(const char *url, StreamRunner *runner, std::uint8_t *read_buffer, 
         const int first = ReadInitialProbe(&request, read_buffer, kReadBytes);
         if (first <= 0)
         {
+            gDirectDiagnostics.end = DirectEnd::no_data;
+            gDirectDiagnostics.last_native_error = request.native_error;
             iptv::http::CloseStream(&request);
-            if (attempt == 2u)
+            if (++attempt == 3u)
             {
                 SetLastPlaybackError("The channel opened but returned no media data.");
                 return -1;
             }
             sceKernelUsleep(100000u);
             continue;
+        }
+        ++gDirectDiagnostics.reads;
+        gDirectDiagnostics.bytes += static_cast<std::size_t>(first);
+        if (discontinuity_on_open)
+        {
+            if (!runner->Discontinuity())
+            {
+                iptv::http::CloseStream(&request);
+                SetLastPlaybackError("The playback timeline could not reset after reconnecting.");
+                return -1;
+            }
+            discontinuity_on_open = false;
         }
         if (iptv::http::ResponseIndicatesGeographicBlock(
                 reinterpret_cast<const char *>(read_buffer), static_cast<std::size_t>(first)))
@@ -1470,7 +1612,7 @@ int RunDirect(const char *url, StreamRunner *runner, std::uint8_t *read_buffer, 
             iptv::http::CloseStream(&request);
             if (webm >= 0)
                 return webm;
-            if (attempt == 2u)
+            if (++attempt == 3u)
                 return webm;
             sceKernelUsleep(100000u);
             continue;
@@ -1483,19 +1625,42 @@ int RunDirect(const char *url, StreamRunner *runner, std::uint8_t *read_buffer, 
                 SetLastPlaybackError("%s", telemetry->last_error);
         }
         FeedResult fed = pushed == IPTV_STREAM_REOPEN_REQUIRED ? FeedResult::reopen
-                         : pushed == IPTV_STREAM_OK
-                             ? FeedRequest(&request, runner, read_buffer, kReadBytes)
-                             : FeedResult::failed;
+                         : pushed == IPTV_STREAM_OK ? FeedRequest(&request, runner, read_buffer,
+                                                                  kReadBytes, &gDirectDiagnostics)
+                                                    : FeedResult::failed;
         iptv::http::CloseStream(&request);
         if (fed == FeedResult::stopped)
             return 1;
+        if (ShouldReconnectLive(reconnect_live, runner->HasPresentedVideo(), fed) &&
+            CanReconnectTransport(gDirectDiagnostics.end))
+        {
+            ++gDirectDiagnostics.reconnects;
+            SetLastPlaybackError(nullptr);
+            discontinuity_on_open = true;
+            attempt = 0;
+            continue;
+        }
+        bool finished_ok = true;
         if (fed == FeedResult::ok)
         {
             const int finished = runner->Finish();
-            if (finished == IPTV_STREAM_OK && runner->HasPresentedVideo())
+            finished_ok = finished == IPTV_STREAM_OK;
+            if (finished_ok && runner->HasPresentedVideo() && !reconnect_live)
                 return 0;
+            if (!finished_ok)
+                gDirectDiagnostics.end = DirectEnd::finish_error;
         }
-        if (attempt == 2u || !runner->Start())
+        if (finished_ok && ShouldReconnectLive(reconnect_live, runner->HasPresentedVideo(), fed))
+        {
+            ++gDirectDiagnostics.reconnects;
+            if (!runner->Start())
+                break;
+            if (!WaitForRefresh(runner, 500u))
+                return 1;
+            attempt = 0;
+            continue;
+        }
+        if (++attempt == 3u || !runner->Start())
         {
             if (!gLastPlaybackError[0])
                 SetLastPlaybackError("The channel media could not be decoded.");
@@ -1503,15 +1668,18 @@ int RunDirect(const char *url, StreamRunner *runner, std::uint8_t *read_buffer, 
         }
         sceKernelUsleep(100000u);
     }
+    if (!gLastPlaybackError[0])
+        SetLastPlaybackError("The channel media could not be decoded.");
     return -1;
 }
 
 } // namespace
 
 static int RunPlayer(const char *url, const char *channel_name, const char *user_agent,
-                     const char *referrer, unsigned stop_after_ms)
+                     const char *referrer, unsigned stop_after_ms, bool reconnect_live)
 {
     SetLastPlaybackError(nullptr);
+    gDirectDiagnostics = {};
     if (!url || !*url)
     {
         SetLastPlaybackError("The channel has no stream URL.");
@@ -1560,9 +1728,10 @@ static int RunPlayer(const char *url, const char *channel_name, const char *user
         else
         {
             (void)iptv_native_agc_loading_start();
-            result = UrlLooksLikeHls(url)
-                         ? RunHls(url, runner, read_buffer, playlist_data, &headers)
-                         : RunDirect(url, runner, read_buffer, playlist_data, &headers);
+            result =
+                UrlLooksLikeHls(url)
+                    ? RunHls(url, runner, read_buffer, playlist_data, &headers)
+                    : RunDirect(url, runner, read_buffer, playlist_data, &headers, reconnect_live);
             if (stop_after_ms && result >= 0 && runner->PlaybackStopRequested() &&
                 !runner->HasPresentedVideo())
             {
@@ -1643,9 +1812,9 @@ static int RunPlayer(const char *url, const char *channel_name, const char *user
 }
 
 int iptv_player_run_with_headers(const char *url, const char *channel_name, const char *user_agent,
-                                 const char *referrer)
+                                 const char *referrer, int reconnect_live)
 {
-    return RunPlayer(url, channel_name, user_agent, referrer, 0);
+    return RunPlayer(url, channel_name, user_agent, referrer, 0, reconnect_live != 0);
 }
 
 const char *iptv_player_last_error(void)
@@ -1655,10 +1824,10 @@ const char *iptv_player_last_error(void)
 
 int iptv_player_run(const char *url, const char *channel_name)
 {
-    return iptv_player_run_with_headers(url, channel_name, nullptr, nullptr);
+    return iptv_player_run_with_headers(url, channel_name, nullptr, nullptr, 0);
 }
 
 int iptv_player_run_controlled(const char *url, const char *channel_name, unsigned stop_after_ms)
 {
-    return RunPlayer(url, channel_name, nullptr, nullptr, stop_after_ms);
+    return RunPlayer(url, channel_name, nullptr, nullptr, stop_after_ms, false);
 }

@@ -95,6 +95,7 @@ typedef struct iptv_stream_backend {
     int (*submit_audio)(void *context, const uint8_t *data, size_t bytes,
                         uint64_t pts_us);
     int (*disable_audio)(void *context);
+    int (*discontinuity)(void *context);
     int (*drain)(void *context);
     void (*close)(void *context);
     uint32_t hardware_validated;
@@ -152,6 +153,7 @@ int iptv_stream_open(iptv_stream_session_t *session,
 int iptv_stream_start(iptv_stream_session_t *session);
 int iptv_stream_push(iptv_stream_session_t *session,
                      const void *data, size_t bytes);
+int iptv_stream_discontinuity(iptv_stream_session_t *session);
 int iptv_stream_stop(iptv_stream_session_t *session);
 int iptv_stream_cleanup(iptv_stream_session_t *session);
 

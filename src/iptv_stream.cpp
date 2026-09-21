@@ -1773,6 +1773,39 @@ int iptv_stream_push(iptv_stream_session_t *session, const void *data, size_t by
     return IPTV_STREAM_OK;
 }
 
+int iptv_stream_discontinuity(iptv_stream_session_t *session)
+{
+    if (!valid_session(session) || !get_impl(session))
+        return IPTV_STREAM_INVALID_ARGUMENT;
+    impl_t *impl = get_impl(session);
+    if (session->telemetry.state != IPTV_STREAM_STATE_BUFFERING &&
+        session->telemetry.state != IPTV_STREAM_STATE_READY &&
+        session->telemetry.state != IPTV_STREAM_STATE_PLAYING)
+        return IPTV_STREAM_INVALID_STATE;
+    if (impl->backend_open && impl->backend.discontinuity &&
+        impl->backend.discontinuity(impl->backend.context) != 0)
+        return fail(session, IPTV_STREAM_NATIVE_ERROR,
+                    "native backend could not reset the playback timeline");
+
+    impl->packet_bytes = 0;
+    impl->packet_sync = false;
+    std::memset(impl->continuity, 0, sizeof(impl->continuity));
+    impl->pat = {};
+    impl->pmt = {};
+    impl->video_random_access = false;
+    reset_pes(&impl->video_pes, true);
+    reset_pes(&impl->audio_pes, false);
+    impl->video_es.size = 0;
+    impl->audio_es.size = 0;
+    marker_clear(&impl->video_markers);
+    marker_clear(&impl->audio_markers);
+    impl->video_time = {};
+    impl->audio_time = {};
+    ++session->telemetry.discontinuities;
+    update_buffered(session, impl);
+    return IPTV_STREAM_OK;
+}
+
 int iptv_stream_stop(iptv_stream_session_t *session)
 {
     if (!valid_session(session) || !get_impl(session))

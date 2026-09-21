@@ -167,6 +167,7 @@ struct FakeBackend
     unsigned videos = 0;
     unsigned audios = 0;
     unsigned disables = 0;
+    unsigned discontinuities = 0;
     unsigned drains = 0;
     unsigned closes = 0;
     int drain_result = 0;
@@ -197,6 +198,12 @@ int FakeAudio(void *context, const std::uint8_t *, std::size_t, std::uint64_t)
 int FakeDisableAudio(void *context)
 {
     ++static_cast<FakeBackend *>(context)->disables;
+    return 0;
+}
+
+int FakeDiscontinuity(void *context)
+{
+    ++static_cast<FakeBackend *>(context)->discontinuities;
     return 0;
 }
 
@@ -280,6 +287,35 @@ TEST(IptvStreamTest, DisablesMalformedAacWithoutFailingVideoSession)
     EXPECT_EQ(telemetry->audio_disabled, 1u);
     EXPECT_NE(std::strstr(telemetry->audio_warning, "silent video"), nullptr);
     EXPECT_EQ(telemetry->error_count, 0u);
+    EXPECT_EQ(iptv_stream_cleanup(&session), IPTV_STREAM_OK);
+}
+
+TEST(IptvStreamTest, ResetsTransportTimelineWithoutReopeningBackend)
+{
+    FakeBackend fake;
+    iptv_stream_backend_t backend{};
+    backend.context = &fake;
+    backend.open = FakeOpen;
+    backend.submit_video = FakeVideo;
+    backend.submit_audio = FakeAudio;
+    backend.disable_audio = FakeDisableAudio;
+    backend.discontinuity = FakeDiscontinuity;
+    backend.drain = FakeDrain;
+    backend.close = FakeClose;
+
+    iptv_stream_session_t session{};
+    iptv_stream_init(&session);
+    ASSERT_EQ(iptv_stream_open(&session, nullptr, &backend), IPTV_STREAM_OK);
+    ASSERT_EQ(iptv_stream_start(&session), IPTV_STREAM_OK);
+    const auto first = StreamBytes(0x0f, H264Packet(0, true));
+    ASSERT_EQ(iptv_stream_push(&session, first.data(), first.size()), IPTV_STREAM_OK);
+    ASSERT_EQ(iptv_stream_discontinuity(&session), IPTV_STREAM_OK);
+    const auto second = StreamBytes(0x0f, H264Packet(0, true));
+    ASSERT_EQ(iptv_stream_push(&session, second.data(), second.size()), IPTV_STREAM_OK);
+
+    EXPECT_EQ(fake.opens, 1u);
+    EXPECT_EQ(fake.discontinuities, 1u);
+    EXPECT_EQ(fake.videos, 2u);
     EXPECT_EQ(iptv_stream_cleanup(&session), IPTV_STREAM_OK);
 }
 
