@@ -15,6 +15,7 @@ fi
 [[ -n $tidy ]] || { echo "clang-tidy is required" >&2; exit 2; }
 
 bash "$root/tools/setup-native-dependencies.sh" >/dev/null
+bash "$root/tools/setup-audio-dependencies.sh" >/dev/null
 bash "$root/tools/setup-pacbrew-dependencies.sh" --environment >/dev/null
 sdk="$root/.deps/native/ps5-payload-sdk"
 zlib="$root/.deps/native/zlib/root/usr/include"
@@ -23,6 +24,7 @@ app_includes=(
     -DSDL_MAIN_HANDLED -DSDL_STATIC_LIB -DUSING_GENERATED_CONFIG_H
     -DRMLUI_STATIC_LIB -DITLIB_FLAT_MAP_NO_THROW
     -I"$root/include" -I"$root/src"
+    -isystem "$root/.deps/ffmpeg-audio/root/include"
     -I"$root/vendor/ps5/sdl/include"
     -I"$root/vendor/ps5/sdl/include/SDL2"
     -I"$root/vendor/ps5/rmlui/include"

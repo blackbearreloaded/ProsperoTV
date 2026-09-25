@@ -26,7 +26,19 @@ development but is not fetched, copied, linked, or required by the build.
 MPEG Layer II audio uses [minimp3](https://github.com/lieff/minimp3), pinned to
 commit `ea99364f61c14656440e8d77e9c233ccf3124633`, under CC0-1.0.
 The source and license are included in `vendor/minimp3/`. Native AAC decoding
-is unchanged.
+remains the preferred path for AAC-LC mono/stereo.
+
+## Software audio fallback
+
+AAC Main, multichannel AAC, AAC-LATM, AC-3 and E-AC-3 use the audio-only
+[FFmpeg](https://ffmpeg.org/) 8.0.1 decoder and stereo downmixer (libavcodec,
+libavutil and libswresample), under LGPL-2.1-or-later. The build downloads
+the upstream source archive, verifies SHA-256
+`05ee0b03119b45c0bdb4df654b96802e909e0a752f72e4fe3794f487229e5a41`,
+and builds static libraries under ignored `.deps/ffmpeg-audio/`.
+`tools/setup-audio-dependencies.sh` contains the reproducible configuration
+and the PS5 portability adjustment. FFmpeg's upstream license files remain
+in `.deps/ffmpeg-8.0.1/`; no proprietary decoder is redistributed.
 
 ## Host test dependency
 

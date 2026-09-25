@@ -65,7 +65,7 @@ Demo available by clicking the image below.
 | Shell title | `ProsperoTV` |
 | Title ID | `PPSA99003` |
 | Shell category | Media |
-| Current beta version | `01.000.010` |
+| Current version | `01.000.015` |
 | Release-version source | [`sce_sys/param.json`](sce_sys/param.json) |
 | Built-in catalog | `https://iptv-org.github.io/iptv/index.m3u` |
 | Writable data | `/download0` only |
@@ -87,8 +87,9 @@ Demo available by clicking the image below.
   categories and channels locally.
 - Return to the same screen, group, page, and channel after playback closes.
 - Play HLS and direct MPEG-TS streams with H.264 or HEVC video and supported
-  AAC audio through the native PS5 media path, or software-decoded MP2 audio
-  through the same audio output pipeline.
+  Native AAC-LC mono/stereo audio, plus software-decoded MP2, AAC Main,
+  multichannel AAC, AAC-LATM, AC-3 and E-AC-3 through the same audio output
+  pipeline. Surround audio is downmixed to stereo, including the dialogue channel.
 - Play direct WebM streams containing VP9 Profile 0 video.
 - Adapt read-ahead buffering to live HLS timing and recover from stale live
   segments without discarding the channel immediately.
@@ -270,8 +271,8 @@ PS5 `NN.NNN.NNN` format without a `v` prefix.
 
 ```bash
 # After updating param.json and passing the release gates:
-git tag 01.000.010
-git push origin main 01.000.010
+git tag 01.000.015
+git push origin main 01.000.015
 ```
 
 The release workflow rejects a mismatched tag. See

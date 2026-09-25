@@ -22,6 +22,7 @@ for command in python3 sha256sum; do
     }
 done
 bash "$root/tools/setup-native-dependencies.sh" >/dev/null
+bash "$root/tools/setup-audio-dependencies.sh"
 
 param="$root/sce_sys/param.json"
 read -r title_id content_version < <(python3 - "$param" <<'PY'

@@ -7,6 +7,8 @@
 #include "iptv_native_agc_present.h"
 #include "iptv_vp9_packet.h"
 #include "iptv_mp2.h"
+#include "iptv_audio_frame.h"
+#include "iptv_audio_decode.h"
 #define MINIMP3_IMPLEMENTATION
 #include "../vendor/minimp3/minimp3.h"
 
@@ -32,7 +34,7 @@
 #define AUDIO_OUT_STEREO_S16 1u
 #define AUDIO_OUT_VOLUME_0DB 0x8000
 #define AUDIO_PCM_BYTES 0x4000u
-#define AUDIO_FRAME_MAX_BYTES 4608u
+#define AUDIO_FRAME_MAX_BYTES 8194u
 #define AUDIO_QUEUE_CAPACITY 1024u
 #define VIDEO_QUEUE_CAPACITY 512u
 #define VIDEO_QUEUE_MAX_BYTES (32u * 1024u * 1024u)
@@ -283,6 +285,7 @@ typedef struct backend_state
 
     int32_t audio_decoder;
     mp3dec_t mp2_decoder;
+    iptv_audio_decoder_t *software_audio;
     uint32_t audio_module_loaded;
     uint32_t audio_library_initialized;
     sce_audiodec_param_aac_t audio_param;
@@ -855,6 +858,8 @@ static int32_t audio_drain(backend_state_t *state)
 
 static int32_t initialize_audio(backend_state_t *state)
 {
+    if (iptv_audio_software_type(state->config.audio_stream_type))
+        return 0;
     if (state->config.audio_stream_type == 0x03u || state->config.audio_stream_type == 0x04u)
     {
         mp3dec_init(&state->mp2_decoder);
@@ -890,6 +895,7 @@ static int32_t release_audio(backend_state_t *state)
     int32_t result;
 
     result = stop_audio_worker(state);
+    iptv_audio_decoder_free(&state->software_audio);
     if (result != 0)
         first_result = result;
     if (state->audio_sink.handle >= 0)
@@ -1639,7 +1645,8 @@ static int playback_queues_ready(const backend_state_t *state)
     const uint32_t audio_samples =
         (state->config.audio_stream_type == 0x03u || state->config.audio_stream_type == 0x04u)
             ? 1152u
-            : 1024u;
+        : state->config.audio_stream_type == 0x81u ? 1536u
+                                                   : 1024u;
     const int audio_ready = !state->config.enable_audio || timed_out || pressure ||
                             (audio_rate && (uint64_t)(audio_write - audio_read) * audio_samples *
                                                    UINT64_C(1000000) / audio_rate >=
@@ -1924,6 +1931,24 @@ int32_t iptv_native_backend_submit_video(iptv_native_backend_t *backend, const v
     return 0;
 }
 
+static int32_t decode_software_audio(backend_state_t *state, const uint8_t *data, size_t bytes)
+{
+    if (!state->software_audio)
+        state->software_audio = iptv_audio_decoder_create(state->config.audio_stream_type);
+    if (!state->software_audio)
+        return IPTV_NATIVE_E_UNSUPPORTED;
+    uint32_t rate = 0;
+    const int result =
+        iptv_audio_decode(state->software_audio, data, bytes, (int16_t *)state->audio_pcm,
+                          sizeof(state->audio_pcm), &rate);
+    if (result < 0)
+        return result;
+    state->audio_pcm_item.length = (uint32_t)result;
+    state->audio_info.channel_count = 2;
+    state->audio_info.sampling_frequency = rate;
+    return 0;
+}
+
 static int32_t decode_audio_frame(backend_state_t *state, const void *adts_frame,
                                   size_t frame_bytes, uint64_t pts_us)
 {
@@ -1936,7 +1961,13 @@ static int32_t decode_audio_frame(backend_state_t *state, const void *adts_frame
 
     const int mp2 =
         state->config.audio_stream_type == 0x03u || state->config.audio_stream_type == 0x04u;
-    if (mp2)
+    if (state->software_audio || iptv_audio_software_type(state->config.audio_stream_type) ||
+        (!mp2 && (frame_bytes < 7u || (adts[2] >> 6) != 1u ||
+                  adts_channels(adts, frame_bytes) == 0 || adts_channels(adts, frame_bytes) > 2)))
+    {
+        result = decode_software_audio(state, adts, frame_bytes);
+    }
+    else if (mp2)
     {
         mp3dec_frame_info_t info = {0};
         const int samples = mp3dec_decode_frame(&state->mp2_decoder, adts, (int)frame_bytes,
@@ -1958,6 +1989,8 @@ static int32_t decode_audio_frame(backend_state_t *state, const void *adts_frame
         state->audio_pcm_item.address = state->audio_pcm;
         state->audio_pcm_item.length = sizeof(state->audio_pcm);
         result = sceAudiodecDecode(state->audio_decoder, &state->audio_ctrl);
+        if (result < 0)
+            result = decode_software_audio(state, adts, frame_bytes);
     }
     ++state->telemetry.submitted_audio_frames;
     state->telemetry.last_audio_pts_us = pts_us;
@@ -1974,7 +2007,8 @@ static int32_t decode_audio_frame(backend_state_t *state, const void *adts_frame
     }
 
     pcm_rate =
-        mp2 ? state->audio_info.sampling_frequency
+        (mp2 || state->software_audio)
+            ? state->audio_info.sampling_frequency
             : decoded_pcm_rate(adts, frame_bytes, state->audio_info.channel_count,
                                state->audio_pcm_item.length, state->audio_info.sampling_frequency);
     if (state->audio_sink.handle < 0)
@@ -1994,8 +2028,10 @@ static int32_t decode_audio_frame(backend_state_t *state, const void *adts_frame
             result = IPTV_NATIVE_E_AUDIO_FRAME;
             goto failed;
         }
-        pcm_rate = pcm_rate_from_pts(state->audio_staged_bytes, state->audio_staged_channels,
-                                     state->audio_staged_pts_us, pts_us, state->audio_staged_rate);
+        if (!state->software_audio)
+            pcm_rate =
+                pcm_rate_from_pts(state->audio_staged_bytes, state->audio_staged_channels,
+                                  state->audio_staged_pts_us, pts_us, state->audio_staged_rate);
         result = audio_sink_open(state, pcm_rate, state->audio_info.channel_count);
         if (result < 0)
             goto failed;
@@ -2068,6 +2104,7 @@ static void *audio_worker_entry(void *argument)
         if (state->audio_generation != generation)
         {
             mp3dec_init(&state->mp2_decoder);
+            iptv_audio_decoder_reset(state->software_audio);
             state->audio_staged_bytes = 0;
             state->audio_sink.pending = 0;
             state->audio_sink.have_previous = 0;
@@ -2149,7 +2186,7 @@ int32_t iptv_native_backend_submit_audio(iptv_native_backend_t *backend, const v
         return IPTV_NATIVE_E_STATE;
     const int mp2 =
         state->config.audio_stream_type == 0x03u || state->config.audio_stream_type == 0x04u;
-    if (!state->config.enable_audio || (!mp2 && state->audio_decoder < 0))
+    if (!state->config.enable_audio)
         return 0;
     if (atomic_load_explicit(&state->audio_worker_result, memory_order_acquire) != 0)
     {
@@ -2159,7 +2196,22 @@ int32_t iptv_native_backend_submit_audio(iptv_native_backend_t *backend, const v
     }
     if (atomic_load_explicit(&state->stop_requested, memory_order_relaxed))
         return 0;
-    if (mp2)
+    if (iptv_audio_software_type(state->config.audio_stream_type))
+    {
+        uint32_t samples = 0;
+        declared_bytes = iptv_audio_frame_info(state->config.audio_stream_type, adts, frame_bytes,
+                                               &rate, &samples);
+        if (!declared_bytes || declared_bytes != frame_bytes || frame_bytes > AUDIO_FRAME_MAX_BYTES)
+        {
+            (void)disable_audio_internal(state, IPTV_NATIVE_E_AUDIO_FRAME);
+            return 0;
+        }
+        // LATM carries its rate inside AudioSpecificConfig; only the buffering estimate
+        // uses 48 kHz here. PCM playback uses the decoder's actual sample rate.
+        if (!rate)
+            rate = 48000;
+    }
+    else if (mp2)
     {
         declared_bytes = iptv_mp2_frame_info(adts, frame_bytes, &rate, &channels);
         if (!declared_bytes || declared_bytes != frame_bytes || frame_bytes > AUDIO_FRAME_MAX_BYTES)
@@ -2179,8 +2231,7 @@ int32_t iptv_native_backend_submit_audio(iptv_native_backend_t *backend, const v
         declared_bytes =
             ((size_t)(adts[3] & 3u) << 11) | ((size_t)adts[4] << 3) | ((size_t)adts[5] >> 5);
         channels = adts_channels(adts, frame_bytes);
-        if (declared_bytes != frame_bytes || adts_core_rate(adts, frame_bytes) == 0 ||
-            channels == 0 || channels > 2)
+        if (declared_bytes != frame_bytes || adts_core_rate(adts, frame_bytes) == 0)
         {
             (void)disable_audio_internal(state, IPTV_NATIVE_E_AUDIO_FRAME);
             return 0;

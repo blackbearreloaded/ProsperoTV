@@ -4,6 +4,7 @@
 
 #include "iptv_stream.h"
 #include "iptv_mp2.h"
+#include "iptv_audio_frame.h"
 
 #include <cstdio>
 #include <cstring>
@@ -731,16 +732,35 @@ static int parse_pmt_section(iptv_stream_session_t *session, impl_t *impl, const
         if (at + info > end)
             return fail(session, IPTV_STREAM_MALFORMED_TS,
                         "PMT elementary descriptors exceed section");
+        uint8_t audio_type = type;
+        if (type == 0x06u)
+        {
+            for (size_t descriptor = at; descriptor + 2u <= at + info;)
+            {
+                const uint8_t tag = section[descriptor], length = section[descriptor + 1u];
+                descriptor += 2u;
+                if (descriptor + length > at + info)
+                    return fail(session, IPTV_STREAM_MALFORMED_TS, "invalid audio descriptor");
+                if (tag == 0x6au || (tag == 0x05u && length >= 4u &&
+                                     std::memcmp(section + descriptor, "AC-3", 4) == 0))
+                    audio_type = 0x81u;
+                if (tag == 0x7au || (tag == 0x05u && length >= 4u &&
+                                     std::memcmp(section + descriptor, "EAC3", 4) == 0))
+                    audio_type = 0x87u;
+                descriptor += length;
+            }
+        }
         if (!next.video_pid && (type == 0x1bu || type == 0x24u))
         {
             next.video_pid = pid;
             next.video_stream_type = type;
             next.video_codec = type == 0x1bu ? IPTV_STREAM_VIDEO_H264 : IPTV_STREAM_VIDEO_HEVC;
         }
-        else if (!next.audio_pid && (type == 0x0fu || type == 0x03u || type == 0x04u))
+        else if (!next.audio_pid && (audio_type == 0x0fu || audio_type == 0x03u ||
+                                     audio_type == 0x04u || iptv_audio_software_type(audio_type)))
         {
             next.audio_pid = pid;
-            next.audio_stream_type = type;
+            next.audio_stream_type = audio_type;
         }
         else if (!first_other_stream_type && type != 0x1bu && type != 0x24u && type != 0x0fu &&
                  type != 0x03u && type != 0x04u)
@@ -750,7 +770,7 @@ static int parse_pmt_section(iptv_stream_session_t *session, impl_t *impl, const
     if (at != end || !next.video_pid || next.video_pid == kNullPid ||
         (next.audio_pid != 0 && (next.video_pid == next.audio_pid || next.audio_pid == kNullPid)))
         return fail(session, IPTV_STREAM_UNSUPPORTED_FORMAT,
-                    "PMT requires H.264 or HEVC video with optional AAC or MP2 audio");
+                    "PMT requires H.264 or HEVC video with supported transport audio");
     next.video_bit_depth = 8;
     next.video_chroma_format = IPTV_STREAM_CHROMA_420;
     session->telemetry.first_other_stream_type = first_other_stream_type;
@@ -1226,7 +1246,21 @@ static int process_audio(iptv_stream_session_t *session, impl_t *impl)
     {
         uint32_t rate = 0, channels = 0, samples = 0;
         size_t frame_bytes = 0;
-        if (mp2)
+        if (iptv_audio_software_type(impl->format.audio_stream_type))
+        {
+            if (impl->audio_es.size < 7u)
+                return IPTV_STREAM_OK;
+            frame_bytes = iptv_audio_frame_info(impl->format.audio_stream_type, impl->audio_es.data,
+                                                impl->audio_es.size, &rate, &samples);
+            if (!frame_bytes)
+            {
+                ++session->telemetry.dropped_payloads;
+                buffer_erase(&impl->audio_es, 1u);
+                marker_erase(&impl->audio_markers, 1u, IPTV_STREAM_PTS_UNKNOWN);
+                continue;
+            }
+        }
+        else if (mp2)
         {
             if (impl->audio_es.size < 4u)
                 return IPTV_STREAM_OK;
@@ -1266,7 +1300,7 @@ static int process_audio(iptv_stream_session_t *session, impl_t *impl)
             const size_t header = (data[1] & 1u) ? 7u : 9u;
             frame_bytes = (static_cast<size_t>(data[3] & 3u) << 11) |
                           (static_cast<size_t>(data[4]) << 3) | (data[5] >> 5);
-            if (object_type != 2u || !kAdtsRates[rate_index] || channels < 1u || channels > 2u)
+            if (object_type > 4u || !kAdtsRates[rate_index])
                 return disable_audio(session, impl,
                                      "unsupported AAC; continuing with silent video");
             if (frame_bytes < header || frame_bytes > impl->audio_es.capacity)
@@ -1279,7 +1313,7 @@ static int process_audio(iptv_stream_session_t *session, impl_t *impl)
         if (frame_bytes > impl->audio_es.size)
             return IPTV_STREAM_OK;
 
-        if (impl->format.audio_sample_rate &&
+        if (rate && impl->format.audio_sample_rate &&
             (impl->format.audio_sample_rate != rate || impl->format.audio_channels != channels))
             return disable_audio(session, impl,
                                  "audio format changed; continuing with silent video");
@@ -1307,7 +1341,7 @@ static int process_audio(iptv_stream_session_t *session, impl_t *impl)
         ++session->telemetry.audio_frames;
         session->telemetry.audio_bytes += frame_bytes;
         session->telemetry.last_audio_pts_us = pts;
-        const uint64_t next_pts = pts == IPTV_STREAM_PTS_UNKNOWN
+        const uint64_t next_pts = pts == IPTV_STREAM_PTS_UNKNOWN || !rate
                                       ? IPTV_STREAM_PTS_UNKNOWN
                                       : pts + UINT64_C(1000000) * samples / rate;
         buffer_erase(&impl->audio_es, frame_bytes);
@@ -1382,7 +1416,8 @@ static int parse_pes_header(iptv_stream_session_t *session, impl_t *impl, pes_t 
     if (pes->header_size < 9u || data[0] != 0 || data[1] != 0 || data[2] != 1u ||
         (data[6] & 0xc0u) != 0x80u)
         return reject_pes(session, impl, pes, IPTV_STREAM_MALFORMED_TS, "invalid PES header");
-    if ((pes->video && (data[3] & 0xf0u) != 0xe0u) || (!pes->video && (data[3] & 0xe0u) != 0xc0u))
+    if ((pes->video && (data[3] & 0xf0u) != 0xe0u) ||
+        (!pes->video && (data[3] & 0xe0u) != 0xc0u && data[3] != 0xbdu))
         return reject_pes(session, impl, pes, IPTV_STREAM_UNSUPPORTED_FORMAT,
                           "PES stream id does not match PMT");
     const uint32_t packet_length = static_cast<uint32_t>(data[4] << 8 | data[5]);

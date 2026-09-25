@@ -63,7 +63,8 @@ std::vector<std::uint8_t> PatSection()
 }
 
 std::vector<std::uint8_t> PmtSection(std::uint8_t audio_type, std::uint16_t audio_pid = 0x111,
-                                     std::uint8_t video_type = 0x1b)
+                                     std::uint8_t video_type = 0x1b,
+                                     const std::vector<std::uint8_t> &descriptors = {})
 {
     std::vector<std::uint8_t> section{0x02, 0xb0,       0x17, 0x00, 0x01, 0xc1, 0x00, 0x00,
                                       0xe1, 0x10,       0xf0, 0x00, 0x1b, 0xe1, 0x10, 0xf0,
@@ -71,6 +72,9 @@ std::vector<std::uint8_t> PmtSection(std::uint8_t audio_type, std::uint16_t audi
     section[18] = static_cast<std::uint8_t>(0xe0u | (audio_pid >> 8));
     section[19] = static_cast<std::uint8_t>(audio_pid);
     section[12] = video_type;
+    section[2] += descriptors.size();
+    section[21] = descriptors.size();
+    section.insert(section.end(), descriptors.begin(), descriptors.end());
     AppendCrc(&section);
     return section;
 }
@@ -93,7 +97,7 @@ Packet UnsupportedAacPacket()
         0x80,
         0x00,
         0x00,
-        // AAC Main, 48 kHz, stereo, seven-byte ADTS frame. Only LC is supported.
+        // AAC Main, 48 kHz, stereo, seven-byte ADTS framing fixture.
         0xff,
         0xf1,
         0x0c,
@@ -232,7 +236,7 @@ std::vector<std::uint8_t> StreamBytes(std::uint8_t audio_type, const Packet &thi
     return bytes;
 }
 
-TEST(IptvStreamTest, DisablesUnsupportedAacWithoutFailingVideoSession)
+TEST(IptvStreamTest, RoutesAacMainToAudioBackend)
 {
     FakeBackend fake;
     iptv_stream_backend_t backend{};
@@ -261,14 +265,13 @@ TEST(IptvStreamTest, DisablesUnsupportedAacWithoutFailingVideoSession)
     ASSERT_NE(telemetry, nullptr);
     EXPECT_EQ(telemetry->state, IPTV_STREAM_STATE_PLAYING);
     EXPECT_EQ(telemetry->format.video_codec, IPTV_STREAM_VIDEO_H264);
-    EXPECT_EQ(telemetry->audio_disabled, 1u);
-    EXPECT_NE(std::strstr(telemetry->audio_warning, "silent video"), nullptr);
+    EXPECT_EQ(telemetry->audio_disabled, 0u);
     EXPECT_EQ(telemetry->error_count, 0u);
     EXPECT_EQ(telemetry->video_access_units, 2u);
     EXPECT_EQ(fake.opens, 1u);
     EXPECT_EQ(fake.videos, 2u);
-    EXPECT_EQ(fake.audios, 0u);
-    EXPECT_EQ(fake.disables, 1u);
+    EXPECT_EQ(fake.audios, 1u);
+    EXPECT_EQ(fake.disables, 0u);
 
     EXPECT_EQ(iptv_stream_cleanup(&session), IPTV_STREAM_OK);
     EXPECT_EQ(fake.drains, 1u);
@@ -328,6 +331,68 @@ TEST(IptvStreamTest, SelectsAndReassemblesMp2ForBothTransportTypes)
         EXPECT_EQ(fake.audios, 2u);
         EXPECT_EQ(fake.disables, 0u);
         EXPECT_EQ(iptv_stream_cleanup(&session), IPTV_STREAM_OK);
+    }
+}
+
+TEST(IptvStreamTest, SelectsDolbyDescriptorsAndLatmAndReassemblesPrivatePes)
+{
+    for (const unsigned type : {0x81u, 0x87u, 0x11u})
+    {
+        for (const bool private_stream : {false, true})
+        {
+            if (private_stream && type == 0x11u)
+                continue;
+            FakeBackend fake;
+            iptv_stream_backend_t backend{};
+            backend.context = &fake;
+            backend.open = FakeOpen;
+            backend.submit_video = FakeVideo;
+            backend.submit_audio = FakeAudio;
+            backend.disable_audio = FakeDisableAudio;
+            backend.drain = FakeDrain;
+            backend.close = FakeClose;
+            iptv_stream_session_t session{};
+            iptv_stream_init(&session);
+            ASSERT_EQ(iptv_stream_open(&session, nullptr, &backend), IPTV_STREAM_OK);
+            ASSERT_EQ(iptv_stream_start(&session), IPTV_STREAM_OK);
+            std::vector<std::uint8_t> bytes;
+            AppendPacket(&bytes, PsiPacket(0, PatSection()));
+            const std::vector<std::uint8_t> descriptors =
+                private_stream
+                    ? std::vector<std::uint8_t>{static_cast<uint8_t>(type == 0x81u ? 0x6a : 0x7a),
+                                                0}
+                    : std::vector<std::uint8_t>{};
+            AppendPacket(&bytes, PsiPacket(0x100, PmtSection(private_stream ? 6 : type, 0x111, 0x1b,
+                                                             descriptors)));
+            AppendPacket(&bytes, H264Packet(0, true));
+            std::vector<std::uint8_t> frame(type == 0x81u ? 128 : 16, 0);
+            if (type == 0x11u)
+            {
+                frame[0] = 0x56;
+                frame[1] = 0xe0;
+                frame[2] = 13;
+            }
+            else
+            {
+                frame[0] = 0x0b;
+                frame[1] = 0x77;
+                frame[5] = type == 0x81u ? 0x40 : 0x80;
+                if (type == 0x87u)
+                {
+                    frame[3] = 7;
+                    frame[4] = 0x30;
+                }
+            }
+            AppendPacket(&bytes, PesPacket(0x111, 0, 0xbd, {frame.begin(), frame.begin() + 3}));
+            AppendPacket(&bytes, PesPacket(0x111, 1, 0xbd, {frame.begin() + 3, frame.end()}));
+            AppendPacket(&bytes, PesPacket(0x111, 2, 0xbd, frame));
+            for (const auto byte : bytes)
+                ASSERT_EQ(iptv_stream_push(&session, &byte, 1), IPTV_STREAM_OK);
+            EXPECT_EQ(iptv_stream_telemetry(&session)->format.audio_stream_type, type);
+            EXPECT_EQ(fake.audios, 2u);
+            EXPECT_EQ(fake.disables, 0u);
+            EXPECT_EQ(iptv_stream_cleanup(&session), IPTV_STREAM_OK);
+        }
     }
 }
 
@@ -535,13 +600,13 @@ TEST(IptvStreamTest, IgnoresUnknownAudioCodecWhileKeepingSupportedVideo)
     iptv_stream_init(&session);
     ASSERT_EQ(iptv_stream_open(&session, nullptr, nullptr), IPTV_STREAM_OK);
     ASSERT_EQ(iptv_stream_start(&session), IPTV_STREAM_OK);
-    const auto bytes = StreamBytes(0x81, null_packet);
+    const auto bytes = StreamBytes(0x90, null_packet);
     EXPECT_EQ(iptv_stream_push(&session, bytes.data(), bytes.size()), IPTV_STREAM_OK);
     const iptv_stream_telemetry_t *telemetry = iptv_stream_telemetry(&session);
     ASSERT_NE(telemetry, nullptr);
     EXPECT_EQ(telemetry->format.video_codec, IPTV_STREAM_VIDEO_H264);
     EXPECT_EQ(telemetry->format.audio_pid, 0u);
-    EXPECT_EQ(telemetry->first_other_stream_type, 0x81u);
+    EXPECT_EQ(telemetry->first_other_stream_type, 0x90u);
     EXPECT_EQ(telemetry->error_count, 0u);
     EXPECT_EQ(iptv_stream_cleanup(&session), IPTV_STREAM_OK);
 }

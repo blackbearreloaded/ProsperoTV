@@ -9,6 +9,7 @@ import json
 import os
 from pathlib import Path
 import shutil
+import shlex
 import subprocess
 import tempfile
 import unittest
@@ -19,6 +20,18 @@ TITLE_ID = json.loads((ROOT / "sce_sys/param.json").read_text(encoding="utf-8"))
 
 
 class ToolTests(unittest.TestCase):
+    def test_audio_fallback_downmix_and_reset(self):
+        flags = shlex.split(subprocess.check_output(
+            ["pkg-config", "--cflags", "--libs", "libavcodec", "libswresample", "libavutil"], text=True))
+        with tempfile.TemporaryDirectory() as directory:
+            executable = str(Path(directory) / "audio")
+            subprocess.run(["clang", "-std=c11", "-O1", "-fsanitize=address,undefined", "-Iinclude",
+                "src/iptv_audio_decode.c", "tests/test_audio_decode.c", *flags, "-o", executable], cwd=ROOT, check=True)
+            for kind, fixture in ((15, "aac-stereo.aac"), (15, "aac-surround.bin"),
+                                  (129, "ac3-surround.bin"), (135, "eac3-surround.bin"), (17, "aac-latm.bin")):
+                with self.subTest(fixture=fixture):
+                    subprocess.run([executable, str(kind), str(ROOT / "tests/fixtures" / fixture)], check=True, timeout=10)
+
     def test_mp2_decodes_mpeg1_stereo_and_mpeg2_mono(self):
         with tempfile.TemporaryDirectory() as directory:
             executable = str(Path(directory) / "mp2")
