@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "iptv_stream.h"
+#include "iptv_mp2.h"
 
 #include <cstdio>
 #include <cstring>
@@ -103,6 +104,7 @@ struct impl_t
     bool video_pps;
     bool video_vps;
     bool video_random_access;
+    bool hevc_skip_rasl;
     bool audio_disabled;
 
     uint8_t packet[kPacketBufferBytes];
@@ -564,8 +566,8 @@ static int parse_hevc_sps(iptv_stream_session_t *session, impl_t *impl, const ui
         !skip_bits(&bits, 3) || !read_bits(&bits, 5, &profile) || !skip_bits(&bits, 32u + 48u) ||
         !read_bits(&bits, 8, &level))
         return fail(session, IPTV_STREAM_MALFORMED_TS, "invalid HEVC profile tier level");
-    if (profile != 1u)
-        return fail(session, IPTV_STREAM_UNSUPPORTED_FORMAT, "HEVC profile must be Main");
+    if (profile != 1u && profile != 2u)
+        return fail(session, IPTV_STREAM_UNSUPPORTED_FORMAT, "HEVC profile must be Main or Main10");
 
     uint32_t profile_present[7]{};
     uint32_t level_present[7]{};
@@ -596,8 +598,9 @@ static int parse_hevc_sps(iptv_stream_session_t *session, impl_t *impl, const ui
     uint32_t luma_depth = 0, chroma_depth = 0;
     if (!read_ue(&bits, &luma_depth) || !read_ue(&bits, &chroma_depth))
         return fail(session, IPTV_STREAM_MALFORMED_TS, "invalid HEVC bit depth");
-    if (luma_depth != 0u || chroma_depth != 0u || chroma != 1u || separate)
-        return fail(session, IPTV_STREAM_UNSUPPORTED_FORMAT, "HEVC must be Main 8-bit 4:2:0");
+    if (luma_depth != chroma_depth || (luma_depth != 0u && luma_depth != 2u) ||
+        (luma_depth == 2u && profile != 2u) || chroma != 1u || separate)
+        return fail(session, IPTV_STREAM_UNSUPPORTED_FORMAT, "HEVC must be 8-bit or 10-bit 4:2:0");
     const uint32_t sub_width = chroma == 1u || chroma == 2u ? 2u : 1u;
     const uint32_t sub_height = chroma == 1u ? 2u : 1u;
     const uint64_t crop_x = static_cast<uint64_t>(left + right) * sub_width;
@@ -606,9 +609,9 @@ static int parse_hevc_sps(iptv_stream_session_t *session, impl_t *impl, const ui
         return fail(session, IPTV_STREAM_UNSUPPORTED_FORMAT,
                     "HEVC dimensions exceed the stream contract");
 
-    return accept_video_format(session, impl, profile, level, width, height,
-                               width - static_cast<uint32_t>(crop_x),
-                               height - static_cast<uint32_t>(crop_y), 8, chroma_api(chroma));
+    return accept_video_format(
+        session, impl, profile, level, width, height, width - static_cast<uint32_t>(crop_x),
+        height - static_cast<uint32_t>(crop_y), 8u + luma_depth, chroma_api(chroma));
 }
 
 static bool video_config_ready(const impl_t *impl)
@@ -715,6 +718,7 @@ static int parse_pmt_section(iptv_stream_session_t *session, impl_t *impl, const
     const size_t program_info = (static_cast<size_t>(section[10] & 0x0fu) << 8) | section[11];
     const size_t end = bytes - 4u;
     size_t at = 12u + program_info;
+    uint32_t first_other_stream_type = 0;
     if (at > end)
         return fail(session, IPTV_STREAM_MALFORMED_TS, "PMT program descriptors exceed section");
     while (at + 5u <= end)
@@ -733,19 +737,23 @@ static int parse_pmt_section(iptv_stream_session_t *session, impl_t *impl, const
             next.video_stream_type = type;
             next.video_codec = type == 0x1bu ? IPTV_STREAM_VIDEO_H264 : IPTV_STREAM_VIDEO_HEVC;
         }
-        else if (!next.audio_pid && type == 0x0fu)
+        else if (!next.audio_pid && (type == 0x0fu || type == 0x03u || type == 0x04u))
         {
             next.audio_pid = pid;
             next.audio_stream_type = type;
         }
+        else if (!first_other_stream_type && type != 0x1bu && type != 0x24u && type != 0x0fu &&
+                 type != 0x03u && type != 0x04u)
+            first_other_stream_type = type;
         at += info;
     }
     if (at != end || !next.video_pid || next.video_pid == kNullPid ||
         (next.audio_pid != 0 && (next.video_pid == next.audio_pid || next.audio_pid == kNullPid)))
         return fail(session, IPTV_STREAM_UNSUPPORTED_FORMAT,
-                    "PMT requires H.264 or HEVC video with optional AAC ADTS audio");
+                    "PMT requires H.264 or HEVC video with optional AAC or MP2 audio");
     next.video_bit_depth = 8;
     next.video_chroma_format = IPTV_STREAM_CHROMA_420;
+    session->telemetry.first_other_stream_type = first_other_stream_type;
 
     const bool same_video = impl->pmt_seen && same_video_program(&impl->format, &next);
     const bool same_audio = impl->pmt_seen && impl->format.audio_pid == next.audio_pid &&
@@ -791,6 +799,8 @@ static int parse_pmt_section(iptv_stream_session_t *session, impl_t *impl, const
         next.visible_height = impl->format.visible_height;
         next.video_profile = impl->format.video_profile;
         next.video_level = impl->format.video_level;
+        next.video_bit_depth = impl->format.video_bit_depth;
+        next.video_chroma_format = impl->format.video_chroma_format;
     }
     if (same_audio)
     {
@@ -973,7 +983,7 @@ static int inspect_video_nal(iptv_stream_session_t *session, impl_t *impl, const
 
 static int process_audio(iptv_stream_session_t *session, impl_t *impl);
 
-static bool video_access_unit_is_random_access(const impl_t *impl, size_t bytes)
+static int video_access_unit_type(const impl_t *impl, size_t bytes)
 {
     size_t at = 0;
     while (at < bytes)
@@ -981,19 +991,40 @@ static bool video_access_unit_is_random_access(const impl_t *impl, size_t bytes)
         size_t prefix_bytes = 0;
         const size_t start = find_start_code(impl->video_es.data, bytes, at, &prefix_bytes);
         if (start == kNoOffset || start + prefix_bytes >= bytes)
-            return false;
+            return -1;
         const uint8_t *nal = impl->video_es.data + start + prefix_bytes;
-        if (impl->format.video_codec == IPTV_STREAM_VIDEO_H264 && (nal[0] & 0x1fu) == 5u)
-            return true;
+        if (impl->format.video_codec == IPTV_STREAM_VIDEO_H264)
+        {
+            const uint8_t type = nal[0] & 0x1fu;
+            if (type >= 1u && type <= 5u)
+                return type;
+        }
         if (impl->format.video_codec == IPTV_STREAM_VIDEO_HEVC)
         {
             const uint8_t type = (nal[0] >> 1) & 0x3fu;
-            if (type >= 16u && type <= 21u)
-                return true;
+            if (type <= 31u)
+                return type;
         }
         at = start + prefix_bytes;
     }
-    return false;
+    return -1;
+}
+
+static uint32_t hevc_parameter_mask(const uint8_t *data, size_t bytes)
+{
+    uint32_t mask = 0;
+    for (size_t at = 0; at < bytes;)
+    {
+        size_t prefix_bytes = 0;
+        const size_t start = find_start_code(data, bytes, at, &prefix_bytes);
+        if (start == kNoOffset || start + prefix_bytes >= bytes)
+            break;
+        const uint32_t type = (data[start + prefix_bytes] >> 1) & 0x3fu;
+        if (type >= 32u && type <= 34u)
+            mask |= 1u << (type - 32u);
+        at = start + prefix_bytes + 1u;
+    }
+    return mask;
 }
 
 static int emit_video(iptv_stream_session_t *session, impl_t *impl, size_t bytes)
@@ -1007,16 +1038,38 @@ static int emit_video(iptv_stream_session_t *session, impl_t *impl, size_t bytes
         buffer_erase(&impl->video_es, bytes);
         return IPTV_STREAM_OK;
     }
+    const int picture_type = video_access_unit_type(impl, bytes);
+    const bool hevc = impl->format.video_codec == IPTV_STREAM_VIDEO_HEVC;
+    const bool random_access = hevc ? picture_type >= 16 && picture_type <= 21 : picture_type == 5;
     if (!impl->video_random_access)
     {
-        if (!video_access_unit_is_random_access(impl, bytes))
+        if (!random_access)
         {
             ++session->telemetry.dropped_payloads;
             marker_erase(&impl->video_markers, bytes, IPTV_STREAM_PTS_UNKNOWN);
             buffer_erase(&impl->video_es, bytes);
             return IPTV_STREAM_OK;
         }
+        if (impl->format.video_codec == IPTV_STREAM_VIDEO_HEVC)
+            session->telemetry.first_rap_hevc_parameter_mask =
+                hevc_parameter_mask(impl->video_es.data, bytes);
         impl->video_random_access = true;
+        impl->hevc_skip_rasl = hevc;
+    }
+    else if (hevc && random_access)
+    {
+        // Later CRA pictures have prior references; BLA/IDR start a new sequence.
+        impl->hevc_skip_rasl = picture_type != 21;
+    }
+    if (hevc && impl->hevc_skip_rasl && (picture_type == 8 || picture_type == 9))
+    {
+        // At a live CRA join, RASL pictures may reference pictures we never received.
+        // Keep RADL and trailing pictures, and retain normal RASL at subsequent CRA.
+        ++session->telemetry.dropped_payloads;
+        marker_erase(&impl->video_markers, bytes, IPTV_STREAM_PTS_UNKNOWN);
+        buffer_erase(&impl->video_es, bytes);
+        update_buffered(session, impl);
+        return IPTV_STREAM_OK;
     }
     int result = maybe_activate(session, impl);
     if (result != IPTV_STREAM_OK)
@@ -1076,6 +1129,7 @@ static int process_video(iptv_stream_session_t *session, impl_t *impl, bool flus
         }
 
         bool seen_vcl = false;
+        bool emitted = false;
         size_t pending_prefix = kNoOffset;
         size_t at = 0;
         bool need_more = false;
@@ -1116,6 +1170,7 @@ static int process_video(iptv_stream_session_t *session, impl_t *impl, bool flus
                 const int result = emit_video(session, impl, boundary);
                 if (result != IPTV_STREAM_OK)
                     return result;
+                emitted = true;
                 break;
             }
             if (seen_vcl && prefix && pending_prefix == kNoOffset)
@@ -1138,6 +1193,8 @@ static int process_video(iptv_stream_session_t *session, impl_t *impl, bool flus
                 break;
             }
         }
+        if (emitted)
+            continue;
         if (need_more || !flush)
             return IPTV_STREAM_OK;
         if (!impl->video_es.size)
@@ -1163,44 +1220,70 @@ static bool adts_sync(const uint8_t *data, size_t bytes)
 
 static int process_audio(iptv_stream_session_t *session, impl_t *impl)
 {
+    const bool mp2 =
+        impl->format.audio_stream_type == 0x03u || impl->format.audio_stream_type == 0x04u;
     while (impl->audio_es.size >= 2u)
     {
-        if (!adts_sync(impl->audio_es.data, impl->audio_es.size))
+        uint32_t rate = 0, channels = 0, samples = 0;
+        size_t frame_bytes = 0;
+        if (mp2)
         {
-            size_t next = 1u;
-            while (next + 1u < impl->audio_es.size &&
-                   !adts_sync(impl->audio_es.data + next, impl->audio_es.size - next))
-                ++next;
-            if (next + 1u >= impl->audio_es.size)
-                next = impl->audio_es.size - 1u;
-            ++session->telemetry.dropped_payloads;
-            buffer_erase(&impl->audio_es, next);
-            marker_erase(&impl->audio_markers, next, IPTV_STREAM_PTS_UNKNOWN);
-            continue;
+            if (impl->audio_es.size < 4u)
+                return IPTV_STREAM_OK;
+            frame_bytes =
+                iptv_mp2_frame_info(impl->audio_es.data, impl->audio_es.size, &rate, &channels);
+            if (!frame_bytes)
+            {
+                ++session->telemetry.dropped_payloads;
+                buffer_erase(&impl->audio_es, 1u);
+                marker_erase(&impl->audio_markers, 1u, IPTV_STREAM_PTS_UNKNOWN);
+                continue;
+            }
+            samples = 1152u;
         }
-        if (impl->audio_es.size < 7u)
-            return IPTV_STREAM_OK;
+        else
+        {
+            if (!adts_sync(impl->audio_es.data, impl->audio_es.size))
+            {
+                size_t next = 1u;
+                while (next + 1u < impl->audio_es.size &&
+                       !adts_sync(impl->audio_es.data + next, impl->audio_es.size - next))
+                    ++next;
+                if (next + 1u >= impl->audio_es.size)
+                    next = impl->audio_es.size - 1u;
+                ++session->telemetry.dropped_payloads;
+                buffer_erase(&impl->audio_es, next);
+                marker_erase(&impl->audio_markers, next, IPTV_STREAM_PTS_UNKNOWN);
+                continue;
+            }
+            if (impl->audio_es.size < 7u)
+                return IPTV_STREAM_OK;
+            const uint8_t *data = impl->audio_es.data;
+            const uint32_t object_type = (data[2] >> 6) + 1u;
+            const uint32_t rate_index = (data[2] >> 2) & 0x0fu;
+            channels = ((data[2] & 1u) << 2) | (data[3] >> 6);
+            const uint32_t blocks = (data[6] & 3u) + 1u;
+            const size_t header = (data[1] & 1u) ? 7u : 9u;
+            frame_bytes = (static_cast<size_t>(data[3] & 3u) << 11) |
+                          (static_cast<size_t>(data[4]) << 3) | (data[5] >> 5);
+            if (object_type != 2u || !kAdtsRates[rate_index] || channels < 1u || channels > 2u)
+                return disable_audio(session, impl,
+                                     "unsupported AAC; continuing with silent video");
+            if (frame_bytes < header || frame_bytes > impl->audio_es.capacity)
+                return disable_audio(session, impl,
+                                     "malformed AAC frame; continuing with silent video");
+            rate = kAdtsRates[rate_index];
+            samples = 1024u * blocks;
+        }
         const uint8_t *data = impl->audio_es.data;
-        const uint32_t object_type = (data[2] >> 6) + 1u;
-        const uint32_t rate_index = (data[2] >> 2) & 0x0fu;
-        const uint32_t channels = ((data[2] & 1u) << 2) | (data[3] >> 6);
-        const uint32_t blocks = (data[6] & 3u) + 1u;
-        const size_t header = (data[1] & 1u) ? 7u : 9u;
-        const size_t frame_bytes = (static_cast<size_t>(data[3] & 3u) << 11) |
-                                   (static_cast<size_t>(data[4]) << 3) | (data[5] >> 5);
-        if (object_type != 2u || !kAdtsRates[rate_index] || channels < 1u || channels > 2u)
-            return disable_audio(session, impl, "unsupported AAC; continuing with silent video");
-        if (frame_bytes < header || frame_bytes > impl->audio_es.capacity)
-            return disable_audio(session, impl,
-                                 "malformed AAC frame; continuing with silent video");
         if (frame_bytes > impl->audio_es.size)
             return IPTV_STREAM_OK;
 
         if (impl->format.audio_sample_rate &&
-            (impl->format.audio_sample_rate != kAdtsRates[rate_index] ||
-             impl->format.audio_channels != channels))
-            return disable_audio(session, impl, "AAC format changed; continuing with silent video");
-        impl->format.audio_sample_rate = kAdtsRates[rate_index];
+            (impl->format.audio_sample_rate != rate || impl->format.audio_channels != channels))
+            return disable_audio(session, impl,
+                                 "audio format changed; continuing with silent video");
+        impl->format.audio_sample_rate = rate;
         impl->format.audio_channels = channels;
         session->telemetry.format = impl->format;
 
@@ -1224,10 +1307,9 @@ static int process_audio(iptv_stream_session_t *session, impl_t *impl)
         ++session->telemetry.audio_frames;
         session->telemetry.audio_bytes += frame_bytes;
         session->telemetry.last_audio_pts_us = pts;
-        const uint64_t next_pts =
-            pts == IPTV_STREAM_PTS_UNKNOWN
-                ? IPTV_STREAM_PTS_UNKNOWN
-                : pts + UINT64_C(1024000000) * blocks / kAdtsRates[rate_index];
+        const uint64_t next_pts = pts == IPTV_STREAM_PTS_UNKNOWN
+                                      ? IPTV_STREAM_PTS_UNKNOWN
+                                      : pts + UINT64_C(1000000) * samples / rate;
         buffer_erase(&impl->audio_es, frame_bytes);
         marker_erase(&impl->audio_markers, frame_bytes, next_pts);
         update_buffered(session, impl);
@@ -1450,6 +1532,7 @@ static void reset_pid(impl_t *impl, uint16_t pid)
         impl->video_es.size = 0;
         marker_clear(&impl->video_markers);
         impl->video_time = {};
+        impl->video_random_access = false;
     }
     else if (impl->pmt_seen && pid == impl->format.audio_pid)
     {

@@ -95,6 +95,26 @@ extern "C" long ftell(std::FILE *file)
 namespace
 {
 
+void StartupProbe(const char *stage, bool reset = false)
+{
+#if IPTV_PROBE
+    // Fixed stage names only: never write source URLs or account details.
+    // Close each record so a later crash cannot leave it in a stdio buffer.
+    for (const char *path :
+         {"/data/ProsperoTV-startup-probe.txt", "/download0/iptv-startup-probe.txt"})
+    {
+        if (std::FILE *file = std::fopen(path, reset ? "w" : "a"))
+        {
+            std::fprintf(file, "curl-startup-v1 %s\n", stage);
+            std::fclose(file);
+        }
+    }
+#else
+    (void)stage;
+    (void)reset;
+#endif
+}
+
 struct NotificationRequest
 {
     std::uint8_t reserved[45];
@@ -875,12 +895,14 @@ bool RunLauncher(IptvPlayRequest *play_request, const char *failed_channel_id,
         return false;
     *play_request = {};
     SDL_SetMainReady();
+    StartupProbe("before-sdl");
     if (SDL_Init(SDL_INIT_VIDEO) != 0)
     {
         LauncherFailure("SDL initialization");
         return false;
     }
     SDL_SetHint(SDL_HINT_FRAMEBUFFER_ACCELERATION, "software");
+    StartupProbe("sdl-ready");
     SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, "nearest");
 
     SDL_Window *window = SDL_CreateWindow("ProsperoTV", SDL_WINDOWPOS_UNDEFINED,
@@ -899,6 +921,7 @@ bool RunLauncher(IptvPlayRequest *play_request, const char *failed_channel_id,
     }
 
     AppSystemInterface system_interface;
+    StartupProbe("renderer-ready");
     AppFileInterface file_interface;
     SdlRenderInterface render_interface(renderer, surface);
     BitmapFontEngine font_engine;
@@ -925,6 +948,7 @@ bool RunLauncher(IptvPlayRequest *play_request, const char *failed_channel_id,
         return false;
     }
 
+    StartupProbe("fonts-ready");
     Rml::Context *context =
         Rml::CreateContext("iptv-shell", {1920, 1080}, adapted_render_interface);
     Rml::ElementDocument *document = context ? context->LoadDocument("ui/main.rml") : nullptr;
@@ -933,6 +957,7 @@ bool RunLauncher(IptvPlayRequest *play_request, const char *failed_channel_id,
     bool running = false;
     if (document)
     {
+        StartupProbe("document-ready");
         document->Show();
         input_ready = iptv_input_init();
         running = input_ready && app.Initialize(document);
@@ -943,7 +968,10 @@ bool RunLauncher(IptvPlayRequest *play_request, const char *failed_channel_id,
     if (!running)
         LauncherFailure(document ? "input or app initialization" : "RmlUi document");
     if (running)
+    {
+        StartupProbe("catalog-ready");
         sceSystemServiceHideSplashScreen();
+    }
 
     while (running)
     {
@@ -1204,6 +1232,7 @@ bool RunAutotestIfPresent()
 
 int main()
 {
+    StartupProbe("main-entered", true);
     if (SDL_SetMemoryFunctions(AllocateTracked, CallocTracked, ReallocTracked, FreeTracked) != 0)
     {
         LauncherFailure("SDL allocator setup");

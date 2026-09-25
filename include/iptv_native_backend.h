@@ -14,17 +14,32 @@ extern "C"
 #endif
 
 #define IPTV_NATIVE_BACKEND_STORAGE_BYTES (64u * 1024u)
+#if IPTV_PROBE
+#define IPTV_NATIVE_PROBE_SAMPLES 36u
+    typedef struct iptv_native_probe_sample
+    {
+        uint32_t elapsed_ms;
+        uint32_t video_queue_frames;
+        uint64_t presented_frames;
+        uint64_t pacing_late_frames;
+        uint64_t gaps_over_40ms;
+        uint64_t max_gap_us;
+        uint64_t decode_max_us;
+        uint64_t present_max_us;
+    } iptv_native_probe_sample_t;
+#endif
 #define IPTV_NATIVE_CHROMA_420 420u
 #define IPTV_NATIVE_H264_PROFILE_BASELINE 66u
 #define IPTV_NATIVE_H264_PROFILE_MAIN 77u
 #define IPTV_NATIVE_H264_PROFILE_HIGH 100u
 #define IPTV_NATIVE_HEVC_PROFILE_MAIN 1u
+#define IPTV_NATIVE_HEVC_PROFILE_MAIN10 2u
 #define IPTV_NATIVE_VP9_PROFILE_0 0u
 
     typedef enum iptv_native_codec
     {
         IPTV_NATIVE_CODEC_H264 = 1,
-        IPTV_NATIVE_CODEC_HEVC_MAIN8 = 2,
+        IPTV_NATIVE_CODEC_HEVC = 2,
         IPTV_NATIVE_CODEC_VP9_PROFILE0 = 3
     } iptv_native_codec_t;
 
@@ -51,6 +66,7 @@ extern "C"
         uint32_t chroma_format; /* IPTV_NATIVE_CHROMA_420 only. */
         uint32_t hdr;
         uint32_t enable_audio;
+        uint32_t audio_stream_type; /* TS 0x03/0x04: MP2; zero/0x0f: AAC ADTS. */
     } iptv_native_open_config_t;
 
     typedef struct iptv_native_telemetry
@@ -110,6 +126,13 @@ extern "C"
         uint64_t decode_max_us;
         uint64_t present_total_us;
         uint64_t present_max_us;
+        uint64_t present_gap_max_us;
+        uint64_t present_gaps_over_250ms;
+        uint64_t present_gaps_over_500ms;
+#if IPTV_PROBE
+        uint32_t probe_sample_count;
+        iptv_native_probe_sample_t probe_samples[IPTV_NATIVE_PROBE_SAMPLES];
+#endif
         uint64_t first_frame_latency_us;
         uint64_t last_video_pts_us;
         uint64_t last_presented_video_pts_us;

@@ -17,10 +17,10 @@ inline constexpr std::size_t kMaxUrlBytes = 4096u;
 inline constexpr std::size_t kMaxRedirects = 5u;
 inline constexpr std::size_t kMaxErrorResponseBytes = 511u;
 
-// These values match the PSRadio native HTTP service.
-inline constexpr std::size_t kNetPoolSize = 0x4000u;
+// Video requests need more receive headroom than the original radio-sized pools.
+inline constexpr std::size_t kNetPoolSize = 1024u * 1024u;
 inline constexpr std::size_t kSslPoolSize = 304u * 1024u;
-inline constexpr std::size_t kHttpPoolSize = 0x10000u;
+inline constexpr std::size_t kHttpPoolSize = 4u * 1024u * 1024u;
 inline constexpr std::uint32_t kResolveTimeoutUsec = 5000000u;
 inline constexpr std::uint32_t kConnectTimeoutUsec = 5000000u;
 inline constexpr std::uint32_t kSendTimeoutUsec = 5000000u;

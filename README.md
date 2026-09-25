@@ -65,7 +65,7 @@ Demo available by clicking the image below.
 | Shell title | `ProsperoTV` |
 | Title ID | `PPSA99003` |
 | Shell category | Media |
-| Current beta version | `01.000.005` |
+| Current beta version | `01.000.010` |
 | Release-version source | [`sce_sys/param.json`](sce_sys/param.json) |
 | Built-in catalog | `https://iptv-org.github.io/iptv/index.m3u` |
 | Writable data | `/download0` only |
@@ -87,7 +87,8 @@ Demo available by clicking the image below.
   categories and channels locally.
 - Return to the same screen, group, page, and channel after playback closes.
 - Play HLS and direct MPEG-TS streams with H.264 or HEVC video and supported
-  AAC audio through the native PS5 media path.
+  AAC audio through the native PS5 media path, or software-decoded MP2 audio
+  through the same audio output pipeline.
 - Play direct WebM streams containing VP9 Profile 0 video.
 - Adapt read-ahead buffering to live HLS timing and recover from stale live
   segments without discarding the channel immediately.
@@ -104,7 +105,7 @@ Demo available by clicking the image below.
 | Codec | Supported path | Output classes |
 | --- | --- | --- |
 | H.264 / AVC | MPEG-TS and HLS; Baseline, Main, and High profiles within the configured level limits | 720p, 1080p, 1440p, 2160p |
-| HEVC | MPEG-TS and HLS; Main profile, 8-bit 4:2:0 | 720p, 1080p, 1440p, 2160p |
+| HEVC | MPEG-TS and HLS; Main / Main10, 8-bit or 10-bit 4:2:0, SDR output | 720p, 1080p, 1440p, 2160p |
 | VP9 | Direct WebM; Profile 0, 8-bit 4:2:0 | 1080p, 1440p, 2160p |
 
 Sources up to 1080p use a 1920×1080 presentation surface. Native 1440p video
@@ -269,8 +270,8 @@ PS5 `NN.NNN.NNN` format without a `v` prefix.
 
 ```bash
 # After updating param.json and passing the release gates:
-git tag 01.000.005
-git push origin main 01.000.005
+git tag 01.000.010
+git push origin main 01.000.010
 ```
 
 The release workflow rejects a mismatched tag. See
@@ -284,7 +285,11 @@ The release workflow rejects a mismatched tag. See
 - VP9 currently supports direct, video-only WebM Profile 0 streams. DASH,
   fragmented MP4, WebM audio, VP9 Profile 2, and general Matroska features are
   outside the supported path.
-- MPEG-TS playback supports H.264 and 8-bit HEVC video. Unsupported audio may
+- MPEG-TS playback supports H.264 and 8-bit/10-bit HEVC video. Main10 uses hardware
+  decoding and GPU presentation to the SDR output; HDR output and HDR-to-SDR tone
+  mapping are not implemented. The Main10 presentation path currently requires
+  decoder pitch to match visible width (standard 720p/1080p/1440p/2160p widths).
+  Unsupported audio may
   continue as silent video when the video path remains valid.
 - Catalog metadata describes a channel but cannot guarantee that its current
   stream is online, correctly labeled, or compatible with the PS5 decoder.

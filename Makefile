@@ -9,6 +9,10 @@ SHELL := /bin/bash
 
 APP_DEFINITIONS ?=
 IPTV_AUTOTEST ?= 0
+IPTV_PROBE ?= 0
+ifeq ($(IPTV_PROBE),1)
+PACBREW_PACKAGES += libcurl
+endif
 APP_INCLUDE_PATHS ?=
 APP_STATIC_ARCHIVES ?=
 APP_RUNTIME_MODULES ?=
@@ -41,7 +45,7 @@ RUNTIME := runtime/libc.prx
 RUNTIME_INPUTS := tools/rebuild-libc.sh \
 	$(wildcard tooling/native/*.cpp tooling/native/*.hpp) \
 	$(wildcard tooling/native/runtime/*.txt)
-APP_DEFINITIONS += SDL_MAIN_HANDLED SDL_STATIC_LIB USING_GENERATED_CONFIG_H RMLUI_STATIC_LIB ITLIB_FLAT_MAP_NO_THROW IPTV_AUTOTEST_ENABLED=$(IPTV_AUTOTEST)
+APP_DEFINITIONS += SDL_MAIN_HANDLED SDL_STATIC_LIB USING_GENERATED_CONFIG_H RMLUI_STATIC_LIB ITLIB_FLAT_MAP_NO_THROW IPTV_AUTOTEST_ENABLED=$(IPTV_AUTOTEST) IPTV_PROBE=$(IPTV_PROBE)
 # Keep the native shell compact. The streaming hot path remains in O2-built C
 # code and platform libraries.
 APP_CXXFLAGS += -frtti -Os
@@ -83,7 +87,7 @@ $(HOST_UNIT_TEST): tests/test_vp9_packet.cpp tests/test_iptv_catalog.cpp \
 		src/iptv_stream.cpp src/iptv_webm.cpp src/iptv_xtream.cpp \
 		include/iptv_vp9_packet.h include/iptv_catalog.h \
 		include/iptv_hls.h include/iptv_http.h include/iptv_source_state.h include/iptv_store.h \
-		include/iptv_stream.h include/iptv_webm.h include/iptv_xtream.h \
+		include/iptv_stream.h include/iptv_mp2.h include/iptv_webm.h include/iptv_xtream.h \
 		tools/setup-test-dependencies.sh | test-deps
 	@printf '%s\n' '==> [test-unit] Compiling the host-native GoogleTest binary'
 	@mkdir -p -- $(@D)

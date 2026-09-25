@@ -609,6 +609,7 @@ extern "C"
     extern int sceHttpSetAutoRedirect(int id, int enabled);
     extern int sceHttpSetConnectTimeOut(int id, std::uint32_t usec);
     extern int sceHttpSetRecvTimeOut(int id, std::uint32_t usec);
+    extern int sceHttpSetRecvBlockSize(int id, std::uint32_t bytes);
     extern int sceHttpSetSendTimeOut(int id, std::uint32_t usec);
     extern int sceHttpSetResolveTimeOut(int id, std::uint32_t usec);
     extern int sceHttpSendRequest(int request_id, const void *data, std::size_t size);
@@ -873,6 +874,7 @@ Status NetworkInit()
         return Status::network_init_failed;
     }
     if (sceHttpSetAutoRedirect(g_http_template, 0) < 0 ||
+        sceHttpSetRecvBlockSize(g_http_template, 64u * 1024u) < 0 ||
         sceHttpSetResolveTimeOut(g_http_template, kResolveTimeoutUsec) < 0 ||
         sceHttpSetConnectTimeOut(g_http_template, kConnectTimeoutUsec) < 0 ||
         sceHttpSetSendTimeOut(g_http_template, kSendTimeoutUsec) < 0 ||

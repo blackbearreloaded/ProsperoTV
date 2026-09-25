@@ -27,6 +27,16 @@ extern "C"
                                          uint32_t surface_height, uint32_t visible_width,
                                          uint32_t visible_height,
                                          const iptv_native_video_overlay_t *overlay);
+    int32_t iptv_native_agc_present_nv12_deferred(const void *source, size_t source_bytes,
+                                                  uint32_t pitch, uint32_t surface_height,
+                                                  uint32_t visible_width, uint32_t visible_height,
+                                                  const iptv_native_video_overlay_t *overlay);
+    int32_t iptv_native_agc_present_yuv_deferred(const void *source, size_t source_bytes,
+                                                 uint32_t pitch, uint32_t surface_height,
+                                                 uint32_t visible_width, uint32_t visible_height,
+                                                 uint32_t bit_depth,
+                                                 const iptv_native_video_overlay_t *overlay);
+    int32_t iptv_native_agc_present_finish_frame(void);
     int32_t iptv_native_agc_loading_start(void);
     void iptv_native_agc_loading_stop(void);
     void iptv_native_agc_set_overlay_enabled(int enabled);

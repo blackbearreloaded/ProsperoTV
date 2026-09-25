@@ -114,6 +114,8 @@ typedef struct iptv_stream_telemetry {
     uint32_t hardware_validated;
     uint32_t audio_disabled;
     char audio_warning[IPTV_STREAM_ERROR_TEXT_BYTES];
+    uint32_t first_other_stream_type;
+    uint32_t first_rap_hevc_parameter_mask;
 
     uint64_t packets;
     uint64_t pat_sections;

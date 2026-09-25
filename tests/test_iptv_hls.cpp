@@ -60,6 +60,18 @@ TEST(IptvHlsTest, KeepsMissingAndNonStandardResolutionVariantsEligible)
     EXPECT_NE(iptv_hls_select_variant(&playlist, nullptr, 0u), IPTV_HLS_NO_VARIANT);
 }
 
+TEST(IptvHlsTest, SelectsHevcMain10At4k)
+{
+    const auto playlist = ParseMaster("#EXTM3U\n"
+                                      "#EXT-X-STREAM-INF:BANDWIDTH=18000000,RESOLUTION=3840x2160,"
+                                      "CODECS=\"hvc1.2.4.L153.B0,mp4a.40.2\"\nmain10.m3u8\n");
+    ASSERT_EQ(playlist.variant_count, 1u);
+    EXPECT_EQ(playlist.variants[0].compatible, 1u);
+    EXPECT_EQ(playlist.variants[0].profile, 2u);
+    EXPECT_EQ(playlist.variants[0].bit_depth, 10u);
+    EXPECT_NE(iptv_hls_select_variant(&playlist, nullptr, 0u), IPTV_HLS_NO_VARIANT);
+}
+
 TEST(IptvHlsTest, RejectsCodecLevelAboveTheDeclaredResolutionClass)
 {
     constexpr char text[] = "#EXTM3U\n"

@@ -134,6 +134,17 @@ if (( ${#pacbrew_packages[@]} > 0 || ${#pacbrew_includes[@]} > 0 || ${#pacbrew_a
     mapfile -d '' -t pacbrew_libs < <(python3 -c \
         'import json,sys; [print(v, end="\0") for v in json.loads(sys.argv[1])["libs"]]' \
         "$pacbrew_resolution")
+    if [[ " ${definitions[*]} " == *" IPTV_PROBE=1 "* ]]; then
+        bash "$root/tools/build-probe-curl.sh"
+        curl_replaced=0
+        for index in "${!pacbrew_libs[@]}"; do
+            if [[ ${pacbrew_libs[$index]} == -lcurl || ${pacbrew_libs[$index]} == */libcurl.a ]]; then
+                pacbrew_libs[$index]="$root/build/curl-probe/lib/libcurl.a"
+                curl_replaced=1
+            fi
+        done
+        (( curl_replaced )) || { echo 'Diagnostic curl was not selected for linking' >&2; exit 2; }
+    fi
     pacbrew_root=$(python3 -c 'import json,sys; print(json.loads(sys.argv[1])["root"])' \
         "$pacbrew_resolution")
     for include in "${pacbrew_includes[@]}"; do
@@ -292,6 +303,11 @@ fi
     "${linker_import_flags[@]}" \
     --as-needed "$sdk_root"/target/lib/*.so
 readelf_tool=$(command -v llvm-readelf-18 || command -v llvm-readelf || command -v readelf)
+if [[ " ${definitions[*]} " == *" IPTV_PROBE=1 "* ]] &&
+    nm -u "$build/llvm-pie.elf" | grep -E '[[:space:]](pipe2|Curl_pipe)$' >/dev/null; then
+    echo 'Diagnostic app still imports curl wake-up pipe APIs' >&2
+    exit 2
+fi
 for compatibility_symbol in fchown lstat; do
     if "$readelf_tool" --symbols --wide "$build/llvm-pie.elf" |
         grep -Eq "UND[[:space:]]+$compatibility_symbol$"; then

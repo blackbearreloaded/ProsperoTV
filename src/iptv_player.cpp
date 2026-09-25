@@ -3,6 +3,90 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "iptv_player.h"
+#if IPTV_PROBE
+#include <curl/curl.h>
+#include <pwd.h>
+#include <errno.h>
+#include <fcntl.h>
+#include <unistd.h>
+#include <sys/socket.h>
+#include <time.h>
+#include <atomic>
+#include <dlfcn.h>
+#include <setjmp.h>
+// The console has no POSIX account/home database. Curl must use only the
+// explicitly supplied URL credentials, never a guessed .netrc location.
+extern "C" int getpwuid_r(uid_t, struct passwd *, char *, size_t, struct passwd **result)
+{
+    if (result)
+        *result = nullptr;
+    return 0;
+}
+// OpenSSL links its DTLS module, but this probe only allows HTTP/HTTPS over TCP.
+// Unsupported datagram batching must fail explicitly, never pretend to succeed.
+extern "C" ssize_t recvmmsg(int, struct mmsghdr *, size_t, int, const struct timespec *)
+{
+    errno = ENOSYS;
+    return -1;
+}
+extern "C" ssize_t sendmmsg(int, struct mmsghdr *, size_t, int)
+{
+    errno = ENOSYS;
+    return -1;
+}
+// ponytail: diagnostic URLs do not use named IPv6 zones; add interface lookup
+// only if a scoped link-local endpoint is needed. Never invent a valid index.
+extern "C" unsigned int if_nametoindex(const char *)
+{
+    errno = ENXIO;
+    return 0;
+}
+extern "C" struct tm *gmtime_r(const time_t *value, struct tm *output)
+{
+    if (!value || !output)
+    {
+        errno = EINVAL;
+        return nullptr;
+    }
+    // The app has no other gmtime/localtime callers; serialize the probe's
+    // copies from the console's exported static-result API.
+    static std::atomic_flag busy = ATOMIC_FLAG_INIT;
+    while (busy.test_and_set(std::memory_order_acquire))
+    {
+    }
+    const struct tm *converted = gmtime(value);
+    if (converted)
+        *output = *converted;
+    busy.clear(std::memory_order_release);
+    return converted ? output : nullptr;
+}
+// Static OpenSSL can operate without resolving its own shared-module path.
+extern "C" int dladdr(const void *, Dl_info *info)
+{
+    if (info)
+        *info = {};
+    return 0;
+}
+// OpenSSL's optional async-job module references the underscored pair. Use
+// the native pair consistently (including its signal-state behavior). Tail
+// jumps are essential: saving a wrapper's stack frame would be invalid.
+extern "C" __attribute__((naked, returns_twice)) int _setjmp(jmp_buf)
+{
+    __asm__("jmp setjmp");
+}
+extern "C" __attribute__((naked, noreturn)) void _longjmp(jmp_buf, int)
+{
+    __asm__("jmp longjmp");
+}
+// Zstd's optional weak tracing hooks are absent. Resolve them to null as a
+// normal ELF loader would, rather than importing nonexistent console symbols.
+__asm__(".weak ZSTD_trace_decompress_begin\n"
+        ".hidden ZSTD_trace_decompress_begin\n"
+        ".set ZSTD_trace_decompress_begin, 0\n"
+        ".weak ZSTD_trace_decompress_end\n"
+        ".hidden ZSTD_trace_decompress_end\n"
+        ".set ZSTD_trace_decompress_end, 0\n");
+#endif
 
 #include "iptv_hls.h"
 #include "iptv_http.h"
@@ -16,6 +100,7 @@
 #include <cstdarg>
 #include <cstddef>
 #include <cstdint>
+#include <cstdlib>
 #include <cstdio>
 #include <cstring>
 #include <new>
@@ -33,20 +118,15 @@ namespace
 {
 
 constexpr std::size_t kReadBytes = 64u * 1024u;
+// Batch network reads independently of the demuxer's bounded work chunks.
+constexpr std::size_t kNetworkReadBytes = 256u * 1024u;
 constexpr std::size_t kReadAheadBytes = 16u * 1024u * 1024u;
-constexpr std::size_t kReadAheadMinimumBytes = 64u * 1024u;
-constexpr std::size_t kReadAheadHighWaterBytes = 12u * 1024u * 1024u;
-constexpr std::uint64_t kReadAheadInitialUsec = UINT64_C(2000000);
-constexpr std::uint64_t kReadAheadRebufferUsec = UINT64_C(1000000);
-constexpr std::uint64_t kReadAheadRebufferStepUsec = UINT64_C(500000);
-constexpr std::uint64_t kReadAheadMaximumUsec = UINT64_C(3000000);
-constexpr std::uint64_t kHlsMinimumInitialUsec = UINT64_C(6000000);
-constexpr std::uint64_t kHlsMaximumInitialUsec = UINT64_C(15000000);
-constexpr std::uint64_t kHlsMinimumRebufferUsec = UINT64_C(4000000);
-constexpr std::uint64_t kHlsMaximumRebufferUsec = UINT64_C(8000000);
 constexpr std::size_t kPlaylistBytes = IPTV_HLS_DEFAULT_MAX_INPUT_BYTES;
 constexpr std::uint64_t kVideoProgressTimeoutUsec = UINT64_C(15000000);
 constexpr char kReceiptPath[] = "/download0/iptv-last-receipt.txt";
+#if IPTV_PROBE
+constexpr char kProbePath[] = "/download0/iptv-playback-probe.txt";
+#endif
 
 enum class DirectEnd : std::uint8_t
 {
@@ -66,6 +146,20 @@ struct DirectDiagnostics
     std::uint64_t started_usec = 0;
     std::uint64_t bytes = 0;
     std::uint64_t reads = 0;
+    std::uint64_t read_total_us = 0;
+    std::uint64_t read_max_us = 0;
+    std::uint64_t push_total_us = 0;
+    std::uint64_t push_max_us = 0;
+    std::uint64_t download_probe_bytes = 0;
+    std::uint64_t download_probe_us = 0;
+    int download_probe_result = 0;
+    std::uint64_t curl_probe_bytes = 0;
+    std::uint64_t curl_probe_us = 0;
+    int curl_probe_result = 0;
+    long curl_probe_http_status = 0;
+    int curl_probe_stage = 0;
+    int curl_probe_errno = 0;
+    int curl_probe_dns_thread_failed = 0;
     unsigned open_attempts = 0;
     unsigned reconnects = 0;
     unsigned read_errors = 0;
@@ -101,47 +195,6 @@ const char *DirectEndName(DirectEnd end)
     return "unknown";
 }
 
-constexpr std::uint64_t ClampUsec(std::uint64_t value, std::uint64_t minimum, std::uint64_t maximum)
-{
-    return value < minimum ? minimum : value > maximum ? maximum : value;
-}
-
-constexpr std::uint64_t HlsInitialUsec(std::uint32_t target_duration_ms)
-{
-    return ClampUsec(static_cast<std::uint64_t>(target_duration_ms) * 2000u, kHlsMinimumInitialUsec,
-                     kHlsMaximumInitialUsec);
-}
-
-constexpr std::uint64_t HlsRebufferUsec(std::uint32_t target_duration_ms)
-{
-    return ClampUsec(static_cast<std::uint64_t>(target_duration_ms) * 1000u,
-                     kHlsMinimumRebufferUsec, kHlsMaximumRebufferUsec);
-}
-
-constexpr std::uint64_t ReadAheadPrimeUsec(unsigned underruns, std::uint64_t initial_us,
-                                           std::uint64_t rebuffer_us, std::uint64_t maximum_us)
-{
-    const std::uint64_t requested =
-        underruns == 0 ? initial_us : rebuffer_us + underruns * kReadAheadRebufferStepUsec;
-    return requested < maximum_us ? requested : maximum_us;
-}
-
-constexpr bool ReadAheadPrimed(std::size_t available, std::uint64_t elapsed_us,
-                               std::uint64_t required_us)
-{
-    return available >= kReadAheadHighWaterBytes ||
-           (available >= kReadAheadMinimumBytes && elapsed_us >= required_us);
-}
-
-static_assert(HlsInitialUsec(5000) == UINT64_C(10000000));
-static_assert(HlsInitialUsec(6000) == UINT64_C(12000000));
-static_assert(HlsRebufferUsec(5000) == UINT64_C(5000000));
-static_assert(ReadAheadPrimeUsec(0, kReadAheadInitialUsec, kReadAheadRebufferUsec,
-                                 kReadAheadMaximumUsec) == UINT64_C(2000000));
-static_assert(ReadAheadPrimeUsec(1, kReadAheadInitialUsec, kReadAheadRebufferUsec,
-                                 kReadAheadMaximumUsec) == UINT64_C(1500000));
-static_assert(!ReadAheadPrimed(kReadAheadMinimumBytes, UINT64_C(1000000), kReadAheadInitialUsec));
-static_assert(ReadAheadPrimed(kReadAheadMinimumBytes, UINT64_C(2000000), kReadAheadInitialUsec));
 char gLastPlaybackError[192]{};
 
 void SetLastPlaybackError(const char *format, ...)
@@ -212,13 +265,14 @@ void NotifyLastPlaybackError()
     Notify(message);
 }
 
-void SaveReceipt(int result, const iptv_stream_telemetry_t &stream,
-                 const iptv_native_telemetry_t &native, std::uint32_t native_telemetry_available,
-                 std::uint32_t playback_stop_requested, std::uint64_t player_cleanup_count,
-                 int player_cleanup_result)
+void SaveReceipt(const char *channel_name, std::uint64_t duration_ms, int result,
+                 const iptv_stream_telemetry_t &stream, const iptv_native_telemetry_t &native,
+                 std::uint32_t native_telemetry_available, std::uint32_t playback_stop_requested,
+                 std::uint64_t player_cleanup_count, int player_cleanup_result,
+                 const char *receipt_path = kReceiptPath)
 {
     char temporary[96]{};
-    std::snprintf(temporary, sizeof(temporary), "%s.tmp", kReceiptPath);
+    std::snprintf(temporary, sizeof(temporary), "%s.tmp", receipt_path);
     std::FILE *file = std::fopen(temporary, "wb");
     if (!file)
         return;
@@ -232,6 +286,7 @@ void SaveReceipt(int result, const iptv_stream_telemetry_t &stream,
         "stream_error=%s\n"
         "stream_audio_disabled=%u\n"
         "stream_audio_warning=%s\n"
+        "first_other_stream_type=0x%02x\nfirst_rap_hevc_parameter_mask=0x%x\n"
         "audio_stream_type=0x%02x\naudio_pid=%u\naudio_rate=%u\naudio_channels=%u\n"
         "direct_end=%s\ndirect_elapsed_ms=%llu\ndirect_bytes=%llu\ndirect_reads=%llu\n"
         "direct_open_attempts=%u\ndirect_reconnects=%u\ndirect_read_errors=%u\n"
@@ -270,6 +325,7 @@ void SaveReceipt(int result, const iptv_stream_telemetry_t &stream,
         "playback_stop_requested=%u\n",
         result, gLastPlaybackError, static_cast<int>(stream.state), stream.last_result,
         stream.last_error, stream.audio_disabled, stream.audio_warning,
+        stream.first_other_stream_type, stream.first_rap_hevc_parameter_mask,
         stream.format.audio_stream_type, stream.format.audio_pid, stream.format.audio_sample_rate,
         stream.format.audio_channels, DirectEndName(gDirectDiagnostics.end),
         static_cast<unsigned long long>(
@@ -324,6 +380,28 @@ void SaveReceipt(int result, const iptv_stream_telemetry_t &stream,
         static_cast<unsigned long long>(native.pacing_late_frames),
         static_cast<unsigned long long>(native.dropped_late_video_frames),
         native.hardware_validated, native.stream_acceptance_validated, playback_stop_requested);
+    std::fprintf(file,
+                 "direct_read_total_us=%llu\ndirect_read_max_us=%llu\n"
+                 "direct_push_total_us=%llu\ndirect_push_max_us=%llu\n"
+                 "network_read_capacity=%zu\n"
+                 "download_probe_bytes=%llu\ndownload_probe_us=%llu\ndownload_probe_result=%d\n",
+                 static_cast<unsigned long long>(gDirectDiagnostics.read_total_us),
+                 static_cast<unsigned long long>(gDirectDiagnostics.read_max_us),
+                 static_cast<unsigned long long>(gDirectDiagnostics.push_total_us),
+                 static_cast<unsigned long long>(gDirectDiagnostics.push_max_us), kNetworkReadBytes,
+                 static_cast<unsigned long long>(gDirectDiagnostics.download_probe_bytes),
+                 static_cast<unsigned long long>(gDirectDiagnostics.download_probe_us),
+                 gDirectDiagnostics.download_probe_result);
+    std::fprintf(file,
+                 "curl_probe_bytes=%llu\ncurl_probe_us=%llu\ncurl_probe_result=%d\ncurl_probe_http_"
+                 "status=%ld\n",
+                 static_cast<unsigned long long>(gDirectDiagnostics.curl_probe_bytes),
+                 static_cast<unsigned long long>(gDirectDiagnostics.curl_probe_us),
+                 gDirectDiagnostics.curl_probe_result, gDirectDiagnostics.curl_probe_http_status);
+    std::fprintf(file,
+                 "curl_probe_stage=%d\ncurl_probe_errno=%d\ncurl_probe_dns_thread_failed=%d\n",
+                 gDirectDiagnostics.curl_probe_stage, gDirectDiagnostics.curl_probe_errno,
+                 gDirectDiagnostics.curl_probe_dns_thread_failed);
     const int write_result = std::ferror(file) ? -1 : std::fflush(file);
     const int close_result = std::fclose(file);
     if (write_result != 0 || close_result != 0)
@@ -331,12 +409,110 @@ void SaveReceipt(int result, const iptv_stream_telemetry_t &stream,
         std::remove(temporary);
         return;
     }
-    std::remove(kReceiptPath);
-    if (std::rename(temporary, kReceiptPath) != 0)
+    std::remove(receipt_path);
+    if (std::rename(temporary, receipt_path) != 0)
     {
         std::remove(temporary);
         return;
     }
+#if IPTV_PROBE
+    // Bounded, credential-free archive; the normal receipt remains unchanged.
+    std::FILE *probe = std::fopen(kProbePath, "ab");
+    if (probe)
+    {
+        (void)std::fseek(probe, 0, SEEK_END);
+        if (std::ftell(probe) > 256 * 1024)
+        {
+            std::fclose(probe);
+            probe = std::fopen(kProbePath, "wb");
+        }
+        if (probe)
+        {
+            std::fputs("IPTV_PROBE_V3\nchannel=", probe);
+            if (channel_name)
+                for (unsigned i = 0; channel_name[i] && i < 120; ++i)
+                {
+                    const unsigned char c = static_cast<unsigned char>(channel_name[i]);
+                    std::fputc(c < 32 || c == 127 ? ' ' : c, probe);
+                }
+            std::fprintf(probe,
+                         "\nduration_ms=%llu\nresult=%d\nstream_result=%d\nnative_result=%d\n"
+                         "native_error=0x%08x\ncodec=%u\nprofile=%u\nlevel=%u\n"
+                         "resolution=%ux%u\nbit_depth=%u\nsource_fps_x100=%u\nbitrate_kbps=%u\n"
+                         "audio_stream_type=0x%02x\naudio_pid=%u\naudio_frames=%llu\n"
+                         "first_other_stream_type=0x%02x\nfirst_rap_hevc_parameter_mask=0x%x\n"
+                         "stream_audio_disabled=%u\nstream_audio_warning=%s\n"
+                         "native_audio_disabled=%u\nnative_audio_result=%d\n"
+                         "video_access_units=%llu\nlast_video_access_unit_bytes=%llu\n"
+                         "continuity_errors=%llu\ndropped_payloads=%llu\n"
+                         "decoder_output_valid=%u\ndecoder_output_error=%u\n"
+                         "decoder_frame_accepted=%u\n"
+                         "decoded_frames=%llu\npresented_frames=%llu\n"
+                         "present_gap_max_us=%llu\npresent_gaps_over_250ms=%llu\n"
+                         "present_gaps_over_500ms=%llu\ndecode_max_us=%llu\npresent_max_us=%llu\n"
+                         "video_queue_max_frames=%u\nvideo_queue_underruns=%llu\n"
+                         "audio_queue_underruns=%llu\npacing_resets=%llu\n"
+                         "pacing_late_frames=%llu\ndropped_late_frames=%llu\n"
+                         "direct_bytes=%llu\ndirect_reads=%llu\ndirect_reconnects=%u\n"
+                         "direct_read_errors=%u\ndirect_end=%s\n",
+                         static_cast<unsigned long long>(duration_ms), result, stream.last_result,
+                         native.last_result, static_cast<unsigned>(native.last_native_result),
+                         stream.format.video_codec, stream.format.video_profile,
+                         stream.format.video_level, stream.format.visible_width,
+                         stream.format.visible_height, stream.format.video_bit_depth,
+                         native.actual_frame_rate_x100, native.bitrate_kbps,
+                         stream.format.audio_stream_type, stream.format.audio_pid,
+                         static_cast<unsigned long long>(stream.audio_frames),
+                         stream.first_other_stream_type, stream.first_rap_hevc_parameter_mask,
+                         stream.audio_disabled, stream.audio_warning, native.audio_disabled,
+                         native.last_audio_result,
+                         static_cast<unsigned long long>(stream.video_access_units),
+                         static_cast<unsigned long long>(native.last_video_access_unit_bytes),
+                         static_cast<unsigned long long>(stream.continuity_errors),
+                         static_cast<unsigned long long>(stream.dropped_payloads),
+                         native.decoder_output_valid, native.decoder_output_error,
+                         native.decoder_frame_accepted,
+                         static_cast<unsigned long long>(native.decoded_frames),
+                         static_cast<unsigned long long>(native.presented_frames),
+                         static_cast<unsigned long long>(native.present_gap_max_us),
+                         static_cast<unsigned long long>(native.present_gaps_over_250ms),
+                         static_cast<unsigned long long>(native.present_gaps_over_500ms),
+                         static_cast<unsigned long long>(native.decode_max_us),
+                         static_cast<unsigned long long>(native.present_max_us),
+                         native.video_queue_max_frames,
+                         static_cast<unsigned long long>(native.video_queue_underruns),
+                         static_cast<unsigned long long>(native.audio_queue_underruns),
+                         static_cast<unsigned long long>(native.pacing_resets),
+                         static_cast<unsigned long long>(native.pacing_late_frames),
+                         static_cast<unsigned long long>(native.dropped_late_video_frames),
+                         static_cast<unsigned long long>(gDirectDiagnostics.bytes),
+                         static_cast<unsigned long long>(gDirectDiagnostics.reads),
+                         gDirectDiagnostics.reconnects, gDirectDiagnostics.read_errors,
+                         DirectEndName(gDirectDiagnostics.end));
+            std::fputs("samples=elapsed_ms,presented,late,gaps_over_40ms,max_gap_us,"
+                       "decode_max_us,present_max_us,video_queue_frames\n",
+                       probe);
+            for (std::uint32_t i = 0; i < native.probe_sample_count; ++i)
+            {
+                const auto &sample = native.probe_samples[i];
+                std::fprintf(probe, "sample=%u,%llu,%llu,%llu,%llu,%llu,%llu,%u\n",
+                             sample.elapsed_ms,
+                             static_cast<unsigned long long>(sample.presented_frames),
+                             static_cast<unsigned long long>(sample.pacing_late_frames),
+                             static_cast<unsigned long long>(sample.gaps_over_40ms),
+                             static_cast<unsigned long long>(sample.max_gap_us),
+                             static_cast<unsigned long long>(sample.decode_max_us),
+                             static_cast<unsigned long long>(sample.present_max_us),
+                             sample.video_queue_frames);
+            }
+            std::fputs("---\n", probe);
+            std::fclose(probe);
+        }
+    }
+#else
+    (void)channel_name;
+    (void)duration_ms;
+#endif
     char summary[384]{};
     const int summary_bytes = std::snprintf(
         summary, sizeof(summary),
@@ -478,7 +654,7 @@ int AdapterOpen(void *context, const iptv_stream_format_t *format)
     }
     else if (format->video_codec == IPTV_STREAM_VIDEO_HEVC)
     {
-        config.codec = IPTV_NATIVE_CODEC_HEVC_MAIN8;
+        config.codec = IPTV_NATIVE_CODEC_HEVC;
     }
     else if (format->video_codec == IPTV_STREAM_VIDEO_VP9)
     {
@@ -498,6 +674,7 @@ int AdapterOpen(void *context, const iptv_stream_format_t *format)
     config.chroma_format = IPTV_NATIVE_CHROMA_420;
     config.hdr = 0;
     config.enable_audio = format->audio_pid != 0;
+    config.audio_stream_type = format->audio_stream_type;
     iptv_native_agc_loading_stop();
     const int handoff = iptv_native_agc_present_shutdown();
     if (handoff != 0)
@@ -679,19 +856,16 @@ class StreamRunner
     {
         if (!read_ahead_thread_)
             return true;
-        read_ahead_flush_.store(true, std::memory_order_release);
         while (read_ahead_read_.load(std::memory_order_acquire) !=
                read_ahead_write_.load(std::memory_order_acquire))
         {
             if (read_ahead_result_.load(std::memory_order_acquire) != IPTV_STREAM_OK ||
                 StopRequested())
             {
-                read_ahead_flush_.store(false, std::memory_order_release);
                 return false;
             }
             sceKernelUsleep(1000u);
         }
-        read_ahead_flush_.store(false, std::memory_order_release);
         return read_ahead_result_.load(std::memory_order_acquire) == IPTV_STREAM_OK;
     }
 
@@ -809,17 +983,6 @@ class StreamRunner
         return PresentedFrames() != 0;
     }
 
-    void ConfigureHlsBuffering(std::uint32_t target_duration_ms)
-    {
-        if (!target_duration_ms)
-            return;
-        const std::uint64_t initial = HlsInitialUsec(target_duration_ms);
-        read_ahead_initial_us_.store(initial, std::memory_order_release);
-        read_ahead_rebuffer_us_.store(HlsRebufferUsec(target_duration_ms),
-                                      std::memory_order_release);
-        read_ahead_maximum_us_.store(initial, std::memory_order_release);
-    }
-
     std::uint64_t PresentedFrames() const
     {
         return iptv_native_backend_presented_frames(&adapter_.backend);
@@ -869,8 +1032,22 @@ class StreamRunner
         if (active_)
         {
             if (mode_ == RunnerMode::transport_stream)
-            {
                 (void)StopReadAhead(false);
+#if IPTV_PROBE
+            // Preserve the last initialized attempt before cleanup/reconnect resets it.
+            // Empty reconnects must not overwrite the decoder failure we need to diagnose.
+            if (session_.telemetry.format.video_codec != IPTV_STREAM_VIDEO_UNKNOWN)
+            {
+                iptv_native_telemetry_t attempt{};
+                const bool available = NativeTelemetry(&attempt);
+                SaveReceipt("[playback attempt]", 0, session_.telemetry.last_result,
+                            session_.telemetry, attempt, available ? 1u : 0u,
+                            playback_stop_requested_ ? 1u : 0u, player_cleanup_count_,
+                            player_cleanup_result_, "/download0/iptv-attempt-receipt.txt");
+            }
+#endif
+            if (mode_ == RunnerMode::transport_stream)
+            {
                 const int stop_result = iptv_stream_stop(&session_);
                 const int cleanup_result = iptv_stream_cleanup(&session_);
                 ++player_cleanup_count_;
@@ -938,7 +1115,6 @@ class StreamRunner
         read_ahead_result_.store(IPTV_STREAM_OK, std::memory_order_relaxed);
         read_ahead_stop_.store(false, std::memory_order_relaxed);
         read_ahead_finished_.store(false, std::memory_order_relaxed);
-        read_ahead_flush_.store(false, std::memory_order_relaxed);
         if (scePthreadCreate(&read_ahead_thread_, nullptr, ReadAheadEntry, this,
                              "prosperotv-buffer") != 0)
         {
@@ -952,48 +1128,19 @@ class StreamRunner
 
     void ReadAheadLoop()
     {
-        bool primed = false;
-        unsigned underruns = 0;
-        std::uint64_t prime_started_us = 0;
         while (!read_ahead_stop_.load(std::memory_order_acquire))
         {
             const std::uint64_t read = read_ahead_read_.load(std::memory_order_relaxed);
             const std::uint64_t write = read_ahead_write_.load(std::memory_order_acquire);
             const std::size_t available = static_cast<std::size_t>(write - read);
             const bool finished = read_ahead_finished_.load(std::memory_order_acquire);
-            const bool flushing = read_ahead_flush_.load(std::memory_order_acquire);
-            if (!primed)
-            {
-                if (available == 0 && finished)
-                    break;
-                if (available == 0)
-                {
-                    prime_started_us = 0;
-                    sceKernelUsleep(1000u);
-                    continue;
-                }
-                const std::uint64_t now = MonotonicUsec();
-                if (prime_started_us == 0)
-                    prime_started_us = now;
-                const std::uint64_t elapsed = now >= prime_started_us ? now - prime_started_us : 0;
-                const std::uint64_t required = ReadAheadPrimeUsec(
-                    underruns, read_ahead_initial_us_.load(std::memory_order_acquire),
-                    read_ahead_rebuffer_us_.load(std::memory_order_acquire),
-                    read_ahead_maximum_us_.load(std::memory_order_acquire));
-                if (!finished && !flushing && !ReadAheadPrimed(available, elapsed, required))
-                {
-                    sceKernelUsleep(1000u);
-                    continue;
-                }
-                primed = true;
-            }
             if (available == 0)
             {
                 if (finished)
                     break;
-                primed = false;
-                ++underruns;
-                prime_started_us = 0;
+                // The demuxer can drain input faster than playback consumes its queues.
+                // Keep feeding new bytes immediately; an empty input ring is not an
+                // audio/video underrun and must not impose another startup delay.
                 sceKernelUsleep(1000u);
                 continue;
             }
@@ -1064,17 +1211,107 @@ class StreamRunner
     bool playback_stop_requested_ = false;
     bool overlay_chord_down_ = false;
     std::uint8_t *read_ahead_buffer_ = nullptr;
-    std::atomic<std::uint64_t> read_ahead_initial_us_{kReadAheadInitialUsec};
-    std::atomic<std::uint64_t> read_ahead_rebuffer_us_{kReadAheadRebufferUsec};
-    std::atomic<std::uint64_t> read_ahead_maximum_us_{kReadAheadMaximumUsec};
     void *read_ahead_thread_ = nullptr;
     std::atomic<std::uint64_t> read_ahead_read_{0};
     std::atomic<std::uint64_t> read_ahead_write_{0};
     std::atomic<int> read_ahead_result_{IPTV_STREAM_OK};
     std::atomic<bool> read_ahead_stop_{false};
     std::atomic<bool> read_ahead_finished_{false};
-    std::atomic<bool> read_ahead_flush_{false};
 };
+
+#if IPTV_PROBE
+char *CurlProbeDuplicate(const char *source)
+{
+    const std::size_t bytes = std::strlen(source) + 1;
+    char *copy = static_cast<char *>(std::malloc(bytes));
+    if (copy)
+        std::memcpy(copy, source, bytes);
+    return copy;
+}
+
+void RunCurlDownloadProbe(const char *url, const iptv::http::RequestHeaders &headers,
+                          StreamRunner *runner)
+{
+    Notify("ProsperoTV: alternative HTTP download test before playback.");
+    // Keep strdup and the rest of curl's allocations in the same app-owned
+    // heap. The console libc's internal strdup does not use our allocator.
+    gDirectDiagnostics.curl_probe_stage = 1;
+    const auto initialized = curl_global_init_mem(CURL_GLOBAL_DEFAULT, std::malloc, std::free,
+                                                  std::realloc, CurlProbeDuplicate, std::calloc);
+    if (initialized != CURLE_OK)
+    {
+        gDirectDiagnostics.curl_probe_result = initialized;
+        return;
+    }
+    gDirectDiagnostics.curl_probe_stage = 2;
+    CURL *curl = curl_easy_init();
+    if (!curl)
+    {
+        gDirectDiagnostics.curl_probe_result = CURLE_OUT_OF_MEMORY;
+        curl_global_cleanup();
+        return;
+    }
+    CURLcode result = CURLE_OK;
+    char error_buffer[CURL_ERROR_SIZE]{};
+    gDirectDiagnostics.curl_probe_stage = 3;
+    auto option = [&](CURLoption key, auto value)
+    {
+        if (result == CURLE_OK)
+            result = curl_easy_setopt(curl, key, value);
+    };
+    using Writer = std::size_t (*)(char *, std::size_t, std::size_t, void *);
+    const Writer writer = [](char *, std::size_t size, std::size_t count, void *) -> std::size_t
+    {
+        if (size && count > SIZE_MAX / size)
+            return 0;
+        const std::size_t bytes = size * count;
+        constexpr std::uint64_t limit = 16u * 1024u * 1024u;
+        if (gDirectDiagnostics.curl_probe_bytes >= limit)
+            return 0;
+        gDirectDiagnostics.curl_probe_bytes += bytes;
+        return bytes;
+    };
+    using Progress = int (*)(void *, curl_off_t, curl_off_t, curl_off_t, curl_off_t);
+    const Progress progress = [](void *context, curl_off_t, curl_off_t, curl_off_t, curl_off_t)
+    { return static_cast<StreamRunner *>(context)->StopRequested() ? 1 : 0; };
+    option(CURLOPT_ERRORBUFFER, error_buffer);
+    option(CURLOPT_URL, url);
+    option(CURLOPT_PROTOCOLS_STR, "http,https");
+    option(CURLOPT_REDIR_PROTOCOLS_STR, "http,https");
+    option(CURLOPT_FOLLOWLOCATION, 1L);
+    option(CURLOPT_MAXREDIRS, 5L);
+    option(CURLOPT_CONNECTTIMEOUT_MS, 5000L);
+    option(CURLOPT_TIMEOUT_MS, 10000L);
+    option(CURLOPT_NOSIGNAL, 1L);
+    option(CURLOPT_FAILONERROR, 1L);
+    option(CURLOPT_NETRC, static_cast<long>(CURL_NETRC_IGNORED));
+    option(CURLOPT_USERAGENT,
+           headers.user_agent && *headers.user_agent ? headers.user_agent : "PS5IPTV/1.0");
+    if (headers.referrer && *headers.referrer)
+        option(CURLOPT_REFERER, headers.referrer);
+    option(CURLOPT_WRITEFUNCTION, writer);
+    option(CURLOPT_XFERINFOFUNCTION, progress);
+    option(CURLOPT_XFERINFODATA, runner);
+    option(CURLOPT_NOPROGRESS, 0L);
+    const std::uint64_t started = MonotonicUsec();
+    if (result == CURLE_OK)
+    {
+        gDirectDiagnostics.curl_probe_stage = 4;
+        errno = 0;
+        result = curl_easy_perform(curl);
+        gDirectDiagnostics.curl_probe_errno = errno;
+    }
+    // Never persist error_buffer: it can contain the credential-bearing URL.
+    gDirectDiagnostics.curl_probe_dns_thread_failed =
+        std::strstr(error_buffer, "getaddrinfo() thread failed") ? 1 : 0;
+    gDirectDiagnostics.curl_probe_us = MonotonicUsec() - started;
+    gDirectDiagnostics.curl_probe_result = result;
+    (void)curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE,
+                            &gDirectDiagnostics.curl_probe_http_status);
+    curl_easy_cleanup(curl);
+    curl_global_cleanup();
+}
+#endif
 
 enum class FeedResult
 {
@@ -1113,7 +1350,15 @@ FeedResult FeedRequest(iptv::http::StreamRequest *request, StreamRunner *runner,
     std::uint64_t last_progress = MonotonicUsec();
     while (!runner->StopRequested())
     {
+        const std::uint64_t read_started = MonotonicUsec();
         const int read = iptv::http::ReadStream(request, buffer, buffer_bytes);
+        if (diagnostics)
+        {
+            const std::uint64_t elapsed = MonotonicUsec() - read_started;
+            diagnostics->read_total_us += elapsed;
+            if (elapsed > diagnostics->read_max_us)
+                diagnostics->read_max_us = elapsed;
+        }
         if (read == 0)
         {
             if (diagnostics)
@@ -1143,7 +1388,15 @@ FeedResult FeedRequest(iptv::http::StreamRequest *request, StreamRunner *runner,
             ++diagnostics->reads;
             diagnostics->bytes += static_cast<std::size_t>(read);
         }
+        const std::uint64_t push_started = MonotonicUsec();
         const int pushed = runner->Push(buffer, static_cast<std::size_t>(read));
+        if (diagnostics)
+        {
+            const std::uint64_t elapsed = MonotonicUsec() - push_started;
+            diagnostics->push_total_us += elapsed;
+            if (elapsed > diagnostics->push_max_us)
+                diagnostics->push_max_us = elapsed;
+        }
         if (pushed == IPTV_STREAM_REOPEN_REQUIRED)
         {
             if (diagnostics)
@@ -1207,7 +1460,7 @@ int RunWebm(iptv::http::StreamRequest *request, StreamRunner *runner,
     std::uint64_t last_progress = MonotonicUsec();
     while (result == IPTV_WEBM_OK && !runner->StopRequested())
     {
-        const int read = iptv::http::ReadStream(request, read_buffer, kReadBytes);
+        const int read = iptv::http::ReadStream(request, read_buffer, kNetworkReadBytes);
         if (read == 0)
         {
             result = iptv_webm_finish(&parser);
@@ -1299,7 +1552,7 @@ int OpenAndFeedSegment(const char *url, StreamRunner *runner, std::uint8_t *buff
             sceKernelUsleep(100000u);
             continue;
         }
-        const FeedResult fed = FeedRequest(&request, runner, buffer, kReadBytes);
+        const FeedResult fed = FeedRequest(&request, runner, buffer, kNetworkReadBytes);
         iptv::http::CloseStream(&request);
         if (fed == FeedResult::stopped)
             return 1;
@@ -1356,7 +1609,6 @@ int RunHlsMedia(const char *source_url, StreamRunner *runner, std::uint8_t *read
                     iptv_hls_result_name(parsed == IPTV_HLS_OK ? IPTV_HLS_MALFORMED : parsed));
             return parsed == IPTV_HLS_OK ? IPTV_HLS_MALFORMED : parsed;
         }
-        runner->ConfigureHlsBuffering(playlist->target_duration_ms);
         std::snprintf(media_url, sizeof(media_url), "%s", effective_url);
 
         if (have_sequence && playlist->segment_count)
@@ -1541,6 +1793,9 @@ int RunDirect(const char *url, StreamRunner *runner, std::uint8_t *read_buffer, 
     gDirectDiagnostics.started_usec = MonotonicUsec();
     unsigned attempt = 0;
     bool discontinuity_on_open = false;
+#if IPTV_PROBE
+    bool download_probe_done = false;
+#endif
     while (attempt < 3u)
     {
         ++gDirectDiagnostics.open_attempts;
@@ -1559,7 +1814,7 @@ int RunDirect(const char *url, StreamRunner *runner, std::uint8_t *read_buffer, 
             continue;
         }
 
-        const int first = ReadInitialProbe(&request, read_buffer, kReadBytes);
+        const int first = ReadInitialProbe(&request, read_buffer, kNetworkReadBytes);
         if (first <= 0)
         {
             gDirectDiagnostics.end = DirectEnd::no_data;
@@ -1617,17 +1872,69 @@ int RunDirect(const char *url, StreamRunner *runner, std::uint8_t *read_buffer, 
             sceKernelUsleep(100000u);
             continue;
         }
-        const int pushed = runner->Push(read_buffer, static_cast<std::size_t>(first));
+        int pushed;
+#if IPTV_PROBE
+        if (!download_probe_done)
+        {
+            download_probe_done = true;
+            // Measure this same connection before feeding any data to the decoder.
+            // Retain the prefix so the test neither skips media nor reconnects.
+            constexpr std::size_t probe_capacity = 16u * 1024u * 1024u;
+            auto *prefix = new (std::nothrow) std::uint8_t[probe_capacity];
+            if (!prefix)
+            {
+                gDirectDiagnostics.download_probe_result = -1;
+                pushed = runner->Push(read_buffer, static_cast<std::size_t>(first));
+            }
+            else
+            {
+                Notify("ProsperoTV: measuring download speed before playback (up to 10 seconds).");
+                std::memcpy(prefix, read_buffer, static_cast<std::size_t>(first));
+                std::size_t used = static_cast<std::size_t>(first);
+                const std::uint64_t started = MonotonicUsec();
+                while (used < probe_capacity && MonotonicUsec() - started < UINT64_C(10000000) &&
+                       !runner->StopRequested())
+                {
+                    const std::size_t remaining = probe_capacity - used;
+                    const int received = iptv::http::ReadStream(
+                        &request, prefix + used,
+                        remaining < kNetworkReadBytes ? remaining : kNetworkReadBytes);
+                    if (received <= 0)
+                    {
+                        gDirectDiagnostics.download_probe_result =
+                            received < 0 ? request.native_error : 1;
+                        break;
+                    }
+                    used += static_cast<std::size_t>(received);
+                    ++gDirectDiagnostics.reads;
+                    gDirectDiagnostics.bytes += static_cast<std::size_t>(received);
+                }
+                gDirectDiagnostics.download_probe_us = MonotonicUsec() - started;
+                gDirectDiagnostics.download_probe_bytes = used - static_cast<std::size_t>(first);
+                if (runner->StopRequested())
+                {
+                    delete[] prefix;
+                    iptv::http::CloseStream(&request);
+                    return 1;
+                }
+                pushed = runner->Push(prefix, used);
+                delete[] prefix;
+            }
+        }
+        else
+#endif
+            pushed = runner->Push(read_buffer, static_cast<std::size_t>(first));
         if (pushed != IPTV_STREAM_OK && pushed != IPTV_STREAM_REOPEN_REQUIRED)
         {
             const iptv_stream_telemetry_t *telemetry = runner->Telemetry();
             if (telemetry && telemetry->last_error[0])
                 SetLastPlaybackError("%s", telemetry->last_error);
         }
-        FeedResult fed = pushed == IPTV_STREAM_REOPEN_REQUIRED ? FeedResult::reopen
-                         : pushed == IPTV_STREAM_OK ? FeedRequest(&request, runner, read_buffer,
-                                                                  kReadBytes, &gDirectDiagnostics)
-                                                    : FeedResult::failed;
+        FeedResult fed =
+            pushed == IPTV_STREAM_REOPEN_REQUIRED ? FeedResult::reopen
+            : pushed == IPTV_STREAM_OK
+                ? FeedRequest(&request, runner, read_buffer, kNetworkReadBytes, &gDirectDiagnostics)
+                : FeedResult::failed;
         iptv::http::CloseStream(&request);
         if (fed == FeedResult::stopped)
             return 1;
@@ -1678,8 +1985,12 @@ int RunDirect(const char *url, StreamRunner *runner, std::uint8_t *read_buffer, 
 static int RunPlayer(const char *url, const char *channel_name, const char *user_agent,
                      const char *referrer, unsigned stop_after_ms, bool reconnect_live)
 {
+    const std::uint64_t playback_started_us = MonotonicUsec();
     SetLastPlaybackError(nullptr);
     gDirectDiagnostics = {};
+#if IPTV_PROBE
+    std::remove("/download0/iptv-attempt-receipt.txt");
+#endif
     if (!url || !*url)
     {
         SetLastPlaybackError("The channel has no stream URL.");
@@ -1709,7 +2020,7 @@ static int RunPlayer(const char *url, const char *channel_name, const char *user
 
     const iptv::http::RequestHeaders headers{user_agent, referrer};
     auto *runner = new (std::nothrow) StreamRunner{};
-    auto *read_buffer = new (std::nothrow) std::uint8_t[kReadBytes];
+    auto *read_buffer = new (std::nothrow) std::uint8_t[kNetworkReadBytes];
     auto *playlist_data = new (std::nothrow) char[kPlaylistBytes + 1u];
     int result = -1;
     if (!runner || !read_buffer || !playlist_data)
@@ -1720,7 +2031,13 @@ static int RunPlayer(const char *url, const char *channel_name, const char *user
     else
     {
         runner->SetStopAfter(stop_after_ms);
-        if (!(UrlLooksLikeWebm(url) ? runner->StartWebm() : runner->Start()))
+#if IPTV_PROBE
+        if (!UrlLooksLikeHls(url) && !UrlLooksLikeWebm(url))
+            RunCurlDownloadProbe(url, headers, runner);
+#endif
+        if (runner->PlaybackStopRequested())
+            result = 1;
+        else if (!(UrlLooksLikeWebm(url) ? runner->StartWebm() : runner->Start()))
         {
             SetLastPlaybackError("The hardware decoder session could not be initialized.");
             Notify("IPTV: decoder session initialization failed");
@@ -1797,7 +2114,8 @@ static int RunPlayer(const char *url, const char *channel_name, const char *user
         const bool have_native_telemetry = runner->NativeTelemetry(&native);
         if (current)
         {
-            SaveReceipt(result, *current, native, have_native_telemetry ? 1u : 0u,
+            SaveReceipt(channel_name, (MonotonicUsec() - playback_started_us) / 1000u, result,
+                        *current, native, have_native_telemetry ? 1u : 0u,
                         runner->PlaybackStopRequested() ? 1u : 0u, runner->PlayerCleanupCount(),
                         runner->PlayerCleanupResult());
         }

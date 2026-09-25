@@ -11,6 +11,7 @@ assets/private/*.bin
 !assets/private/netflix-video-resources.bin
 !assets/private/pixel.header.bin
 !assets/private/pixel.text.linear-buffer.bin
+!assets/private/pixel.text.p010-passthrough.bin
 .env
 __pycache__/
 *.pyc

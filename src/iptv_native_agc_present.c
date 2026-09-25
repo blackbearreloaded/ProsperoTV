@@ -2,7 +2,7 @@
  * Copyright (C) 2026 BlackBearReloaded
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
-/* SDR NV12 Videodec2-to-AGC presenter extracted from ProsperoLight. */
+/* SDR NV12/Main10 Videodec2-to-AGC presenter extracted from ProsperoLight. */
 
 #include "iptv_native_agc_present.h"
 
@@ -138,6 +138,7 @@ EMBED_ASSET(iptv_agc_geometry_header, "geometry.header.bin");
 EMBED_ASSET(iptv_agc_geometry_code, "geometry.text.bin");
 EMBED_ASSET(iptv_agc_pixel_header, "pixel.header.bin");
 EMBED_ASSET(iptv_agc_pixel_code, "pixel.text.linear-buffer.bin");
+EMBED_ASSET(iptv_agc_main10_code, "pixel.text.p010-passthrough.bin");
 EMBED_ASSET(iptv_agc_resources, "netflix-video-resources.bin");
 
 typedef struct iptv_native_agc_presenter
@@ -150,11 +151,13 @@ typedef struct iptv_native_agc_presenter
     void *pixel_shader;
     int video;
     uint32_t frame_number;
+    int64_t pending_marker;
     uint32_t output_width;
     uint32_t output_height;
     size_t framebuffer_bytes;
     size_t framebuffer_pool_bytes;
     uint8_t ready;
+    uint8_t main10;
 } iptv_native_agc_presenter_t;
 
 static iptv_native_agc_presenter_t presenter = {
@@ -304,8 +307,27 @@ static const uint8_t *glyph_rows(char character)
     }
 }
 
+static void put_luma(uint8_t *luma, size_t index, uint8_t value, uint32_t component_bytes)
+{
+    if (component_bytes == 2u)
+        ((uint16_t *)luma)[index] = (uint16_t)value << 2;
+    else
+        luma[index] = value;
+}
+
+static void fill_luma(uint8_t *luma, size_t index, uint32_t count, uint8_t value,
+                      uint32_t component_bytes)
+{
+    if (component_bytes == 1u)
+        memset(luma + index, value, count);
+    else
+        for (uint32_t i = 0; i < count; ++i)
+            put_luma(luma, index + i, value, component_bytes);
+}
+
 static void draw_text(uint8_t *luma, uint32_t pitch, uint32_t width, uint32_t height,
-                      const char *text, uint32_t x, uint32_t y, uint32_t scale, uint8_t value)
+                      const char *text, uint32_t x, uint32_t y, uint32_t scale, uint8_t value,
+                      uint32_t component_bytes)
 {
     while (text && *text && x + 5u * scale <= width)
     {
@@ -315,8 +337,10 @@ static void draw_text(uint8_t *luma, uint32_t pitch, uint32_t width, uint32_t he
                 if ((glyph[row] & (uint8_t)(1u << (4u - column))) != 0)
                     for (uint32_t dy = 0; dy < scale && y + row * scale + dy < height; ++dy)
                         for (uint32_t dx = 0; dx < scale; ++dx)
-                            luma[(size_t)(y + row * scale + dy) * pitch + x + column * scale + dx] =
-                                value;
+                            put_luma(luma,
+                                     (size_t)(y + row * scale + dy) * pitch + x + column * scale +
+                                         dx,
+                                     value, component_bytes);
         x += 6u * scale;
     }
 }
@@ -442,14 +466,15 @@ static void draw_disc(uint8_t *luma, uint32_t pitch, uint32_t width, uint32_t he
 
 static void draw_video_overlay(void *source, size_t source_bytes, uint32_t pitch,
                                uint32_t surface_height, uint32_t visible_width,
-                               uint32_t visible_height, const iptv_native_video_overlay_t *overlay)
+                               uint32_t visible_height, const iptv_native_video_overlay_t *overlay,
+                               uint32_t component_bytes)
 {
     uint8_t *luma = source;
-    const size_t y_bytes = (size_t)pitch * surface_height;
+    const size_t y_bytes = (size_t)pitch * surface_height * component_bytes;
     const uint32_t scale = visible_width >= 640u ? 2u : 1u;
 
     if (!source || !overlay ||
-        y_bytes + (size_t)pitch * ((surface_height + 1u) / 2u) > source_bytes)
+        y_bytes + (size_t)pitch * ((surface_height + 1u) / 2u) * component_bytes > source_bytes)
         return;
 
     if (iptv_native_agc_overlay_enabled())
@@ -458,7 +483,9 @@ static void draw_video_overlay(void *source, size_t source_bytes, uint32_t pitch
         const uint32_t x = visible_width >= 200u ? 16u : 4u;
         const uint32_t y = 16u;
         const uint32_t height = 7u * scale + 12u;
-        const char *codec = overlay->codec == 1u ? "H264" : overlay->codec == 2u ? "HEVC" : "VP9";
+        const char *codec = overlay->codec == 1u   ? "H264"
+                            : overlay->codec == 2u ? (component_bytes == 2u ? "HEVC10" : "HEVC")
+                                                   : "VP9";
         int bytes;
         uint32_t width;
         if (overlay->bitrate_kbps >= 1000u)
@@ -476,9 +503,11 @@ static void draw_video_overlay(void *source, size_t source_bytes, uint32_t pitch
             if (width > visible_width - x)
                 width = visible_width - x;
             for (uint32_t row = y; row < y + height && row < visible_height; ++row)
-                memset(luma + (size_t)row * pitch + x, 32, width);
-            draw_text(luma, pitch, visible_width, visible_height, text, x + 6u, y + 6u, scale, 235);
-            flush_gpu_data(luma + (size_t)y * pitch + x, (size_t)height * pitch);
+                fill_luma(luma, (size_t)row * pitch + x, width, 32, component_bytes);
+            draw_text(luma, pitch, visible_width, visible_height, text, x + 6u, y + 6u, scale, 235,
+                      component_bytes);
+            flush_gpu_data(luma + ((size_t)y * pitch + x) * component_bytes,
+                           (size_t)height * pitch * component_bytes);
         }
     }
 
@@ -491,9 +520,11 @@ static void draw_video_overlay(void *source, size_t source_bytes, uint32_t pitch
         const uint32_t height = 7u * scale + 22u;
         const uint32_t clipped_width = width < visible_width ? width : visible_width;
         for (uint32_t row = y; row < y + height && row < visible_height; ++row)
-            memset(luma + (size_t)row * pitch + x, 32, clipped_width);
-        draw_text(luma, pitch, visible_width, visible_height, help, x + 12u, y + 11u, scale, 235);
-        flush_gpu_data(luma + (size_t)y * pitch + x, (size_t)height * pitch);
+            fill_luma(luma, (size_t)row * pitch + x, clipped_width, 32, component_bytes);
+        draw_text(luma, pitch, visible_width, visible_height, help, x + 12u, y + 11u, scale, 235,
+                  component_bytes);
+        flush_gpu_data(luma + ((size_t)y * pitch + x) * component_bytes,
+                       (size_t)height * pitch * component_bytes);
     }
 }
 
@@ -523,7 +554,7 @@ static int copy_asset(void *destination, size_t capacity, const uint8_t *start, 
     return 0;
 }
 
-static int prepare_resources(uint8_t *resources)
+static int prepare_resources(uint8_t *resources, int main10)
 {
     uint32_t *header = (uint32_t *)resources;
     uint32_t table_offsets[2] = {header[1], header[3]};
@@ -538,10 +569,16 @@ static int prepare_resources(uint8_t *resources)
         sample_scale[0] != 0x42801f88u)
         return -1;
 
-    limited_offset[0] = limited_offset[1] = limited_offset[2] = 0x3d808081u;
-    limited_scale[0] = 0x3f950a85u;
-    limited_scale[1] = limited_scale[2] = 0x3f91b6dbu;
-    sample_scale[0] = 0x3f800000u;
+    /* VideoDec2 Main10 samples occupy the low ten bits of each 16-bit word;
+     * keep
+     * ProsperoLight's 10-bit normalization for that texture path. */
+    if (!main10)
+    {
+        limited_offset[0] = limited_offset[1] = limited_offset[2] = 0x3d808081u;
+        limited_scale[0] = 0x3f950a85u;
+        limited_scale[1] = limited_scale[2] = 0x3f91b6dbu;
+        sample_scale[0] = 0x3f800000u;
+    }
 
     for (uint32_t table = 0; table < 2; ++table)
     {
@@ -557,7 +594,8 @@ static int prepare_resources(uint8_t *resources)
 }
 
 static void bind_pixel_source(agc_command_buffer_t *command, uint8_t *resources, const void *source,
-                              size_t y_bytes, size_t uv_bytes, const void *pixel_cb)
+                              size_t y_bytes, size_t uv_bytes, const void *pixel_cb,
+                              uint32_t visible_width, uint32_t visible_height, int main10)
 {
     uint32_t descriptor[30] = {0};
     uintptr_t uv = (uintptr_t)source + y_bytes;
@@ -581,6 +619,22 @@ static void bind_pixel_source(agc_command_buffer_t *command, uint8_t *resources,
     descriptor[25] = (uint32_t)((uintptr_t)pixel_cb >> 32) | (16u << 16);
     descriptor[26] = 4;
     descriptor[27] = 0x0004dfacu;
+    if (main10)
+    {
+        const uint32_t y_width = visible_width - 1u;
+        const uint32_t y_height = visible_height - 1u;
+        const uint32_t uv_width = visible_width / 2u - 1u;
+        const uint32_t uv_height = (visible_height + 1u) / 2u - 1u;
+        descriptor[0] = (uint32_t)((uintptr_t)source >> 8);
+        descriptor[1] = 0x00700000u | ((y_width & 3u) << 30) | (uint32_t)((uintptr_t)source >> 40);
+        descriptor[2] = (y_width >> 2) | (y_height << 14);
+        descriptor[3] = 0x90000204u;
+        descriptor[8] = (uint32_t)(uv >> 8);
+        descriptor[9] = 0x01700000u | ((uv_width & 3u) << 30) | (uint32_t)(uv >> 40);
+        descriptor[10] = (uv_width >> 2) | (uv_height << 14);
+        descriptor[11] = 0x9000022cu;
+        descriptor[26] = 3;
+    }
     descriptor[28] = (uint32_t)table;
     descriptor[29] = (uint32_t)(table >> 32);
     sceAgcCbSetShRegisterRangeDirect(command, 0x0c, descriptor, 30);
@@ -614,8 +668,9 @@ static int render_frame(int video, int buffer_index, void *target, uint8_t *memo
     uint32_t default_count;
     uint32_t cx_count = 16;
     uint32_t slot;
-    size_t y_bytes = (size_t)pitch * surface_height;
-    size_t uv_bytes = (size_t)pitch * ((surface_height + 1u) / 2u);
+    const uint32_t component_bytes = presenter.main10 ? 2u : 1u;
+    size_t y_bytes = (size_t)pitch * surface_height * component_bytes;
+    size_t uv_bytes = (size_t)pitch * ((surface_height + 1u) / 2u) * component_bytes;
 
     if (!defaults || visible_width == 0 || visible_height == 0 || visible_width > pitch ||
         visible_height > surface_height || (pitch & 1u) != 0 || y_bytes > UINT32_MAX ||
@@ -733,7 +788,8 @@ static int render_frame(int video, int buffer_index, void *target, uint8_t *memo
         descriptor[7] = (uint32_t)(vertex >> 32);
     }
     sceAgcCbSetShRegisterRangeDirect(&command, 0x8c + slot, descriptor, 8);
-    bind_pixel_source(&command, resources, source, y_bytes, uv_bytes, pixel_cb);
+    bind_pixel_source(&command, resources, source, y_bytes, uv_bytes, pixel_cb, visible_width,
+                      visible_height, presenter.main10);
     sceAgcDcbDrawIndexAuto(&command, 4, 2);
     sceAgcDcbSetFlip(&command, (uint32_t)video, buffer_index, 1, render_marker);
 
@@ -799,7 +855,7 @@ static int32_t teardown_presenter(int drain)
 }
 
 static int32_t initialize_presenter(const void *source, size_t source_bytes, uint32_t visible_width,
-                                    uint32_t visible_height)
+                                    uint32_t visible_height, int main10)
 {
     const output_geometry_t output = output_geometry_for(visible_width, visible_height);
     int64_t direct_limit = sceKernelGetDirectMemorySize();
@@ -812,6 +868,7 @@ static int32_t initialize_presenter(const void *source, size_t source_bytes, uin
     presenter.output_height = output.height;
     presenter.framebuffer_bytes = output.framebuffer_bytes;
     presenter.framebuffer_pool_bytes = output.framebuffer_bytes * 2u;
+    presenter.main10 = (uint8_t)main10;
     if (!agc_initialized)
     {
         result = sceAgcInit(&agc_state, 8);
@@ -843,11 +900,12 @@ static int32_t initialize_presenter(const void *source, size_t source_bytes, uin
                    iptv_agc_geometry_code_end) != 0 ||
         copy_asset(presenter.shader_memory + 0x1000, 0x1000, iptv_agc_pixel_header_start,
                    iptv_agc_pixel_header_end) != 0 ||
-        copy_asset(presenter.shader_memory + 0x2000, 0x1000, iptv_agc_pixel_code_start,
-                   iptv_agc_pixel_code_end) != 0 ||
+        copy_asset(presenter.shader_memory + 0x2000, 0x1000,
+                   main10 ? iptv_agc_main10_code_start : iptv_agc_pixel_code_start,
+                   main10 ? iptv_agc_main10_code_end : iptv_agc_pixel_code_end) != 0 ||
         copy_asset(presenter.shader_memory + 0xc000, 0x1000, iptv_agc_resources_start,
                    iptv_agc_resources_end) != 0 ||
-        prepare_resources(presenter.shader_memory + 0xc000) != 0)
+        prepare_resources(presenter.shader_memory + 0xc000, main10) != 0)
     {
         result = -3;
         goto fail;
@@ -943,7 +1001,7 @@ static int32_t present_loading_frame(uint32_t phase)
     if (!draw_loading_font_text(surface, LOADING_PITCH, LOADING_PITCH, LOADING_VISIBLE_HEIGHT,
                                 "LOADING CHANNEL", 557, 220))
         draw_text(surface, LOADING_PITCH, LOADING_PITCH, LOADING_VISIBLE_HEIGHT, "LOADING CHANNEL",
-                  816, 570, 4, 220);
+                  816, 570, 4, 220, 1u);
     flush_gpu_data(surface, LOADING_SURFACE_BYTES);
     return iptv_native_agc_present_nv12(surface, loading.surface_bytes, LOADING_PITCH,
                                         LOADING_SURFACE_HEIGHT, LOADING_PITCH,
@@ -1048,30 +1106,61 @@ void iptv_native_agc_present_set_cancelled(int cancelled)
     atomic_store_explicit(&present_cancelled, cancelled != 0, memory_order_relaxed);
 }
 
-int32_t iptv_native_agc_present_nv12(const void *source, size_t source_bytes, uint32_t pitch,
-                                     uint32_t surface_height, uint32_t visible_width,
-                                     uint32_t visible_height,
-                                     const iptv_native_video_overlay_t *overlay)
+int32_t iptv_native_agc_present_finish_frame(void)
 {
     uint64_t status[16] = {0};
+    unsigned waits;
+
+    if (presenter.pending_marker == 0)
+        return 0;
+    for (waits = 0; waits < PRESENT_WAIT_VBLANKS; ++waits)
+    {
+        if (sceVideoOutGetFlipStatus(presenter.video, status) == 0 &&
+            (int64_t)status[3] >= presenter.pending_marker)
+        {
+            presenter.pending_marker = 0;
+            return 0;
+        }
+        sceVideoOutWaitVblank(presenter.video);
+    }
+    return -5;
+}
+
+static int32_t present_nv12(const void *source, size_t source_bytes, uint32_t pitch,
+                            uint32_t surface_height, uint32_t visible_width,
+                            uint32_t visible_height, const iptv_native_video_overlay_t *overlay,
+                            int defer_flip, uint32_t bit_depth)
+{
     uint32_t frame_number = presenter.frame_number;
     uint32_t buffer_index = frame_number & 1u;
     int64_t render_marker = INT64_C(0x49505456) + ((int64_t)++render_sequence << 8);
     void *target;
-    unsigned waits;
     int32_t result;
+
+    if (bit_depth != 8u && bit_depth != 10u)
+        return -1;
+    /* The reused Main10 texture descriptor has an implicit row pitch.
+     * Reject padded/cropped
+     * widths until an explicit-pitch texture is added. */
+    if (bit_depth == 10u &&
+        (pitch != visible_width || visible_width < 2u || (visible_width & 1u) != 0))
+        return -1;
 
     if (atomic_load_explicit(&present_cancelled, memory_order_relaxed))
         return -125;
+    if (presenter.pending_marker != 0)
+        return -8;
     {
         const output_geometry_t output = output_geometry_for(visible_width, visible_height);
         if (presenter.ready &&
-            (presenter.output_width != output.width || presenter.output_height != output.height))
+            (presenter.output_width != output.width || presenter.output_height != output.height ||
+             presenter.main10 != (bit_depth == 10u)))
             return -7;
     }
     if (!presenter.ready)
     {
-        result = initialize_presenter(source, source_bytes, visible_width, visible_height);
+        result = initialize_presenter(source, source_bytes, visible_width, visible_height,
+                                      bit_depth == 10u);
         if (result != 0)
             return result;
     }
@@ -1079,37 +1168,53 @@ int32_t iptv_native_agc_present_nv12(const void *source, size_t source_bytes, ui
     target = (uint8_t *)presenter.framebuffer + buffer_index * presenter.framebuffer_bytes;
     if (overlay && (iptv_native_agc_overlay_enabled() || overlay->show_controls))
         draw_video_overlay((void *)source, source_bytes, pitch, surface_height, visible_width,
-                           visible_height, overlay);
+                           visible_height, overlay, bit_depth == 10u ? 2u : 1u);
     result = render_frame(presenter.video, (int)buffer_index, target, presenter.shader_memory,
                           presenter.vertex_shader, presenter.pixel_shader, source, source_bytes,
                           pitch, surface_height, visible_width, visible_height,
                           presenter.output_width, presenter.output_height, render_marker);
     if (result != 0)
         return result;
-
-    for (waits = 0; waits < PRESENT_WAIT_VBLANKS; ++waits)
-    {
-        if (atomic_load_explicit(&present_cancelled, memory_order_relaxed))
-            return -125;
-        if (sceVideoOutGetFlipStatus(presenter.video, status) == 0 &&
-            (int64_t)status[3] >= render_marker)
-            break;
-        sceVideoOutWaitVblank(presenter.video);
-    }
-    if (waits == PRESENT_WAIT_VBLANKS)
-        return -5;
-
+    presenter.pending_marker = render_marker;
     ++presenter.frame_number;
-    return 0;
+    return defer_flip ? 0 : iptv_native_agc_present_finish_frame();
+}
+
+int32_t iptv_native_agc_present_nv12(const void *source, size_t source_bytes, uint32_t pitch,
+                                     uint32_t surface_height, uint32_t visible_width,
+                                     uint32_t visible_height,
+                                     const iptv_native_video_overlay_t *overlay)
+{
+    return present_nv12(source, source_bytes, pitch, surface_height, visible_width, visible_height,
+                        overlay, 0, 8u);
+}
+
+int32_t iptv_native_agc_present_nv12_deferred(const void *source, size_t source_bytes,
+                                              uint32_t pitch, uint32_t surface_height,
+                                              uint32_t visible_width, uint32_t visible_height,
+                                              const iptv_native_video_overlay_t *overlay)
+{
+    return present_nv12(source, source_bytes, pitch, surface_height, visible_width, visible_height,
+                        overlay, 1, 8u);
+}
+
+int32_t iptv_native_agc_present_yuv_deferred(const void *source, size_t source_bytes,
+                                             uint32_t pitch, uint32_t surface_height,
+                                             uint32_t visible_width, uint32_t visible_height,
+                                             uint32_t bit_depth,
+                                             const iptv_native_video_overlay_t *overlay)
+{
+    return present_nv12(source, source_bytes, pitch, surface_height, visible_width, visible_height,
+                        overlay, 1, bit_depth);
 }
 
 int32_t iptv_native_agc_present_drain(void)
 {
     unsigned waits = 0;
-    int32_t result = 0;
+    int32_t result = iptv_native_agc_present_finish_frame();
 
-    if (presenter.video < 0)
-        return 0;
+    if (result != 0 || presenter.video < 0)
+        return result;
     while (waits < PRESENT_WAIT_VBLANKS && (result = sceVideoOutIsFlipPending(presenter.video)) > 0)
     {
         sceVideoOutWaitVblank(presenter.video);

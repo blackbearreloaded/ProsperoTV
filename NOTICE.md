@@ -21,6 +21,13 @@ The project’s PS5 ELF converter and FSELF writer are independently authored
 GPL-3.0-or-later code. SharpProspero was a useful public format reference during
 development but is not fetched, copied, linked, or required by the build.
 
+## MP2 audio decoder
+
+MPEG Layer II audio uses [minimp3](https://github.com/lieff/minimp3), pinned to
+commit `ea99364f61c14656440e8d77e9c233ccf3124633`, under CC0-1.0.
+The source and license are included in `vendor/minimp3/`. Native AAC decoding
+is unchanged.
+
 ## Host test dependency
 
 The host unit-test target downloads

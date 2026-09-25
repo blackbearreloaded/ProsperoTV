@@ -555,8 +555,8 @@ static bool parse_hevc_detail(slice_t detail, iptv_hls_variant_t *variant)
                                : variant->width <= 1920u && variant->height <= 1080u ? 123u
                                : variant->width <= 2560u && variant->height <= 1440u ? 150u
                                                                                      : 153u;
-    return variant->profile == 1u && variant->level && variant->level <= max_level &&
-           !variant->high_tier;
+    return (variant->profile == 1u || variant->profile == 2u) && variant->level &&
+           variant->level <= max_level && !variant->high_tier;
 }
 
 static iptv_hls_codec_t parse_codecs(slice_t value, iptv_hls_variant_t *variant)

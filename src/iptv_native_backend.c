@@ -6,6 +6,9 @@
 #include "iptv_native_backend.h"
 #include "iptv_native_agc_present.h"
 #include "iptv_vp9_packet.h"
+#include "iptv_mp2.h"
+#define MINIMP3_IMPLEMENTATION
+#include "../vendor/minimp3/minimp3.h"
 
 #ifdef IPTV_NATIVE_BACKEND_STATE_TEST
 #include <assert.h>
@@ -31,11 +34,11 @@
 #define AUDIO_PCM_BYTES 0x4000u
 #define AUDIO_FRAME_MAX_BYTES 4608u
 #define AUDIO_QUEUE_CAPACITY 1024u
-#define AUDIO_QUEUE_START_FRAMES 24u
 #define VIDEO_QUEUE_CAPACITY 512u
 #define VIDEO_QUEUE_MAX_BYTES (32u * 1024u * 1024u)
-#define VIDEO_QUEUE_START_FRAMES 12u
-#define PLAYBACK_START_TIMEOUT_US UINT64_C(1000000)
+#define PLAYBACK_BUFFER_US UINT64_C(2000000)
+#define PLAYBACK_START_TIMEOUT_US UINT64_C(8000000)
+#define PLAYBACK_UNDERRUN_GRACE_US UINT64_C(250000)
 #define VIDEO_MODULE_ID 207u
 #define AUDIO_MODULE_ID 0x0088u
 #define PACE_SLEEP_SLICE_US 5000u
@@ -189,14 +192,10 @@ static const native_video_mode_t video_modes[] = {
     {IPTV_NATIVE_CODEC_H264, 0, 1, IPTV_NATIVE_H264_PROFILE_HIGH, 51, 1920, 1088},
     {IPTV_NATIVE_CODEC_H264, 0, 1, IPTV_NATIVE_H264_PROFILE_HIGH, 51, 2560, 1440},
     {IPTV_NATIVE_CODEC_H264, 0, 1, IPTV_NATIVE_H264_PROFILE_HIGH, 52, 3840, 2176},
-    {IPTV_NATIVE_CODEC_HEVC_MAIN8, IPTV_NATIVE_HEVC_PROFILE_MAIN, 0x000ee049,
-     IPTV_NATIVE_HEVC_PROFILE_MAIN, 123, 1280, 720},
-    {IPTV_NATIVE_CODEC_HEVC_MAIN8, IPTV_NATIVE_HEVC_PROFILE_MAIN, 0x000ee049,
-     IPTV_NATIVE_HEVC_PROFILE_MAIN, 123, 1920, 1088},
-    {IPTV_NATIVE_CODEC_HEVC_MAIN8, IPTV_NATIVE_HEVC_PROFILE_MAIN, 0x000ee049,
-     IPTV_NATIVE_HEVC_PROFILE_MAIN, 150, 2560, 1440},
-    {IPTV_NATIVE_CODEC_HEVC_MAIN8, IPTV_NATIVE_HEVC_PROFILE_MAIN, 0x000ee049,
-     IPTV_NATIVE_HEVC_PROFILE_MAIN, 153, 3840, 2176},
+    {IPTV_NATIVE_CODEC_HEVC, 0, 0x000ee049, IPTV_NATIVE_HEVC_PROFILE_MAIN, 123, 1280, 720},
+    {IPTV_NATIVE_CODEC_HEVC, 0, 0x000ee049, IPTV_NATIVE_HEVC_PROFILE_MAIN, 123, 1920, 1088},
+    {IPTV_NATIVE_CODEC_HEVC, 0, 0x000ee049, IPTV_NATIVE_HEVC_PROFILE_MAIN, 150, 2560, 1440},
+    {IPTV_NATIVE_CODEC_HEVC, 0, 0x000ee049, IPTV_NATIVE_HEVC_PROFILE_MAIN, 153, 3840, 2176},
     {IPTV_NATIVE_CODEC_VP9_PROFILE0, IPTV_NATIVE_VP9_PROFILE_0, 0x00245bfd,
      IPTV_NATIVE_VP9_PROFILE_0, 41, 1920, 1080},
     {IPTV_NATIVE_CODEC_VP9_PROFILE0, IPTV_NATIVE_VP9_PROFILE_0, 0x00245bfd,
@@ -250,7 +249,7 @@ typedef struct audio_queue_item
 
 typedef struct video_queue_item
 {
-    uint64_t pts_us;
+    _Atomic uint64_t pts_us;
     uint32_t bytes;
     uint32_t generation;
     uint8_t displayable;
@@ -283,6 +282,7 @@ typedef struct backend_state
     uint32_t video_module_loaded;
 
     int32_t audio_decoder;
+    mp3dec_t mp2_decoder;
     uint32_t audio_module_loaded;
     uint32_t audio_library_initialized;
     sce_audiodec_param_aac_t audio_param;
@@ -301,6 +301,7 @@ typedef struct backend_state
     void *audio_thread;
     _Atomic uint32_t audio_queue_read;
     _Atomic uint32_t audio_queue_write;
+    _Atomic uint32_t audio_queue_sample_rate;
     _Atomic int audio_worker_stop;
     _Atomic int audio_worker_result;
     video_queue_item_t *video_queue;
@@ -314,6 +315,18 @@ typedef struct backend_state
     _Atomic uint64_t playback_gate_started_us;
 
     uint64_t open_started_us;
+    uint64_t last_present_monotonic_us;
+    uint64_t pending_present_pts_us;
+    const void *pending_present_source;
+    uint8_t presentation_pending;
+    uint8_t pending_present_from_drain;
+#if IPTV_PROBE
+    uint64_t probe_next_sample_us;
+    uint64_t probe_gaps_over_40ms;
+    uint64_t probe_max_gap_us;
+    uint64_t probe_decode_max_us;
+    uint64_t probe_present_max_us;
+#endif
     uint64_t pace_base_pts_us;
     uint64_t pace_base_clock_us;
     uint64_t pace_last_pts_us;
@@ -496,8 +509,9 @@ static int profile_supported(const iptv_native_open_config_t *config)
 {
     if (config->codec == IPTV_NATIVE_CODEC_H264)
         return config->profile == 66 || config->profile == 77 || config->profile == 100;
-    if (config->codec == IPTV_NATIVE_CODEC_HEVC_MAIN8)
-        return config->profile == IPTV_NATIVE_HEVC_PROFILE_MAIN;
+    if (config->codec == IPTV_NATIVE_CODEC_HEVC)
+        return config->profile == IPTV_NATIVE_HEVC_PROFILE_MAIN ||
+               config->profile == IPTV_NATIVE_HEVC_PROFILE_MAIN10;
     return config->codec == IPTV_NATIVE_CODEC_VP9_PROFILE0 &&
            config->profile == IPTV_NATIVE_VP9_PROFILE_0;
 }
@@ -841,6 +855,11 @@ static int32_t audio_drain(backend_state_t *state)
 
 static int32_t initialize_audio(backend_state_t *state)
 {
+    if (state->config.audio_stream_type == 0x03u || state->config.audio_stream_type == 0x04u)
+    {
+        mp3dec_init(&state->mp2_decoder);
+        return 0;
+    }
     int32_t result = sceSysmoduleLoadModule(AUDIO_MODULE_ID);
 
     if (result < 0)
@@ -1042,7 +1061,7 @@ static int32_t initialize_video(backend_state_t *state)
     decoder_config.size = sizeof(decoder_config);
     decoder_config.resource_type = 1;
     decoder_config.codec_type = state->mode->decoder_codec;
-    decoder_config.profile = state->config.codec == IPTV_NATIVE_CODEC_H264
+    decoder_config.profile = state->config.codec != IPTV_NATIVE_CODEC_VP9_PROFILE0
                                  ? state->config.profile
                                  : state->mode->decoder_profile;
     decoder_config.max_level = state->mode->max_level;
@@ -1060,6 +1079,10 @@ static int32_t initialize_video(backend_state_t *state)
             ? 8
         : state->config.codec == IPTV_NATIVE_CODEC_H264 ? 6
                                                         : 4;
+    /* Broadcast 4K HEVC streams can signal six DPB pictures. Four makes
+     * VideoDec2 reject their first access unit with 0x811D0302. */
+    if (state->config.codec == IPTV_NATIVE_CODEC_HEVC && state->mode->decoder_max_width >= 3840u)
+        decoder_config.max_dpb_frames = 6;
     decoder_config.pipeline_depth = 1u;
     decoder_config.compute_queue = (uint64_t)state->compute_queue;
     decoder_config.cpu_affinity = 0x3f;
@@ -1161,8 +1184,11 @@ int32_t iptv_native_backend_open(iptv_native_backend_t *backend,
     if (state->state != IPTV_NATIVE_STATE_IDLE)
         return IPTV_NATIVE_E_STATE;
     mode = find_video_mode(config);
-    if (!mode || config->bit_depth != 8 || config->chroma_format != IPTV_NATIVE_CHROMA_420 ||
-        config->hdr != 0 || !profile_supported(config))
+    const int main10 = config->codec == IPTV_NATIVE_CODEC_HEVC &&
+                       config->profile == IPTV_NATIVE_HEVC_PROFILE_MAIN10;
+    if (!mode || (config->bit_depth != 8 && !(main10 && config->bit_depth == 10)) ||
+        config->chroma_format != IPTV_NATIVE_CHROMA_420 || config->hdr != 0 ||
+        !profile_supported(config))
     {
         state->telemetry.last_result = IPTV_NATIVE_E_UNSUPPORTED;
         return IPTV_NATIVE_E_UNSUPPORTED;
@@ -1217,6 +1243,105 @@ int32_t iptv_native_backend_open(iptv_native_backend_t *backend,
     return 0;
 }
 
+static int32_t complete_pending_presentation(backend_state_t *state)
+{
+    uint64_t started;
+    uint64_t elapsed;
+    uint64_t rate_now;
+    int32_t result;
+
+    if (!state->presentation_pending)
+        return 0;
+    started = monotonic_us();
+    result = iptv_native_agc_present_finish_frame();
+    elapsed = monotonic_us() - started;
+    state->telemetry.present_total_us += elapsed;
+    if (elapsed > state->telemetry.present_max_us)
+        state->telemetry.present_max_us = elapsed;
+#if IPTV_PROBE
+    if (elapsed > state->probe_present_max_us)
+        state->probe_present_max_us = elapsed;
+#endif
+    if (result != 0)
+    {
+        state->telemetry.last_native_result = result;
+        state->telemetry.last_result = result;
+        state->state = IPTV_NATIVE_STATE_ERROR;
+        state->telemetry.state = state->state;
+        return result;
+    }
+
+    state->presentation_pending = 0;
+    state->pending_present_source = NULL;
+    state->telemetry.last_presented_video_pts_us = state->pending_present_pts_us;
+    rate_now = monotonic_us();
+    if (state->last_present_monotonic_us != 0)
+    {
+        elapsed = rate_now - state->last_present_monotonic_us;
+        if (elapsed > state->telemetry.present_gap_max_us)
+            state->telemetry.present_gap_max_us = elapsed;
+        if (elapsed > UINT64_C(250000))
+            ++state->telemetry.present_gaps_over_250ms;
+        if (elapsed > UINT64_C(500000))
+            ++state->telemetry.present_gaps_over_500ms;
+#if IPTV_PROBE
+        if (elapsed > state->probe_max_gap_us)
+            state->probe_max_gap_us = elapsed;
+        if (elapsed > UINT64_C(40000))
+            ++state->probe_gaps_over_40ms;
+#endif
+    }
+    state->last_present_monotonic_us = rate_now;
+    if (state->frame_rate_window_frames == 0)
+        state->frame_rate_window_start_us = rate_now;
+    ++state->frame_rate_window_frames;
+    elapsed = rate_now - state->frame_rate_window_start_us;
+    if (state->frame_rate_window_frames > 1u && elapsed >= UINT64_C(500000))
+    {
+        state->frame_rate_x100 = (uint32_t)(((uint64_t)state->frame_rate_window_frames - 1u) *
+                                            UINT64_C(100000000) / elapsed);
+        state->telemetry.actual_frame_rate_x100 = state->frame_rate_x100;
+        state->frame_rate_window_start_us = rate_now;
+        state->frame_rate_window_frames = 1u;
+    }
+    ++state->telemetry.presented_frames;
+#if IPTV_PROBE
+    if (state->probe_next_sample_us == 0)
+        state->probe_next_sample_us = rate_now + UINT64_C(5000000);
+    if (rate_now >= state->probe_next_sample_us &&
+        state->telemetry.probe_sample_count < IPTV_NATIVE_PROBE_SAMPLES)
+    {
+        iptv_native_probe_sample_t *sample =
+            &state->telemetry.probe_samples[state->telemetry.probe_sample_count++];
+        const uint32_t read = atomic_load_explicit(&state->video_queue_read, memory_order_acquire);
+        const uint32_t write =
+            atomic_load_explicit(&state->video_queue_write, memory_order_acquire);
+        sample->elapsed_ms = (uint32_t)((rate_now - state->open_started_us) / 1000u);
+        sample->video_queue_frames = write - read;
+        sample->presented_frames = state->telemetry.presented_frames;
+        sample->pacing_late_frames = state->telemetry.pacing_late_frames;
+        sample->gaps_over_40ms = state->probe_gaps_over_40ms;
+        sample->max_gap_us = state->probe_max_gap_us;
+        sample->decode_max_us = state->probe_decode_max_us;
+        sample->present_max_us = state->probe_present_max_us;
+        state->probe_next_sample_us = rate_now + UINT64_C(5000000);
+        state->probe_gaps_over_40ms = 0;
+        state->probe_max_gap_us = 0;
+        state->probe_decode_max_us = 0;
+        state->probe_present_max_us = 0;
+    }
+#endif
+    atomic_store_explicit(&state->presented_frame_count, state->telemetry.presented_frames,
+                          memory_order_release);
+    if (state->telemetry.decoder_output_in_frame_pool && state->telemetry.zero_copy_pointer_match)
+        state->telemetry.hardware_validated = 1;
+    if (state->pending_present_from_drain)
+        ++state->telemetry.drained_video_frames;
+    if (state->telemetry.presented_frames == 1)
+        state->telemetry.first_frame_latency_us = rate_now - state->open_started_us;
+    return 0;
+}
+
 static int32_t present_video_output(backend_state_t *state, const videodec2_frame_t *frame,
                                     const videodec2_output_t *output, int require_accepted,
                                     int from_drain)
@@ -1231,7 +1356,9 @@ static int32_t present_video_output(backend_state_t *state, const videodec2_fram
     int32_t result;
     uint32_t reject_flags = 0;
 
-    required_bytes = (uint64_t)output->pitch * output->height * 3u / 2u;
+    const uint32_t component_bytes = state->config.bit_depth == 10 ? 2u : 1u;
+    required_bytes = (uint64_t)output->pitch *
+                     (output->height + ((uint64_t)output->height + 1u) / 2u) * component_bytes;
     state->telemetry.decoder_output_valid = output->valid;
     state->telemetry.decoder_output_error = output->error;
     state->telemetry.decoder_output_picture_count = output->picture_count;
@@ -1258,7 +1385,7 @@ static int32_t present_video_output(backend_state_t *state, const videodec2_fram
         reject_flags |= 1u << 6;
     if (output->pitch < output->width ||
         output->pitch > ((state->mode->decoder_max_width + 255u) & ~255u) ||
-        (output->pitch & 1u) != 0 || output->pitch_bytes != output->pitch)
+        (output->pitch & 1u) != 0 || output->pitch_bytes != output->pitch * component_bytes)
         reject_flags |= 1u << 7;
     if (!output->buffer || required_bytes == 0 || output->buffer_size < required_bytes ||
         output->buffer_size > state->frame_slot_size)
@@ -1304,6 +1431,9 @@ static int32_t present_video_output(backend_state_t *state, const videodec2_fram
         goto failed;
     if (drop_frame)
         return 0;
+    result = complete_pending_presentation(state);
+    if (result != 0)
+        goto failed;
 
     started = monotonic_us();
     state->telemetry.last_present_source = (uintptr_t)output->buffer;
@@ -1312,43 +1442,35 @@ static int32_t present_video_output(backend_state_t *state, const videodec2_fram
     rate_now = monotonic_us();
     if (state->controls_started_us == 0)
         state->controls_started_us = rate_now;
-    if (state->frame_rate_window_frames == 0)
-        state->frame_rate_window_start_us = rate_now;
-    ++state->frame_rate_window_frames;
-    elapsed = rate_now - state->frame_rate_window_start_us;
-    if (state->frame_rate_window_frames > 1u && elapsed >= UINT64_C(500000))
-    {
-        state->frame_rate_x100 = (uint32_t)(((uint64_t)state->frame_rate_window_frames - 1u) *
-                                            UINT64_C(100000000) / elapsed);
-        state->telemetry.actual_frame_rate_x100 = state->frame_rate_x100;
-        state->frame_rate_window_start_us = rate_now;
-        state->frame_rate_window_frames = 1u;
-    }
     const iptv_native_video_overlay_t overlay = {
         (uint32_t)state->config.codec, state->config.visible_width,
         state->config.visible_height,  state->frame_rate_x100,
         state->bitrate_kbps,           rate_now - state->controls_started_us < CONTROLS_OVERLAY_US,
     };
-    result = iptv_native_agc_present_nv12(
+    result = iptv_native_agc_present_yuv_deferred(
         output->buffer, (size_t)output->buffer_size, output->pitch, output->height,
-        state->config.visible_width, state->config.visible_height, &overlay);
+        state->config.visible_width, state->config.visible_height, state->config.bit_depth,
+        &overlay);
     elapsed = monotonic_us() - started;
     state->telemetry.present_total_us += elapsed;
     if (elapsed > state->telemetry.present_max_us)
         state->telemetry.present_max_us = elapsed;
+#if IPTV_PROBE
+    if (elapsed > state->probe_present_max_us)
+        state->probe_present_max_us = elapsed;
+#endif
     if (result != 0)
         goto failed;
-
-    state->telemetry.last_presented_video_pts_us = presentation_pts_us;
-    ++state->telemetry.presented_frames;
-    atomic_store_explicit(&state->presented_frame_count, state->telemetry.presented_frames,
-                          memory_order_release);
-    if (state->telemetry.decoder_output_in_frame_pool && state->telemetry.zero_copy_pointer_match)
-        state->telemetry.hardware_validated = 1;
-    if (from_drain)
-        ++state->telemetry.drained_video_frames;
-    if (state->telemetry.presented_frames == 1)
-        state->telemetry.first_frame_latency_us = monotonic_us() - state->open_started_us;
+    state->pending_present_pts_us = presentation_pts_us;
+    state->pending_present_source = output->buffer;
+    state->pending_present_from_drain = (uint8_t)(from_drain != 0);
+    state->presentation_pending = 1;
+    if (state->telemetry.presented_frames == 0)
+    {
+        result = complete_pending_presentation(state);
+        if (result != 0)
+            goto failed;
+    }
     return 0;
 
 failed:
@@ -1409,6 +1531,12 @@ static int32_t submit_coded_frame(backend_state_t *state, const void *coded_fram
     slot = (uint32_t)(state->telemetry.submitted_video_access_units % PIPELINE_BUFFER_COUNT);
     input_slot = (uint8_t *)state->input_allocation.address + slot * state->input_slot_size;
     frame_slot = (uint8_t *)state->frame_allocation.address + slot * state->frame_slot_size;
+    if (state->presentation_pending && state->pending_present_source == frame_slot)
+    {
+        result = complete_pending_presentation(state);
+        if (result != 0)
+            return result;
+    }
     memcpy(input_slot, coded_frame, frame_bytes);
 
     input.size = sizeof(input);
@@ -1427,12 +1555,21 @@ static int32_t submit_coded_frame(backend_state_t *state, const void *coded_fram
     state->telemetry.decode_total_us += elapsed;
     if (elapsed > state->telemetry.decode_max_us)
         state->telemetry.decode_max_us = elapsed;
+#if IPTV_PROBE
+    if (elapsed > state->probe_decode_max_us)
+        state->probe_decode_max_us = elapsed;
+#endif
     ++state->telemetry.submitted_video_access_units;
     state->telemetry.submitted_video_bytes += frame_bytes;
     state->telemetry.last_video_pts_us = pts_us;
 
     if (result != 0 || output.error)
     {
+        state->telemetry.decoder_output_valid = output.valid;
+        state->telemetry.decoder_output_error = output.error;
+        state->telemetry.decoder_output_picture_count = output.picture_count;
+        state->telemetry.decoder_frame_accepted = frame.accepted;
+        state->telemetry.decoder_output_reject_flags = output.error ? 1u << 1 : 0;
         ++state->telemetry.decoder_errors;
         state->telemetry.last_native_result = result;
         state->telemetry.last_result = result != 0 ? result : IPTV_NATIVE_E_DECODER_OUTPUT;
@@ -1461,6 +1598,13 @@ static int32_t submit_coded_frame(backend_state_t *state, const void *coded_fram
     return present_video_output(state, &frame, &output, 1, 0);
 }
 
+static int media_span_ready(uint32_t count, uint64_t first, uint64_t last)
+{
+    // Reject missing/backward timestamps and large discontinuities as buffer duration.
+    return count > 1 && last >= first && last - first >= PLAYBACK_BUFFER_US &&
+           last - first < UINT64_C(60000000);
+}
+
 static int playback_queues_ready(const backend_state_t *state)
 {
     const uint32_t video_read =
@@ -1476,10 +1620,30 @@ static int playback_queues_ready(const backend_state_t *state)
     const uint64_t now = monotonic_us();
     const int timed_out = gate_started_us != 0 && now >= gate_started_us &&
                           now - gate_started_us >= PLAYBACK_START_TIMEOUT_US;
-    const int video_ready = video_write - video_read >= VIDEO_QUEUE_START_FRAMES ||
-                            (video_write != video_read && timed_out);
-    const int audio_ready = !state->config.enable_audio ||
-                            audio_write - audio_read >= AUDIO_QUEUE_START_FRAMES || timed_out;
+    // Release on queue pressure too: the single demux producer may be blocked
+    // before it can deliver the other track. Never wait for an impossible fill.
+    const int pressure = video_write - video_read >= VIDEO_QUEUE_CAPACITY - 1u ||
+                         audio_write - audio_read >= AUDIO_QUEUE_CAPACITY - 1u ||
+                         atomic_load_explicit(&state->video_queue_bytes, memory_order_acquire) >=
+                             VIDEO_QUEUE_MAX_BYTES - INPUT_SLOT_BYTES;
+    const int video_ready =
+        video_write != video_read &&
+        (timed_out || pressure ||
+         media_span_ready(
+             video_write - video_read,
+             atomic_load(&state->video_queue[video_read % VIDEO_QUEUE_CAPACITY].pts_us),
+             atomic_load(&state->video_queue[(video_write - 1u) % VIDEO_QUEUE_CAPACITY].pts_us)));
+    const uint32_t audio_rate = atomic_load(&state->audio_queue_sample_rate);
+    // AAC carries at least 1024 core samples; Layer II carries 1152 per frame.
+    // Estimate duration without touching queue storage, which may be released.
+    const uint32_t audio_samples =
+        (state->config.audio_stream_type == 0x03u || state->config.audio_stream_type == 0x04u)
+            ? 1152u
+            : 1024u;
+    const int audio_ready = !state->config.enable_audio || timed_out || pressure ||
+                            (audio_rate && (uint64_t)(audio_write - audio_read) * audio_samples *
+                                                   UINT64_C(1000000) / audio_rate >=
+                                               PLAYBACK_BUFFER_US);
     return video_ready && audio_ready;
 }
 
@@ -1508,9 +1672,30 @@ static void *video_worker_entry(void *argument)
     backend_state_t *state = argument;
     int had_data = 0;
     int empty_reported = 0;
+    uint64_t starved_since_us = 0;
 
     for (;;)
     {
+        if (atomic_load_explicit(&state->playback_started, memory_order_acquire) &&
+            !atomic_load(&state->video_worker_stop) && !atomic_load(&state->stop_requested))
+        {
+            const int empty =
+                atomic_load(&state->video_queue_read) == atomic_load(&state->video_queue_write) ||
+                (state->config.enable_audio && !atomic_load(&state->audio_worker_stop) &&
+                 atomic_load(&state->audio_worker_result) == 0 &&
+                 atomic_load(&state->audio_queue_read) == atomic_load(&state->audio_queue_write));
+            const uint64_t now = monotonic_us();
+            if (!empty)
+                starved_since_us = 0;
+            else if (!starved_since_us)
+                starved_since_us = now;
+            else if (now - starved_since_us >= PLAYBACK_UNDERRUN_GRACE_US)
+            {
+                atomic_store(&state->playback_gate_started_us, now);
+                atomic_store_explicit(&state->playback_started, 0, memory_order_release);
+                starved_since_us = 0;
+            }
+        }
         if (!atomic_load_explicit(&state->playback_started, memory_order_acquire) &&
             !atomic_load_explicit(&state->video_worker_stop, memory_order_acquire) &&
             !atomic_load_explicit(&state->stop_requested, memory_order_relaxed))
@@ -1520,6 +1705,7 @@ static void *video_worker_entry(void *argument)
                 (void)sceKernelUsleep(1000u);
                 continue;
             }
+            state->pace_active = 0;
             atomic_store_explicit(&state->playback_started, 1, memory_order_release);
         }
         const uint32_t read = atomic_load_explicit(&state->video_queue_read, memory_order_relaxed);
@@ -1554,6 +1740,12 @@ static void *video_worker_entry(void *argument)
         }
         if (state->video_generation != generation)
         {
+            const int32_t completed = complete_pending_presentation(state);
+            if (completed != 0)
+            {
+                atomic_store_explicit(&state->video_worker_result, completed, memory_order_release);
+                break;
+            }
             const int32_t reset = sceVideodec2Reset(state->decoder);
             if (reset != 0)
             {
@@ -1742,11 +1934,31 @@ static int32_t decode_audio_frame(backend_state_t *state, const void *adts_frame
     if (!state || !adts_frame)
         return IPTV_NATIVE_E_ARGUMENT;
 
-    state->audio_au.address = (void *)adts_frame;
-    state->audio_au.length = (uint32_t)frame_bytes;
-    state->audio_pcm_item.address = state->audio_pcm;
-    state->audio_pcm_item.length = sizeof(state->audio_pcm);
-    result = sceAudiodecDecode(state->audio_decoder, &state->audio_ctrl);
+    const int mp2 =
+        state->config.audio_stream_type == 0x03u || state->config.audio_stream_type == 0x04u;
+    if (mp2)
+    {
+        mp3dec_frame_info_t info = {0};
+        const int samples = mp3dec_decode_frame(&state->mp2_decoder, adts, (int)frame_bytes,
+                                                (mp3d_sample_t *)state->audio_pcm, &info);
+        if (samples != 1152 || info.layer != 2 || info.frame_offset != 0 ||
+            info.frame_bytes != (int)frame_bytes || info.channels < 1 || info.channels > 2 ||
+            info.hz < 16000 || info.hz > 48000)
+            return IPTV_NATIVE_E_AUDIO_FRAME;
+        state->audio_pcm_item.length =
+            (uint32_t)samples * (uint32_t)info.channels * sizeof(int16_t);
+        state->audio_info.channel_count = (uint32_t)info.channels;
+        state->audio_info.sampling_frequency = (uint32_t)info.hz;
+        result = 0;
+    }
+    else
+    {
+        state->audio_au.address = (void *)adts_frame;
+        state->audio_au.length = (uint32_t)frame_bytes;
+        state->audio_pcm_item.address = state->audio_pcm;
+        state->audio_pcm_item.length = sizeof(state->audio_pcm);
+        result = sceAudiodecDecode(state->audio_decoder, &state->audio_ctrl);
+    }
     ++state->telemetry.submitted_audio_frames;
     state->telemetry.last_audio_pts_us = pts_us;
     if (result < 0)
@@ -1761,8 +1973,10 @@ static int32_t decode_audio_frame(backend_state_t *state, const void *adts_frame
         goto failed;
     }
 
-    pcm_rate = decoded_pcm_rate(adts, frame_bytes, state->audio_info.channel_count,
-                                state->audio_pcm_item.length, state->audio_info.sampling_frequency);
+    pcm_rate =
+        mp2 ? state->audio_info.sampling_frequency
+            : decoded_pcm_rate(adts, frame_bytes, state->audio_info.channel_count,
+                               state->audio_pcm_item.length, state->audio_info.sampling_frequency);
     if (state->audio_sink.handle < 0)
     {
         if (state->audio_staged_bytes == 0)
@@ -1823,12 +2037,9 @@ static void *audio_worker_entry(void *argument)
         if (!atomic_load_explicit(&state->playback_started, memory_order_acquire) &&
             !atomic_load_explicit(&state->audio_worker_stop, memory_order_acquire))
         {
-            if (!playback_queues_ready(state))
-            {
-                (void)sceKernelUsleep(1000u);
-                continue;
-            }
-            atomic_store_explicit(&state->playback_started, 1, memory_order_release);
+            // The video worker owns the common A/V buffering gate.
+            (void)sceKernelUsleep(1000u);
+            continue;
         }
         const uint32_t read = atomic_load_explicit(&state->audio_queue_read, memory_order_relaxed);
         const uint32_t write =
@@ -1856,6 +2067,7 @@ static void *audio_worker_entry(void *argument)
         }
         if (state->audio_generation != generation)
         {
+            mp3dec_init(&state->mp2_decoder);
             state->audio_staged_bytes = 0;
             state->audio_sink.pending = 0;
             state->audio_sink.have_previous = 0;
@@ -1927,6 +2139,7 @@ int32_t iptv_native_backend_submit_audio(iptv_native_backend_t *backend, const v
     const uint8_t *adts = adts_frame;
     size_t declared_bytes;
     uint32_t channels;
+    uint32_t rate = 0;
     uint32_t read;
     uint32_t write;
 
@@ -1934,7 +2147,9 @@ int32_t iptv_native_backend_submit_audio(iptv_native_backend_t *backend, const v
         return IPTV_NATIVE_E_ARGUMENT;
     if (state->state != IPTV_NATIVE_STATE_OPEN || state->drain_started)
         return IPTV_NATIVE_E_STATE;
-    if (!state->config.enable_audio || state->audio_decoder < 0)
+    const int mp2 =
+        state->config.audio_stream_type == 0x03u || state->config.audio_stream_type == 0x04u;
+    if (!state->config.enable_audio || (!mp2 && state->audio_decoder < 0))
         return 0;
     if (atomic_load_explicit(&state->audio_worker_result, memory_order_acquire) != 0)
     {
@@ -1944,20 +2159,33 @@ int32_t iptv_native_backend_submit_audio(iptv_native_backend_t *backend, const v
     }
     if (atomic_load_explicit(&state->stop_requested, memory_order_relaxed))
         return 0;
-    if (frame_bytes < 7 || frame_bytes > AUDIO_FRAME_MAX_BYTES || adts[0] != 0xffu ||
-        (adts[1] & 0xf6u) != 0xf0u)
+    if (mp2)
     {
-        (void)disable_audio_internal(state, IPTV_NATIVE_E_AUDIO_FRAME);
-        return 0;
+        declared_bytes = iptv_mp2_frame_info(adts, frame_bytes, &rate, &channels);
+        if (!declared_bytes || declared_bytes != frame_bytes || frame_bytes > AUDIO_FRAME_MAX_BYTES)
+        {
+            (void)disable_audio_internal(state, IPTV_NATIVE_E_AUDIO_FRAME);
+            return 0;
+        }
     }
-    declared_bytes =
-        ((size_t)(adts[3] & 3u) << 11) | ((size_t)adts[4] << 3) | ((size_t)adts[5] >> 5);
-    channels = adts_channels(adts, frame_bytes);
-    if (declared_bytes != frame_bytes || adts_core_rate(adts, frame_bytes) == 0 || channels == 0 ||
-        channels > 2)
+    else
     {
-        (void)disable_audio_internal(state, IPTV_NATIVE_E_AUDIO_FRAME);
-        return 0;
+        if (frame_bytes < 7 || frame_bytes > AUDIO_FRAME_MAX_BYTES || adts[0] != 0xffu ||
+            (adts[1] & 0xf6u) != 0xf0u)
+        {
+            (void)disable_audio_internal(state, IPTV_NATIVE_E_AUDIO_FRAME);
+            return 0;
+        }
+        declared_bytes =
+            ((size_t)(adts[3] & 3u) << 11) | ((size_t)adts[4] << 3) | ((size_t)adts[5] >> 5);
+        channels = adts_channels(adts, frame_bytes);
+        if (declared_bytes != frame_bytes || adts_core_rate(adts, frame_bytes) == 0 ||
+            channels == 0 || channels > 2)
+        {
+            (void)disable_audio_internal(state, IPTV_NATIVE_E_AUDIO_FRAME);
+            return 0;
+        }
+        rate = adts_core_rate(adts, frame_bytes);
     }
     record_media_bytes(state, frame_bytes);
 
@@ -1975,6 +2203,7 @@ int32_t iptv_native_backend_submit_audio(iptv_native_backend_t *backend, const v
     }
 
     audio_queue_item_t *item = &state->audio_queue[write % AUDIO_QUEUE_CAPACITY];
+    atomic_store(&state->audio_queue_sample_rate, rate);
     item->pts_us = pts_us;
     item->bytes = (uint32_t)frame_bytes;
     item->generation = atomic_load_explicit(&state->stream_generation, memory_order_acquire);
@@ -2073,6 +2302,10 @@ static int32_t drain_video(backend_state_t *state)
         state->telemetry.decode_total_us += elapsed;
         if (elapsed > state->telemetry.decode_max_us)
             state->telemetry.decode_max_us = elapsed;
+#if IPTV_PROBE
+        if (elapsed > state->probe_decode_max_us)
+            state->probe_decode_max_us = elapsed;
+#endif
         ++state->telemetry.decoder_flushes;
 
         if (result != 0 || output.error)
@@ -2136,6 +2369,9 @@ int32_t iptv_native_backend_drain(iptv_native_backend_t *backend)
     state->drain_started = 1;
     first_result = stop_video_worker(state);
     result = drain_video(state);
+    if (first_result == 0 && result != 0)
+        first_result = result;
+    result = complete_pending_presentation(state);
     if (first_result == 0 && result != 0)
         first_result = result;
     result = audio_drain(state);
@@ -2261,6 +2497,37 @@ int32_t iptv_native_backend_close(iptv_native_backend_t *backend)
 #ifdef IPTV_NATIVE_BACKEND_STATE_TEST
 int main(void)
 {
+    assert(!media_span_ready(1, 0, 2000000));
+    assert(!media_span_ready(60, 0, 1000000));
+    assert(media_span_ready(121, 0, 2000000));
+    assert(media_span_ready(51, 5000000, 7000000));
+    assert(!media_span_ready(60, 5000000, 1000000));
+    assert(!media_span_ready(60, 0, UINT64_C(100000000)));
+    backend_state_t gate = {0};
+    gate.video_queue = calloc(VIDEO_QUEUE_CAPACITY, sizeof(*gate.video_queue));
+    gate.audio_queue = calloc(AUDIO_QUEUE_CAPACITY, sizeof(*gate.audio_queue));
+    assert(gate.video_queue && gate.audio_queue);
+    gate.config.enable_audio = 1;
+    atomic_store(&gate.playback_gate_started_us, monotonic_us());
+    assert(!playback_queues_ready(&gate));
+    atomic_store(&gate.video_queue_write, 2);
+    atomic_store(&gate.video_queue[1].pts_us, PLAYBACK_BUFFER_US);
+    assert(!playback_queues_ready(&gate)); // Audio must also be buffered.
+    atomic_store(&gate.audio_queue_sample_rate, 48000);
+    atomic_store(&gate.audio_queue_write, 94);
+    assert(playback_queues_ready(&gate));
+    atomic_store(&gate.audio_queue_write, 2);
+    assert(!playback_queues_ready(&gate));
+    atomic_store(&gate.video_queue_bytes, VIDEO_QUEUE_MAX_BYTES - INPUT_SLOT_BYTES);
+    assert(playback_queues_ready(&gate)); // Release producer pressure.
+    atomic_store(&gate.video_queue_bytes, 0);
+    gate.config.enable_audio = 0;
+    assert(playback_queues_ready(&gate)); // Silent channels need no audio.
+    gate.config.enable_audio = 1;
+    atomic_store(&gate.playback_gate_started_us, monotonic_us() - PLAYBACK_START_TIMEOUT_US);
+    assert(playback_queues_ready(&gate)); // Bounded fallback for bad timestamps.
+    free(gate.audio_queue);
+    free(gate.video_queue);
     pending_pts_t pending = {0};
     uint64_t pts_us;
     int displayable;
