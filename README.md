@@ -301,6 +301,11 @@ console is unavailable.
 
 ## Credits and licences
 
+Special thanks to [JMUtechnologies](https://github.com/JMUtechnologies) for
+extensive testing, valuable feedback, and providing IPTV credentials for testing.
+Their help has been instrumental in improving ProsperoTV's playback compatibility
+and reliability.
+
 ProsperoTV builds on and acknowledges:
 
 - [PS5 Native App Boilerplate](https://github.com/blackbearreloaded/ps5-native-app-boilerplate),
