@@ -19,11 +19,11 @@ import zipfile
 
 ROOT = Path(__file__).resolve().parents[1]
 CACHE = ROOT / ".deps/lapy"
-LAPY_COMMIT = "54a095c0f19161825e845daa760a03b446e654fa"
+LAPY_COMMIT = "c3bdfe3a399366d8eacfc580f20b19fd03b16ca3"
 LAPY = CACHE / f"PS5-Lapy-JB-Daemon-{LAPY_COMMIT[:7]}"
-SDK = CACHE / "ps5-payload-sdk-v0.40"
-SDK_URL = "https://github.com/ps5-payload-dev/sdk/releases/download/v0.40/ps5-payload-sdk.zip"
-SDK_SHA256 = "617fb702df3551f709b2db0a014e618cf39334c9348395a9b005e6504d076a42"
+SDK = CACHE / "ps5-payload-sdk-v0.42"
+SDK_URL = "https://github.com/ps5-payload-dev/sdk/releases/download/v0.42/ps5-payload-sdk.zip"
+SDK_SHA256 = "8cfbc7cd5811e719eb4f0c47eea668d3dc7b40bc8ab11c4a5031d40c23ec02da"
 PS5LOG = CACHE / "ps5log-1ae1f918"
 PS5LOG_URL = (
     "https://raw.githubusercontent.com/mpereiraesaa/ps5-agc-gears/"
@@ -69,7 +69,7 @@ def fetch_lapy():
     try:
         subprocess.run(["git", "init", "-q"], cwd=staging, check=True)
         subprocess.run(["git", "remote", "add", "origin",
-                        "https://github.com/mpereiraesaa/PS5-Lapy-JB-Daemon.git"],
+                        "https://github.com/blackbearreloaded/PS5-Lapy-JB-Daemon.git"],
                        cwd=staging, check=True)
         subprocess.run(["git", "fetch", "-q", "--depth", "1", "origin", LAPY_COMMIT],
                        cwd=staging, check=True)
@@ -88,7 +88,7 @@ def fetch_sdk():
         return
     if SDK.exists():
         raise RuntimeError(f"{SDK} is incomplete or does not match the pinned archive")
-    archive = CACHE / "ps5-payload-sdk-v0.40.zip"
+    archive = CACHE / "ps5-payload-sdk-v0.42.zip"
     download(SDK_URL, archive, SDK_SHA256)
     staging = Path(tempfile.mkdtemp(prefix="lapy-sdk-", dir=CACHE))
     try:
