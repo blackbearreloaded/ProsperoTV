@@ -890,7 +890,7 @@ int main()
     // be asked for while the process has a single thread: nothing above or in
     // it starts one.
     tv::storage::initialize();
-    iptv_remote_start(8080);
+    iptv_remote_start(8888);
     // Said after it: the log moved with the app's data.
     sys::log("[TV] modules videodec2=0x%08x compute=0x%08x h264=0x%08x hevc=0x%08x vp9=0x%08x "
              "audiodec=0x%08x dialogs=0x%08x keyboard=0x%08x",

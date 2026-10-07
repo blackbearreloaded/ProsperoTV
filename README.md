@@ -150,8 +150,8 @@ at 3840×2160. Codec and renderer details are documented in
 ## Phone remote
 
 While ProsperoTV is open, connect your phone to the same local network and open
-the HTTP address shown in the app footer. It requests port 8080 and uses an
-assigned port when 8080 is unavailable. The footer also shows a
+the HTTP address shown in the app footer. It requests port 8888 and uses an
+assigned port when 8888 is unavailable. The footer also shows a
 six-digit pairing code. Enter that code on the phone; it changes when the app
 restarts. No app installation or internet connection is needed for the remote.
 
@@ -165,7 +165,7 @@ The **Search & filters on TV** button opens the existing advanced search panel.
 
 The remote uses HTTP on your local network. Use it on a trusted LAN and do not
 forward the remote's port to the internet. Pairing is remembered only for the browser
-tab's session; **Disconnect phone** forgets it. If 8080 is occupied or unavailable,
+tab's session; **Disconnect phone** forgets it. If 8888 is occupied or unavailable,
 the server requests a free port from the network API; use the address shown in
 the app footer. Controller use continues even if the remote cannot start.
 

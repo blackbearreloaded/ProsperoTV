@@ -387,7 +387,7 @@ void iptv_remote_stop(void)
     search_pending = search_enabled = false;
     next_pair_attempt = 0;
     std::memset(pin, 0, sizeof(pin));
-    std::snprintf(hint, sizeof(hint), "Phone remote unavailable (port 8080)");
+    std::snprintf(hint, sizeof(hint), "Phone remote unavailable (port 8888)");
 }
 void iptv_remote_poll(void)
 {
