@@ -4,11 +4,12 @@
 R"REMOTE(<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <meta name="theme-color" content="#190807"><title>ProsperoTV Remote</title>
+<link rel="icon" type="image/png" href="/icon.png"><link rel="apple-touch-icon" href="/icon.png">
 <style>
 :root{color-scheme:dark;font:16px system-ui,sans-serif;background:#190807;color:#fff2df}
 *{box-sizing:border-box}body{margin:0;padding:24px 20px max(24px,env(safe-area-inset-bottom))}
 main{max-width:420px;margin:auto}header{display:flex;align-items:center;gap:14px;margin-bottom:24px}
-.logo{background:#ff9445;color:#190807;border-radius:15px;padding:12px;font-weight:900;letter-spacing:-1px}
+.logo{width:56px;height:56px;border-radius:14px;flex-shrink:0;object-fit:cover}
 h1{font-size:23px;margin:0}header p{margin:3px 0 0;color:#d3b6a8;font-size:14px}
 .card{background:#2b100d;border:1px solid #633428;border-radius:20px;padding:20px;margin:16px 0}
 label{display:block;color:#e8b968;font-size:13px;font-weight:700;letter-spacing:.08em;margin-bottom:10px}
@@ -21,7 +22,7 @@ button:disabled{opacity:.5;cursor:wait}.primary{background:#ff9445;color:#190807
 .pad button{height:76px;font-size:26px}.pad .ok{font-size:18px}#up{grid-column:2}#left{grid-column:1}#down{grid-column:2}
 fieldset{border:0;padding:0;margin:0;min-width:0}[hidden]{display:none!important}footer{text-align:center;color:#d3b6a8;font-size:12px;margin-top:20px}
 </style></head><body><main>
-<header><div class="logo" aria-hidden="true">TV</div><div><h1>ProsperoTV</h1><p>Your phone. Your remote.</p></div></header>
+<header><img class="logo" src="/icon.png" width="56" height="56" alt=""><div><h1>ProsperoTV</h1><p>Your phone. Your remote.</p></div></header>
 <p id="status" role="status" aria-live="polite">Pair with the code on your TV</p>
 <form id="pair" class="card"><label for="pin">TV PAIRING CODE</label>
 <input id="pin" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" autocomplete="off" required placeholder="6-digit code">

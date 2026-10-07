@@ -44,15 +44,24 @@ class RemoteTest(unittest.TestCase):
                     return result
 
                 self.assertIn("ProsperoTV", request("/", authenticated=False))
+                connection = http.client.HTTPConnection("127.0.0.1", port, timeout=4)
+                connection.request("GET", "/icon.png")
+                response = connection.getresponse()
+                self.assertEqual(response.status, 200)
+                self.assertEqual(response.getheader("Content-Type"), "image/png")
+                self.assertEqual(response.read(), (ROOT / "opengl-ui/ps5/sce_sys/icon0.png").read_bytes())
+                connection.close()
                 request("/api/key", "enter", 401, False)
                 time.sleep(1.05)
                 self.assertIn("Connected", request("/api/status"))
                 # A second instance must choose an available port, never fail
                 # or steal the existing listener's address.
-                other = subprocess.Popen([str(binary), str(port)], stdout=subprocess.PIPE,
+                other = subprocess.Popen([str(binary), str(port), "playback"], stdout=subprocess.PIPE,
                                          text=True, encoding="utf-8")
                 try:
-                    actual = int(re.search(r":(\d+)  \|", other.stdout.readline()).group(1))
+                    hint = other.stdout.readline()
+                    actual = int(re.search(r":(\d+)  \|", hint).group(1))
+                    other_pin = re.search(r"Code: (\d{6})", hint).group(1)
                     self.assertNotEqual(actual, port)
                     connection = http.client.HTTPConnection("127.0.0.1", actual, timeout=4)
                     connection.request("GET", "/")
@@ -60,6 +69,28 @@ class RemoteTest(unittest.TestCase):
                     self.assertEqual(response.status, 200)
                     response.read()
                     connection.close()
+                    for call, status, message in ((1, 200, "Added to favorites"),
+                                                   (2, 200, "Removed from favorites"),
+                                                   (3, 500, "Could not save favorites")):
+                        connection = http.client.HTTPConnection("127.0.0.1", actual, timeout=4)
+                        connection.request("POST", "/api/key", "favorite",
+                                           {"X-Remote-Pin": other_pin})
+                        response = connection.getresponse()
+                        self.assertEqual(response.status, status)
+                        self.assertIn(message, response.read().decode())
+                        connection.close()
+                        self.assertEqual(other.stdout.readline().strip(), f"favorite:{call}")
+                    # Favorite must not also enqueue a key. Back ends playback;
+                    # the next favorite belongs to the browser again.
+                    for key, action in (("back", 1), ("favorite", 2)):
+                        connection = http.client.HTTPConnection("127.0.0.1", actual, timeout=4)
+                        connection.request("POST", "/api/key", key,
+                                           {"X-Remote-Pin": other_pin})
+                        response = connection.getresponse()
+                        self.assertEqual(response.status, 200)
+                        response.read()
+                        connection.close()
+                        self.assertEqual(other.stdout.readline().strip(), f"key:{action}")
                 finally:
                     other.terminate()
                     other.wait(timeout=5)

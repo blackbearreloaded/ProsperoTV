@@ -14,6 +14,8 @@
 #include <cstdlib>
 #include <cstring>
 #include <ctime>
+#include <fstream>
+#include <iterator>
 #include <string>
 #include <string_view>
 
@@ -67,6 +69,9 @@ char pin[7], hint[160] = "Phone remote unavailable";
 char search_text[IPTV_IME_MAX_TEXT_BYTES];
 bool search_enabled = false, search_pending = false;
 uint64_t next_pair_attempt = 0;
+int (*playback_favorite)(void *) = nullptr;
+void *playback_favorite_context = nullptr;
+std::string icon;
 
 uint64_t Now()
 {
@@ -103,16 +108,16 @@ bool RetrySocket()
     const int error = SocketError();
     return error == EAGAIN || error == EWOULDBLOCK || error == EINTR;
 }
-void Reply(Client &client, int code, std::string_view body, bool html = false)
+void Reply(Client &client, int code, std::string_view body,
+           const char *content_type = "text/plain; charset=utf-8")
 {
     client.output =
         "HTTP/1.1 " + std::to_string(code) + " " + (code == 200 ? "OK" : "Error") +
-        "\r\nContent-Type: " + (html ? "text/html; charset=utf-8" : "text/plain; charset=utf-8") +
-        "\r\nContent-Length: " + std::to_string(body.size()) +
+        "\r\nContent-Type: " + content_type + "\r\nContent-Length: " + std::to_string(body.size()) +
         "\r\nConnection: close\r\nCache-Control: no-store\r\n"
         "X-Content-Type-Options: nosniff\r\nReferrer-Policy: no-referrer\r\n"
         "Content-Security-Policy: default-src 'none'; script-src 'unsafe-inline'; "
-        "style-src 'unsafe-inline'; connect-src 'self'; frame-ancestors 'none'; "
+        "style-src 'unsafe-inline'; img-src 'self'; connect-src 'self'; frame-ancestors 'none'; "
         "base-uri 'none'; form-action 'self'\r\n\r\n";
     client.output.append(body);
 }
@@ -220,7 +225,12 @@ void Request(Client &client)
         return;
     if (first == "GET / HTTP/1.1" || first == "GET / HTTP/1.0")
     {
-        Reply(client, 200, page, true);
+        Reply(client, 200, page, "text/html; charset=utf-8");
+        return;
+    }
+    if (first == "GET /icon.png HTTP/1.1" && !icon.empty())
+    {
+        Reply(client, 200, icon, "image/png");
         return;
     }
     // A custom header is required: cross-origin forms cannot issue commands and
@@ -266,6 +276,15 @@ void Request(Client &client)
     }
     if (first == "POST /api/key HTTP/1.1")
     {
+        if (body == "favorite" && playback_favorite)
+        {
+            const int result = playback_favorite(playback_favorite_context);
+            Reply(client, result < 0 ? 500 : 200,
+                  result < 0   ? "Could not save favorites. Try again."
+                  : result > 0 ? "Added to favorites"
+                               : "Removed from favorites");
+            return;
+        }
         static constexpr std::pair<std::string_view, iptv_input_action_t> keys[] = {
             {"up", IPTV_INPUT_UP},           {"down", IPTV_INPUT_DOWN},
             {"left", IPTV_INPUT_LEFT},       {"right", IPTV_INPUT_RIGHT},
@@ -386,6 +405,7 @@ void iptv_remote_stop(void)
     read_at = write_at = 0;
     search_pending = search_enabled = false;
     next_pair_attempt = 0;
+    iptv_remote_set_playback_favorite(nullptr, nullptr);
     std::memset(pin, 0, sizeof(pin));
     std::snprintf(hint, sizeof(hint), "Phone remote unavailable (port 8888)");
 }
@@ -468,4 +488,14 @@ void iptv_remote_enable_search(bool enabled)
 const char *iptv_remote_hint(void)
 {
     return hint;
+}
+void iptv_remote_set_playback_favorite(int (*toggle)(void *), void *context)
+{
+    playback_favorite = toggle;
+    playback_favorite_context = context;
+}
+void iptv_remote_set_icon(const char *path)
+{
+    std::ifstream file(path, std::ios::binary);
+    icon.assign(std::istreambuf_iterator<char>(file), std::istreambuf_iterator<char>());
 }

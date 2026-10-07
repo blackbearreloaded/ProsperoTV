@@ -156,8 +156,10 @@ six-digit pairing code. Enter that code on the phone; it changes when the app
 restarts. No app installation or internet connection is needed for the remote.
 
 Use the arrows and OK to navigate, Back to return or stop playback, and the
-section and favorite buttons for the corresponding controller actions. Type a
-channel name on the phone and tap **Search on TV** (or the keyboard's Search
+section and favorite buttons for the corresponding controller actions.
+While a channel is playing, **Favorite** adds or removes that channel without
+stopping playback; the phone confirms the change after it is saved.
+Type a channel name on the phone and tap **Search on TV** (or the keyboard's Search
 key). **Clear** removes the text query; existing category/country filters still
 apply. Search accepts up to 39 Unicode characters and is available in the
 channel browser. It also works while the TV's native search keyboard is open.

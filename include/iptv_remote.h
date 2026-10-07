@@ -11,11 +11,15 @@ extern "C"
 #endif
     /* Main/input thread only. Nonblocking, bounded work on each poll. */
     bool iptv_remote_start(unsigned short port);
+    void iptv_remote_set_icon(const char *path);
     void iptv_remote_stop(void);
     void iptv_remote_poll(void);
     bool iptv_remote_next(iptv_input_event_t *event);
     bool iptv_remote_search(char text[IPTV_IME_MAX_TEXT_BYTES]);
     void iptv_remote_enable_search(bool enabled);
+    /* Playback-only handler: 1 added, 0 removed, -1 save failed. Clear before
+     * its context expires. Called synchronously by the polling thread. */
+    void iptv_remote_set_playback_favorite(int (*toggle)(void *), void *context);
     const char *iptv_remote_hint(void);
 #ifdef __cplusplus
 }

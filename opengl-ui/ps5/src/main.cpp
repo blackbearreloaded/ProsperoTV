@@ -890,6 +890,7 @@ int main()
     // be asked for while the process has a single thread: nothing above or in
     // it starts one.
     tv::storage::initialize();
+    iptv_remote_set_icon(tv::storage::app_file("sce_sys/icon0.png").c_str());
     iptv_remote_start(8888);
     // Said after it: the log moved with the app's data.
     sys::log("[TV] modules videodec2=0x%08x compute=0x%08x h264=0x%08x hevc=0x%08x vp9=0x%08x "
@@ -935,8 +936,31 @@ int main()
         // closed one a moment to let go.
         sceKernelUsleep(100000);
         const std::int64_t started = sys::monotonic_us();
+        // The menu is closed while playing; keep Favorite tied to the channel
+        // being watched, even if removing it changes the favorites list.
+        struct PlaybackFavorite
+        {
+            ptv::Model &model;
+            unsigned index;
+        } favorite{model, model.channel_count()};
+        for (unsigned index = 0; index < model.channel_count(); ++index)
+            if (model.channel(index).id == request.channel_id)
+            {
+                favorite.index = index;
+                break;
+            }
+        iptv_remote_set_playback_favorite(
+            [](void *context) -> int
+            {
+                auto &current = *static_cast<PlaybackFavorite *>(context);
+                const auto result = current.model.toggle_favorite(current.index);
+                return result == ptv::Model::Starred::failed ? -1
+                       : result == ptv::Model::Starred::added ? 1 : 0;
+            },
+            &favorite);
         // A scripted run plays each channel for a set time; the player stops it.
         const PlaybackOutcome outcome = play_candidates(request, script.watch_ms(), nullptr);
+        iptv_remote_set_playback_favorite(nullptr, nullptr);
         const long long seconds = (sys::monotonic_us() - started) / 1000000;
         // 1: the viewer stopped it; 0: it ended; below 0: it did not play, and why.
         const char *reason = outcome.result < 0 ? iptv_player_last_error() : nullptr;
