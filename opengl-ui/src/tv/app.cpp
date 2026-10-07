@@ -5,6 +5,7 @@
 #include "tv/app.hpp"
 
 #include "tv/draw.hpp"
+#include "iptv_ime.h"
 #include "ui/components/overlay.hpp"
 
 #include <algorithm>
@@ -324,6 +325,22 @@ void App::play_intro()
     intro_ = shared_.settings.reduced_motion ? -1.0f : 0.0f;
 }
 
+bool App::accepts_remote_search() const
+{
+    return browsing() && !update_.is_open() && !failure_.is_open();
+}
+
+bool App::remote_search(const char *query)
+{
+    if (!accepts_remote_search() || query == nullptr)
+        return false;
+    iptv_ime_cancel();
+    shared_.model.set_query(query);
+    search_.dismiss();
+    intro_ = -1.0f;
+    return true;
+}
+
 void App::update(const InputFrame &input, float dt, ui::Feedback &feedback)
 {
     if (intro_ < 0.0f)
@@ -349,6 +366,9 @@ void App::step(const InputFrame &input, float dt, ui::Feedback &feedback)
     shared_.clock += dt;
     page_age_ += dt;
 
+    if (search_.is_open() &&
+        (input.is_pressed(Action::back) || input.is_pressed(Action::north)))
+        iptv_ime_cancel();
     model.poll();
     for (Notice &notice : model.take_notices())
     {
@@ -370,7 +390,8 @@ void App::step(const InputFrame &input, float dt, ui::Feedback &feedback)
         }
         else
         {
-            announcements_.push(ui::StatusKind::info, "ProsperoTV " + offer.version + " is available",
+            announcements_.push(ui::StatusKind::info,
+                                "ProsperoTV " + offer.version + " is available",
                                 "Get it from homebrew.page.", 10.0f);
         }
     }
@@ -533,7 +554,8 @@ void App::draw_settings(ui::Canvas &canvas) const
     const float x = kGlancePanel.x + 40.0f;
     const float right = kGlancePanel.x + kGlancePanel.w - 40.0f;
     float y = kGlancePanel.y + 56.0f;
-    ui::text(list, fonts.semibold, "AT A GLANCE", x, y, 16.0f, tone::accent, gfx::Align::left, 3.0f);
+    ui::text(list, fonts.semibold, "AT A GLANCE", x, y, 16.0f, tone::accent, gfx::Align::left,
+             3.0f);
     y += 22.0f;
     const auto fact = [&](const char *label, const std::string &value)
     {
@@ -578,8 +600,7 @@ void App::draw_about(ui::Canvas &canvas) const
         ui::text(list, fonts.semibold, words, x, y, 16.0f, tone::accent, gfx::Align::left, 3.0f);
         y += 36.0f;
     };
-    const auto words = [&](const char *value, Color color, int lines, float size = 22.0f)
-    {
+    const auto words = [&](const char *value, Color color, int lines, float size = 22.0f) {
         y = ui::paragraph(list, fonts.regular, value, x, y, size, width, size + 9.0f, color, lines);
     };
     const auto rule = [&]()
@@ -637,9 +658,8 @@ void App::draw_about(ui::Canvas &canvas) const
     {
         ui::text(list, fonts.semibold, label, x, y, 16.0f, theme.text_muted, gfx::Align::left,
                  2.0f);
-        ui::text(list, fonts.regular,
-                 fonts.regular.font->fit(value, 22.0f, x + width - column), column, y, 22.0f,
-                 theme.text);
+        ui::text(list, fonts.regular, fonts.regular.font->fit(value, 22.0f, x + width - column),
+                 column, y, 22.0f, theme.text);
         y += 46.0f;
     };
     way("BUILT IN", "The iptv-org list, ready at the first launch");
@@ -764,6 +784,9 @@ void App::draw_hints(ui::Canvas &canvas) const
     layout.item_gap = 34.0f;
     ui::draw_hints(canvas.list, canvas.fonts, ui::GlyphStyle::dark(), hints, count,
                    kWidth - kMargin, true, layout);
+    if (!remote_hint_.empty())
+        ui::text(canvas.list, canvas.fonts.regular, remote_hint_, kMargin, 1062.0f, 20.0f,
+                 shared_.theme.text_muted);
 }
 
 void App::draw(Frame &frame) const
@@ -812,7 +835,8 @@ void App::draw_intro(ui::Canvas &canvas) const
     const float arrive = tween::cubic_out(tween::inverse_lerp(0.0f, kIntroArrive, t));
     const float line = tween::cubic_out(tween::inverse_lerp(kIntroArrive, kIntroLine, t));
     const float open = tween::cubic_out(tween::inverse_lerp(kIntroLine, kIntroOpen, t));
-    const float mark = tween::smoothstep(tween::inverse_lerp(kIntroOpen - 0.05f, kIntroOpen + 0.4f, t));
+    const float mark =
+        tween::smoothstep(tween::inverse_lerp(kIntroOpen - 0.05f, kIntroOpen + 0.4f, t));
     const float dive = tween::cubic_in_out(tween::inverse_lerp(kIntroHold, kIntroEnd, t));
 
     // The room is dark until the view is through the glass.

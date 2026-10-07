@@ -6,6 +6,7 @@
 #include "host_platform.hpp"
 #include "tv/app.hpp"
 #include "tv/draw.hpp"
+#include "tv/remote_input.hpp"
 
 #include <gtest/gtest.h>
 
@@ -221,6 +222,58 @@ TEST_F(AppTest, CrossQueuesTheChannelInFocus)
     EXPECT_EQ(request.channel_id, model_->channel(6).id);
     EXPECT_EQ(model_->view.focused_channel, request.channel_id);
     EXPECT_GT(cues_, 0);
+}
+
+TEST_F(AppTest, PhoneDirectionsAndEnterSelectTheVisibleChannel)
+{
+    frame(ptv::remote_input(IPTV_INPUT_RIGHT));
+    frame(ptv::remote_input(IPTV_INPUT_DOWN));
+    EXPECT_EQ(position(), 6);
+    frame(ptv::remote_input(IPTV_INPUT_LEFT));
+    frame(ptv::remote_input(IPTV_INPUT_UP));
+    EXPECT_EQ(position(), 0);
+    frame(ptv::remote_input(IPTV_INPUT_CROSS));
+    ptv::PlayRequest request;
+    ASSERT_TRUE(model_->take_play_request(&request));
+    EXPECT_EQ(request.channel_id, model_->channel(0).id);
+}
+
+TEST_F(AppTest, PhoneTextReplacesOpenKeyboardAndClearKeepsFilters)
+{
+    model_->set_country("US");
+    frame(ptv::remote_input(IPTV_INPUT_TRIANGLE));
+    ASSERT_TRUE(app_->searching());
+    frame(ptv::remote_input(IPTV_INPUT_CROSS));
+    ASSERT_GT(host::keyboard_requests(), 0);
+    host::set_keyboard_text("stale keyboard text");
+    ASSERT_TRUE(app_->remote_search("Channel 10"));
+    idle();
+    EXPECT_FALSE(app_->searching());
+    EXPECT_EQ(model_->query(), "Channel 10");
+    EXPECT_EQ(model_->visible_count(), 1u);
+    ASSERT_TRUE(app_->remote_search(""));
+    idle();
+    EXPECT_EQ(model_->country(), "US");
+    EXPECT_EQ(model_->visible_count(), 30u);
+}
+
+TEST_F(AppTest, PhoneBackDismissesSearchAndShouldersChangeTabs)
+{
+    frame(ptv::remote_input(IPTV_INPUT_TRIANGLE));
+    ASSERT_TRUE(app_->searching());
+    frame(ptv::remote_input(IPTV_INPUT_CROSS));
+    host::set_keyboard_text("cancelled by Back");
+    frame(ptv::remote_input(IPTV_INPUT_CIRCLE));
+    idle();
+    EXPECT_FALSE(app_->searching());
+    EXPECT_TRUE(model_->query().empty());
+    frame(ptv::remote_input(IPTV_INPUT_R1));
+    EXPECT_EQ(app_->tab(), 1);
+    frame(ptv::remote_input(IPTV_INPUT_R1));
+    EXPECT_EQ(app_->tab(), 2);
+    EXPECT_FALSE(app_->remote_search("Channel"));
+    frame(ptv::remote_input(IPTV_INPUT_L1));
+    EXPECT_EQ(app_->tab(), 1);
 }
 
 TEST_F(AppTest, TheMenuComesBackWhereItWas)
@@ -673,7 +726,8 @@ const char *release_notes()
         "- Hold L2 or R2 and the pages keep turning.\n"
         "- A tuning screen from Cross to the channel's first picture.\n"
         "\n"
-        "Warning: this version moves your sources and favorites to /data/prosperotv the first time it starts.\n"
+           "Warning: this version moves your sources and favorites to /data/prosperotv the first "
+           "time it starts.\n"
         "\n"
         "Fixes\n"
         "- Channels play again after the menu has been drawn with OpenGL.\n"
@@ -684,7 +738,8 @@ const char *release_notes()
         "Note: the update keeps everything you saved.\n"
         "\n"
         "Thanks\n"
-        "To everyone who tested the new interface on their console and wrote back with what they saw, "
+           "To everyone who tested the new interface on their console and wrote back with what "
+           "they saw, "
         "and to the maintainers of the public channel list.\n"
         "- More languages for channel names are next.\n"
         "- So is a way to sort a list by country.\n"
@@ -910,7 +965,8 @@ TEST(ShownNames, ChineseJapaneseAndKoreanAreWrittenAsTheyAre)
     const hui::ui::Fonts &fonts = font_set().fonts;
     const char *chinese = "\xE4\xB8\xAD\xE6\x96\x87\xE9\xA2\x91\xE9\x81\x93";     // 中文频道
     const char *mixed = "CCTV-5 \xE9\xAB\x98\xE6\xB8\x85";                              // CCTV-5 高清
-    const char *japanese = "\xE3\x83\x86\xE3\x83\xAC\xE3\x83\x93\xE6\x9C\x9D\xE6\x97\xA5"; // テレビ朝日
+    const char *japanese =
+        "\xE3\x83\x86\xE3\x83\xAC\xE3\x83\x93\xE6\x9C\x9D\xE6\x97\xA5";        // テレビ朝日
     const char *korean = "\xEC\x97\xB0\xED\x95\xA9\xEB\x89\xB4\xEC\x8A\xA4TV";         // 연합뉴스TV
     EXPECT_EQ(ptv::shown_name(fonts, written(chinese, "CCTV4.cn@SD")), chinese);
     EXPECT_EQ(ptv::shown_name(fonts, written(mixed, "CCTV5.cn")), mixed);
@@ -938,9 +994,11 @@ TEST(ShownNames, ChineseJapaneseAndKoreanAreWrittenAsTheyAre)
 TEST(ShownNames, FallBackWhenAScriptIsNotBaked)
 {
     const hui::ui::Fonts &fonts = font_set().fonts;
-    const char *thai = "\xE0\xB9\x84\xE0\xB8\x97\xE0\xB8\xA2\xE0\xB8\x97\xE0\xB8\xB5\xE0\xB8\xA7\xE0\xB8\xB5"; // ไทยทีวี
+    const char *thai = "\xE0\xB9\x84\xE0\xB8\x97\xE0\xB8\xA2\xE0\xB8\x97\xE0\xB8\xB5\xE0\xB8\xA7"
+                       "\xE0\xB8\xB5"; // ไทยทีวี
     // Most of a mixed name survives: it is kept without the letters that cannot be drawn.
-    EXPECT_EQ(ptv::shown_name(fonts, written((std::string("Thai PBS ") + thai).c_str(), "ThaiPBS.th")),
+    EXPECT_EQ(
+        ptv::shown_name(fonts, written((std::string("Thai PBS ") + thai).c_str(), "ThaiPBS.th")),
               "Thai PBS");
     // Nothing survives: the playlist's own id for the channel stands in.
     EXPECT_EQ(ptv::shown_name(fonts, written(thai, "Channel3.th@SD")), "Channel3");
@@ -991,8 +1049,8 @@ TEST_F(AppTest, RandomInputNeverBreaksIt)
             static constexpr UpdatePhase phases[] = {
                 UpdatePhase::starting, UpdatePhase::downloading, UpdatePhase::unpacking,
                 UpdatePhase::failed,   UpdatePhase::cancelled,   UpdatePhase::idle};
-            host::set_update_progress(progress(phases[random() % std::size(phases)],
-                                               random() % 5000, random() % 5000));
+            host::set_update_progress(
+                progress(phases[random() % std::size(phases)], random() % 5000, random() % 5000));
         }
         frame(input);
         // A channel was chosen: the frame loop would play it and come back.

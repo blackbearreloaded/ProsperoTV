@@ -43,6 +43,26 @@ increase a coverage percentage. Test observable contracts and regressions.
 
 ## Host integration tests
 
+`tests/test_remote.py` compiles the production HTTP server with a small host
+input consumer. It checks pairing, all remote button mappings, Unicode search,
+empty and oversized queries, invalid UTF-8, fragmented requests, and concurrent
+slow clients. Run it alone with
+`python3 -m unittest discover -s tests -p test_remote.py -v`.
+For hardware acceptance, open the phone page at the address in the app footer,
+pair using its code, verify each direction/OK/Back against visible TV changes,
+search using the browser keyboard, clear the query, and stop playback with Back.
+Capture both the phone page and corresponding TV states.
+Run `opengl-ui/tools/run-tests.sh` as well: it drives the released interface
+with phone input and checks search, keyboard cancellation, filters, and tabs.
+Build the released interface with `opengl-ui/ps5/assemble.sh`, then run `make`
+in the assembled tree. The repository root builds the legacy interface.
+When Remote Play is unavailable, `make IPTV_REMOTE_CAPTURE=1` in the assembled
+tree enables an opt-in screenshot hook. Creating
+`/download0/remote-capture.request` captures the next frame to
+`/download0/remote-capture.bmp` and removes the request (checked twice a second).
+For a build with filesystem access, these two files are in its config directory.
+Retrieve only completed captures. Normal builds omit this hook entirely.
+
 `tests/test_tools.py` invokes complete repository scripts with temporary input
 and controlled environment variables. Use this level for metadata updates,
 build orchestration, package validation, and deployment resolution. Network

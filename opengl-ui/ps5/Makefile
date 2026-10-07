@@ -10,12 +10,14 @@ SHELL := /bin/bash
 .DEFAULT_GOAL := app
 
 IPTV_AUTOTEST ?= 0
+IPTV_REMOTE_CAPTURE ?= 0
 # Empty selects the pinned ps5-opengl release (tools/fetch-opengl-sdk.sh).
 PS5_OPENGL_PREFIX ?=
 OPENGL_SDK := .deps/ps5-opengl/current
 FFMPEG := .deps/ffmpeg-audio/root
 
 APP_DEFINITIONS := GL_GLEXT_PROTOTYPES=1 IPTV_AUTOTEST_ENABLED=$(IPTV_AUTOTEST) IPTV_PROBE=0
+APP_DEFINITIONS += IPTV_REMOTE_CAPTURE=$(IPTV_REMOTE_CAPTURE)
 APP_INCLUDE_PATHS := src src/kit include $(OPENGL_SDK)/include $(FFMPEG)/include
 # The OpenGL link group brings the C++ runtime (libc++, libc++abi, libunwind).
 APP_STATIC_ARCHIVES := $(FFMPEG)/lib/libavcodec.a $(FFMPEG)/lib/libswresample.a \

@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "iptv_input.h"
+#include "iptv_remote.h"
 
 #include <stddef.h>
 #include <stdint.h>
@@ -178,6 +179,7 @@ bool iptv_input_init(void)
 
 void iptv_input_poll(void)
 {
+    iptv_remote_poll();
     if (pad_handle < 0)
         return;
 
@@ -203,8 +205,10 @@ void iptv_input_poll(void)
 
 bool iptv_input_next(iptv_input_event_t *event)
 {
-    if (event == NULL || queue_read == queue_write)
+    if (event == NULL)
         return false;
+    if (queue_read == queue_write)
+        return iptv_remote_next(event);
     *event = queue[queue_read];
     queue_read = (queue_read + 1U) % INPUT_QUEUE_SIZE;
     return true;

@@ -147,6 +147,28 @@ at 3840×2160. Codec and renderer details are documented in
 | Circle / Options during playback | Stop playback and return to the browser |
 | Touchpad + R1 during playback | Toggle codec and performance statistics |
 
+## Phone remote
+
+While ProsperoTV is open, connect your phone to the same local network and open
+the HTTP address shown in the app footer. It requests port 8080 and uses an
+assigned port when 8080 is unavailable. The footer also shows a
+six-digit pairing code. Enter that code on the phone; it changes when the app
+restarts. No app installation or internet connection is needed for the remote.
+
+Use the arrows and OK to navigate, Back to return or stop playback, and the
+section and favorite buttons for the corresponding controller actions. Type a
+channel name on the phone and tap **Search on TV** (or the keyboard's Search
+key). **Clear** removes the text query; existing category/country filters still
+apply. Search accepts up to 39 Unicode characters and is available in the
+channel browser. It also works while the TV's native search keyboard is open.
+The **Search & filters on TV** button opens the existing advanced search panel.
+
+The remote uses HTTP on your local network. Use it on a trusted LAN and do not
+forward the remote's port to the internet. Pairing is remembered only for the browser
+tab's session; **Disconnect phone** forgets it. If 8080 is occupied or unavailable,
+the server requests a free port from the network API; use the address shown in
+the app footer. Controller use continues even if the remote cannot start.
+
 ## Requirements
 
 Building requires Linux, WSL, or a Linux CI runner. On Ubuntu, Debian, or WSL:
