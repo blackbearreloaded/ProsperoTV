@@ -58,6 +58,7 @@ for header in "$tv"/include/*.h; do
     [[ ${header##*/} == iptv_app.h ]] || cp "$header" "$out/include/"
 done
 cp -a "$tv/vendor/minimp3" "$out/vendor/minimp3"
+cp -a "$tv/vendor/qrcodegen" "$out/vendor/qrcodegen"
 cp "$tv/vendor/ps5/sdk/stubs/videodec2_link_stub.c" "$out/vendor/ps5/sdk/stubs/"
 cp "$tv"/tooling/native/ps5_radio_import_stub_{audiodec,common_dialog}.cpp "$out/tooling/native/"
 cp "$tv/tools/setup-audio-dependencies.sh" "$out/tools/"

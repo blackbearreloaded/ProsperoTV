@@ -18,7 +18,7 @@ FFMPEG := .deps/ffmpeg-audio/root
 
 APP_DEFINITIONS := GL_GLEXT_PROTOTYPES=1 IPTV_AUTOTEST_ENABLED=$(IPTV_AUTOTEST) IPTV_PROBE=0
 APP_DEFINITIONS += IPTV_REMOTE_CAPTURE=$(IPTV_REMOTE_CAPTURE)
-APP_INCLUDE_PATHS := src src/kit include $(OPENGL_SDK)/include $(FFMPEG)/include
+APP_INCLUDE_PATHS := src src/kit include vendor/qrcodegen $(OPENGL_SDK)/include $(FFMPEG)/include
 # The OpenGL link group brings the C++ runtime (libc++, libc++abi, libunwind).
 APP_STATIC_ARCHIVES := $(FFMPEG)/lib/libavcodec.a $(FFMPEG)/lib/libswresample.a \
 	$(FFMPEG)/lib/libavutil.a .deps/ps5-opengl/libps5opengl-group.a

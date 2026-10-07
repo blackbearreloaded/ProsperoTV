@@ -20,6 +20,7 @@
 #include "iptv_native_backend.h"
 #include "iptv_player.h"
 #include "iptv_remote.h"
+#include "iptv_native_backend.h"
 #include "iptv_store.h"
 #include "platform/ps5/audio_out.hpp"
 #include "platform/ps5/display_egl.hpp"
@@ -341,6 +342,8 @@ bool run_menu(ptv::Model &model, ptv::Settings *settings, const LastPlayback &la
     const bool pad_ready = pad.open();
 
     audio::Mixer mixer;
+    int menu_volume = settings->volume;
+    mixer.set_master_gain(static_cast<float>(menu_volume) / 100.0f);
     ps5::AudioOut audio_out;
     const bool audio_ready = audio_out.start(mixer);
     audio::SoundBank sounds;
@@ -406,6 +409,13 @@ bool run_menu(ptv::Model &model, ptv::Settings *settings, const LastPlayback &la
                                                     static_cast<std::uint64_t>(now));
             iptv_remote_enable_search(app.accepts_remote_search());
             iptv_remote_poll();
+            if (app.settings().volume != settings->volume)
+                app.set_volume(settings->volume);
+            if (menu_volume != settings->volume)
+            {
+                menu_volume = settings->volume;
+                mixer.set_master_gain(static_cast<float>(menu_volume) / 100.0f);
+            }
             iptv_input_event_t remote_event;
             if (iptv_remote_next(&remote_event))
             {
@@ -426,6 +436,16 @@ bool run_menu(ptv::Model &model, ptv::Settings *settings, const LastPlayback &la
 
             feedback.clear();
             app.update(input, dt, feedback);
+            if (app.take_pair_phone_requested())
+                if (!iptv_remote_begin_pairing())
+                    app.remote_notice("Phone pairing is unavailable");
+            if (!app.pairing_open())
+                iptv_remote_cancel_pairing();
+            if (app.take_forget_phones_requested())
+                app.remote_notice(iptv_remote_forget_phones() ? "Paired phones forgotten"
+                                                           : "Could not forget phones. Try again.");
+            app.set_pairing_info(iptv_remote_url(), iptv_remote_pairing_code(),
+                                 iptv_remote_pairing_seconds(), iptv_remote_paired_count());
             for (const audio::CueEvent &event : feedback.cues)
                 sounds.play(
                     mixer, event.set == audio::SoundSet::count ? audio::SoundSet::glass : event.set,
@@ -435,9 +455,18 @@ bool run_menu(ptv::Model &model, ptv::Settings *settings, const LastPlayback &la
             pad.tick(dt);
             if (app.take_settings_changed())
             {
-                *settings = app.settings();
-                if (!ptv::save_settings(tv::storage::config_dir(), *settings))
+                if (!ptv::save_settings(tv::storage::config_dir(), app.settings()))
+                {
                     sys::log("[TV] settings could not be saved");
+                    app.set_volume(settings->volume);
+                    app.remote_notice("Could not save settings. Try again.");
+                }
+                else
+                {
+                    *settings = app.settings();
+                    iptv_native_set_volume(static_cast<unsigned>(settings->volume));
+                    iptv_remote_set_volume(static_cast<unsigned>(settings->volume));
+                }
             }
             chosen = model.take_play_request(request);
 
@@ -890,6 +919,7 @@ int main()
     // be asked for while the process has a single thread: nothing above or in
     // it starts one.
     tv::storage::initialize();
+    iptv_remote_set_pairing_store((tv::storage::config_dir() + "/phone-pairing-v1.txt").c_str());
     iptv_remote_set_icon(tv::storage::app_file("sce_sys/icon0.png").c_str());
     iptv_remote_start(8888);
     // Said after it: the log moved with the app's data.
@@ -907,6 +937,20 @@ int main()
 
     static ptv::Model model(tv::storage::config_dir(), tv::storage::cache_dir());
     ptv::Settings settings = ptv::load_settings(tv::storage::config_dir());
+    iptv_native_set_volume(static_cast<unsigned>(settings.volume));
+    iptv_remote_set_volume(static_cast<unsigned>(settings.volume));
+    iptv_remote_set_volume_handler(
+        [](unsigned volume, void *context) -> bool
+        {
+            auto &current = *static_cast<ptv::Settings *>(context);
+            ptv::Settings next = current;
+            next.volume = static_cast<int>(volume);
+            if (!ptv::save_settings(tv::storage::config_dir(), next))
+                return false;
+            current = next;
+            iptv_native_set_volume(volume);
+            return true;
+        }, &settings);
     // A request a PC left beside the test title turns this launch into a
     // scripted run (see tv_dev.hpp). Release builds never read one.
     static tv_dev::Script script;

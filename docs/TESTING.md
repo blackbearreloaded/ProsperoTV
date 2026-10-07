@@ -44,13 +44,18 @@ increase a coverage percentage. Test observable contracts and regressions.
 ## Host integration tests
 
 `tests/test_remote.py` compiles the production HTTP server with a small host
-input consumer. It checks pairing, all remote button mappings, Unicode search,
+input consumer. It checks explicit pairing, expiry, saved browser credentials,
+restart/revocation, volume bounds and save failures, all button mappings, Unicode search,
 empty and oversized queries, invalid UTF-8, fragmented requests, and concurrent
 slow clients. Run it alone with
 `python3 -m unittest discover -s tests -p test_remote.py -v`.
-For hardware acceptance, open the phone page at the address in the app footer,
+For hardware acceptance, open Settings → Pair a phone on the TV, scan the QR,
 pair using its code, verify each direction/OK/Back against visible TV changes,
 search using the browser keyboard, clear the query, and stop playback with Back.
+Confirm reconnection after an app restart and rejection after forgetting phones.
+Adjust volume in both UIs, verify they agree, and listen for mute and restored
+audio during playback. The host audio regression also checks both native channel
+gains, clamping and unchanged-volume suppression with a mocked AudioOut call.
 Capture both the phone page and corresponding TV states.
 Run `opengl-ui/tools/run-tests.sh` as well: it drives the released interface
 with phone input and checks search, keyboard cancellation, filters, and tabs.

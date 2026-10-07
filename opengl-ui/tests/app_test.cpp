@@ -479,9 +479,68 @@ TEST_F(AppTest, SettingsAreChangedAndReported)
     EXPECT_FALSE(app_->settings().sounds);
     cues_ = 0;
     move(Direction::down);
+    move(Direction::left); // Volume
+    EXPECT_EQ(app_->settings().volume, 95);
+    move(Direction::down);
     move(Direction::right); // Menu sharpness
     EXPECT_EQ(app_->settings().resolution, static_cast<int>(ptv::Settings::kFullHd));
     EXPECT_EQ(cues_, 0); // and nothing sounds any more
+}
+
+TEST_F(AppTest, PairingIsASettingsModalWithAnExplicitRequest)
+{
+    app_->set_pairing_info("http://192.0.2.1:8888", "123456", 120, 1);
+    press(Action::page_next);
+    press(Action::page_next);
+    press(Action::page_next);
+    for (int i = 0; i < 4; ++i)
+        move(Direction::down);
+    EXPECT_FALSE(app_->take_pair_phone_requested());
+    press(Action::confirm);
+    EXPECT_TRUE(app_->pairing_open());
+    EXPECT_TRUE(app_->take_pair_phone_requested());
+    EXPECT_FALSE(app_->take_pair_phone_requested());
+    press(Action::page_next);
+    EXPECT_EQ(app_->tab(), 3);
+    app_->set_pairing_info("http://192.0.2.1:8888", "", 0, 1);
+    press(Action::confirm);
+    EXPECT_TRUE(app_->take_pair_phone_requested());
+    press(Action::back);
+    EXPECT_FALSE(app_->pairing_open());
+    EXPECT_EQ(app_->tab(), 3);
+    move(Direction::down);
+    press(Action::confirm);
+    EXPECT_TRUE(app_->take_forget_phones_requested());
+}
+
+TEST_F(AppTest, PhoneVolumeUpdatesTheSliderWithoutOverwritingOtherSettings)
+{
+    press(Action::page_next);
+    press(Action::page_next);
+    press(Action::page_next);
+    press(Action::confirm); // reduce motion
+    app_->take_settings_changed();
+    app_->set_volume(30);
+    EXPECT_FALSE(app_->take_settings_changed());
+    EXPECT_TRUE(app_->settings().reduced_motion);
+    move(Direction::down);
+    move(Direction::down);
+    move(Direction::left);
+    EXPECT_EQ(app_->settings().volume, 25);
+    EXPECT_TRUE(app_->take_settings_changed());
+}
+
+TEST_F(AppTest, VolumeSettingsPersistAndClamp)
+{
+    EXPECT_EQ(ptv::load_settings(dir_).volume, 100);
+    ptv::Settings settings;
+    settings.volume = 35;
+    ASSERT_TRUE(ptv::save_settings(dir_, settings));
+    EXPECT_EQ(ptv::load_settings(dir_).volume, 35);
+    std::ofstream(dir_ + "/prosperotv-interface-v1.txt") << "volume=-20\n";
+    EXPECT_EQ(ptv::load_settings(dir_).volume, 0);
+    std::ofstream(dir_ + "/prosperotv-interface-v1.txt") << "volume=200\n";
+    EXPECT_EQ(ptv::load_settings(dir_).volume, 100);
 }
 
 TEST_F(AppTest, OptionsStartsAnUpdateOnce)

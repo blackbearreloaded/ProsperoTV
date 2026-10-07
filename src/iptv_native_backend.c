@@ -22,6 +22,18 @@
 #include <string.h>
 #include <time.h>
 
+static atomic_uint master_volume = 100;
+
+void iptv_native_set_volume(unsigned percent)
+{
+    atomic_store_explicit(&master_volume, percent > 100 ? 100 : percent, memory_order_relaxed);
+}
+
+unsigned iptv_native_get_volume(void)
+{
+    return atomic_load_explicit(&master_volume, memory_order_relaxed);
+}
+
 #define BACKEND_MAGIC UINT32_C(0x49505456)
 #define PIPELINE_BUFFER_COUNT 3u
 #define PENDING_PTS_CAPACITY 32u
@@ -229,6 +241,7 @@ _Static_assert(VIDEO_DRAIN_FLUSH_LIMIT >= PENDING_PTS_CAPACITY,
 typedef struct audio_sink
 {
     int32_t handle;
+    int applied_volume;
     uint32_t input_rate;
     uint32_t channels;
     uint64_t input_index;
@@ -773,11 +786,23 @@ static uint32_t pcm_rate_from_pts(uint32_t pcm_bytes, uint32_t channels, uint64_
     return nearest && nearest_difference * 100u <= (uint64_t)nearest * 3u ? nearest : fallback_rate;
 }
 
+static int32_t audio_sink_volume(audio_sink_t *sink)
+{
+    const unsigned percent = iptv_native_get_volume();
+    if (sink->applied_volume == (int)percent)
+        return 0;
+    int volumes[8];
+    for (unsigned index = 0; index < 8; ++index)
+        volumes[index] = (int)(AUDIO_OUT_VOLUME_0DB * percent / 100u);
+    const int result = sceAudioOutSetVolume(sink->handle, 3, volumes);
+    if (result >= 0)
+        sink->applied_volume = (int)percent;
+    return result;
+}
+
 static int32_t audio_sink_open(backend_state_t *state, uint32_t input_rate, uint32_t channels)
 {
     int32_t result;
-    int volumes[8];
-    uint32_t index;
 
     if (input_rate < 8000u || input_rate > 192000u || channels == 0 || channels > 2)
         return IPTV_NATIVE_E_AUDIO_FRAME;
@@ -790,9 +815,8 @@ static int32_t audio_sink_open(backend_state_t *state, uint32_t input_rate, uint
         return state->audio_sink.handle;
     state->audio_sink.input_rate = input_rate;
     state->audio_sink.channels = channels;
-    for (index = 0; index < 8; ++index)
-        volumes[index] = AUDIO_OUT_VOLUME_0DB;
-    result = sceAudioOutSetVolume(state->audio_sink.handle, 3, volumes);
+    state->audio_sink.applied_volume = -1;
+    result = audio_sink_volume(&state->audio_sink);
     return result < 0 ? result : 0;
 }
 
@@ -808,6 +832,9 @@ static int32_t audio_output_frame(backend_state_t *state, int16_t left, int16_t 
     if (sink->pending != AUDIO_OUT_GRAIN * 2u)
         return 0;
     started = monotonic_us();
+    result = audio_sink_volume(sink);
+    if (result < 0)
+        return result;
     result = sceAudioOutOutput(sink->handle, sink->block);
     elapsed = monotonic_us() - started;
     state->telemetry.audio_output_total_us += elapsed;
@@ -2627,8 +2654,33 @@ int32_t iptv_native_backend_close(iptv_native_backend_t *backend)
 }
 
 #ifdef IPTV_NATIVE_BACKEND_STATE_TEST
+static int test_volume_calls, test_volume_left, test_volume_right;
+int sceAudioOutSetVolume(int handle, int flags, const int *volumes)
+{
+    assert(handle == 7 && flags == 3);
+    ++test_volume_calls;
+    test_volume_left = volumes[0];
+    test_volume_right = volumes[1];
+    return 0;
+}
+
 int main(void)
 {
+    audio_sink_t volume_sink = {0};
+    volume_sink.handle = 7;
+    volume_sink.applied_volume = -1;
+    iptv_native_set_volume(100);
+    assert(audio_sink_volume(&volume_sink) == 0);
+    assert(test_volume_left == AUDIO_OUT_VOLUME_0DB && test_volume_right == AUDIO_OUT_VOLUME_0DB);
+    iptv_native_set_volume(25);
+    assert(audio_sink_volume(&volume_sink) == 0);
+    assert(test_volume_left == AUDIO_OUT_VOLUME_0DB / 4 && test_volume_right == test_volume_left);
+    iptv_native_set_volume(0);
+    assert(audio_sink_volume(&volume_sink) == 0);
+    assert(test_volume_left == 0 && test_volume_right == 0);
+    assert(audio_sink_volume(&volume_sink) == 0 && test_volume_calls == 3);
+    iptv_native_set_volume(200);
+    assert(iptv_native_get_volume() == 100);
     assert(!media_span_ready(1, 0, 2000000));
     assert(!media_span_ready(60, 0, 1000000));
     assert(media_span_ready(121, 0, 2000000));

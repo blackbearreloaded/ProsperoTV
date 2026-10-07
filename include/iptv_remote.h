@@ -11,6 +11,16 @@ extern "C"
 #endif
     /* Main/input thread only. Nonblocking, bounded work on each poll. */
     bool iptv_remote_start(unsigned short port);
+    void iptv_remote_set_pairing_store(const char *path);
+    bool iptv_remote_begin_pairing(void);
+    void iptv_remote_cancel_pairing(void);
+    const char *iptv_remote_url(void);
+    const char *iptv_remote_pairing_code(void);
+    unsigned iptv_remote_pairing_seconds(void);
+    unsigned iptv_remote_paired_count(void);
+    bool iptv_remote_forget_phones(void);
+    void iptv_remote_set_volume(unsigned volume);
+    void iptv_remote_set_volume_handler(bool (*save)(unsigned, void *), void *context);
     void iptv_remote_set_icon(const char *path);
     void iptv_remote_stop(void);
     void iptv_remote_poll(void);

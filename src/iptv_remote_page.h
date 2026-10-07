@@ -21,13 +21,14 @@ button:disabled{opacity:.5;cursor:wait}.primary{background:#ff9445;color:#190807
 #status{min-height:24px;color:#e8b968;font-size:14px;margin:0 2px}.pad{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;max-width:310px;margin:22px auto}
 .pad button{height:76px;font-size:26px}.pad .ok{font-size:18px}#up{grid-column:2}#left{grid-column:1}#down{grid-column:2}
 fieldset{border:0;padding:0;margin:0;min-width:0}[hidden]{display:none!important}footer{text-align:center;color:#d3b6a8;font-size:12px;margin-top:20px}
+input[type=range]{padding:0;min-height:44px;accent-color:#ff9445;cursor:pointer}output{float:right;font-variant-numeric:tabular-nums}
 </style></head><body><main>
 <header><img class="logo" src="/icon.png" width="56" height="56" alt=""><div><h1>ProsperoTV</h1><p>Your phone. Your remote.</p></div></header>
 <p id="status" role="status" aria-live="polite">Pair with the code on your TV</p>
 <form id="pair" class="card"><label for="pin">TV PAIRING CODE</label>
 <input id="pin" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" autocomplete="off" required placeholder="6-digit code">
 <div class="row"><button class="primary" type="submit">Connect to TV</button></div>
-<p class="muted">Use the same Wi-Fi as your PS5. Find the code along the bottom of ProsperoTV.</p></form>
+<p class="muted">On the TV, open Settings → Pair a phone. Enter the code before it expires. This browser will be remembered.</p></form>
 <fieldset id="remote" disabled hidden>
 <div class="pad" aria-label="Directional controls">
 <button id="up" data-key="up" aria-label="Up">↑</button>
@@ -37,28 +38,28 @@ fieldset{border:0;padding:0;margin:0;min-width:0}[hidden]{display:none!important
 <button id="down" data-key="down" aria-label="Down">↓</button></div>
 <div class="row"><button data-key="back">← Back</button><button data-key="favorite">☆ Favorite</button></div>
 <div class="row"><button data-key="previous">‹ Section</button><button data-key="next">Section ›</button></div>
+<div class="card"><label for="volume">VOLUME <output id="volume-value" for="volume">100%</output></label><input id="volume" type="range" min="0" max="100" step="1" value="100" aria-valuetext="100 percent"><p class="muted">Controls ProsperoTV sound. Set to 0 to mute.</p></div>
 <form id="search" class="card"><label for="query">FIND A CHANNEL</label>
 <input id="query" type="search" maxlength="78" enterkeyhint="search" autocomplete="off" placeholder="Type with your phone keyboard">
 <div class="row"><button class="primary" type="submit">Search on TV</button><button id="clear" type="button">Clear</button></div>
 <div class="row"><button type="button" data-key="search">Search &amp; filters on TV</button></div>
 <p class="muted">Up to 39 characters. Search the current channel list; Back also stops playback.</p></form>
-<button id="disconnect" type="button" style="width:100%">Disconnect phone</button>
+<button id="disconnect" type="button" style="width:100%">Forget this phone</button>
 </fieldset><footer>Local network remote · ProsperoTV</footer></main>
 <script>
 const $=id=>document.getElementById(id);
-let pin='',paired=false,busy=false;
-try{pin=sessionStorage.getItem('prosperotv-pin')||''}catch{}
-function unpair(){paired=false;$('remote').disabled=true;$('remote').hidden=true;$('pair').hidden=false;try{sessionStorage.removeItem('prosperotv-pin')}catch{}}
+let paired=false,busy=false,volumeEditing=false,volumePending=null,volumeSending=false;
+function unpair(){paired=false;volumePending=null;$('remote').disabled=true;$('remote').hidden=true;$('pair').hidden=false}
 async function request(path,body){
- const response=await fetch('/api/'+path,{method:body===undefined?'GET':'POST',headers:{'X-Remote-Pin':pin,'Content-Type':'text/plain;charset=UTF-8'},body,signal:AbortSignal.timeout(4000)});
+ const response=await fetch('/api/'+path,{method:body===undefined?'GET':'POST',headers:{'X-ProsperoTV-Remote':'1','Content-Type':'text/plain;charset=UTF-8'},credentials:'same-origin',body,signal:AbortSignal.timeout(4000)});
  const text=await response.text();
  if(!response.ok){if(response.status===401)unpair();throw Error(text)}return text;
 }
 async function connect(){
- try{$('status').textContent=await request('status');paired=true;$('remote').disabled=false;$('remote').hidden=false;$('pair').hidden=true;try{sessionStorage.setItem('prosperotv-pin',pin)}catch{}}
+ try{$('status').textContent=await request('status');paired=true;$('remote').disabled=false;$('remote').hidden=false;$('pair').hidden=true;showVolume(await request('volume'))}
  catch(error){$('status').textContent=error.message||'Cannot connect. Check the TV and Wi-Fi.'}
 }
-$('pair').onsubmit=event=>{event.preventDefault();pin=$('pin').value;connect()};
+$('pair').onsubmit=async event=>{event.preventDefault();try{await request('pair',$('pin').value);$('pin').value='';await connect()}catch(error){$('status').textContent=error.message}};
 async function command(path,body){
  if(busy||!paired)return;busy=true;
  try{$('status').textContent=await request(path,body)}catch(error){$('status').textContent=error.message||'Connection lost. Check the TV and Wi-Fi.'}finally{busy=false}
@@ -66,12 +67,24 @@ async function command(path,body){
 document.querySelectorAll('[data-key]').forEach(button=>button.onclick=()=>command('key',button.dataset.key));
 $('search').onsubmit=event=>{event.preventDefault();const text=$('query').value;if([...text].length>39){$('status').textContent='Use up to 39 characters.';return}command('search',text)};
 $('clear').onclick=()=>{$('query').value='';command('search','')};
-$('disconnect').onclick=()=>{pin='';unpair();$('status').textContent='Phone disconnected'};
+$('disconnect').onclick=async()=>{try{await request('disconnect','');unpair();$('status').textContent='Phone forgotten'}catch(error){$('status').textContent=error.message}};
+function showVolume(value){$('volume').value=value;$('volume-value').textContent=Number(value)===0?'Muted':value+'%';$('volume').setAttribute('aria-valuetext',Number(value)===0?'Muted':value+' percent')}
+async function sendVolume(){
+ if(volumeSending||!paired)return;volumeSending=true;
+ try{while(volumePending!==null&&paired){const value=volumePending;volumePending=null;$('status').textContent=await request('volume',value)}}
+ catch(error){volumePending=null;$('status').textContent=error.message;try{showVolume(await request('volume'))}catch{}}
+ finally{volumeSending=false}
+}
+$('volume').onpointerdown=()=>{volumeEditing=true};
+$('volume').oninput=()=>{showVolume($('volume').value);volumePending=$('volume').value;sendVolume()};
+$('volume').onchange=()=>{volumeEditing=false};
+$('volume').onpointerup=$('volume').onpointercancel=()=>{volumeEditing=false};
+$('volume').onblur=()=>{volumeEditing=false};
 document.addEventListener('keydown',event=>{
  if(event.target.matches('input,button')||event.ctrlKey||event.altKey||event.metaKey)return;
  const key={ArrowUp:'up',ArrowDown:'down',ArrowLeft:'left',ArrowRight:'right',Enter:'enter',Escape:'back',Backspace:'back'}[event.key];
  if(key&&paired){event.preventDefault();command('key',key)}
 });
-setInterval(async()=>{if(paired&&!busy){try{$('status').textContent=await request('status')}catch(error){$('status').textContent=error.message||'Connection lost. Check the TV and Wi-Fi.'}}},10000);
-if(pin)connect();
+setInterval(async()=>{if(paired&&!volumeEditing&&!volumeSending){try{showVolume(await request('volume'))}catch(error){$('status').textContent=error.message||'Connection lost. Check the TV and Wi-Fi.'}}},1500);
+connect();
 </script></body></html>)REMOTE"

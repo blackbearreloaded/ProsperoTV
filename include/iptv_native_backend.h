@@ -13,6 +13,10 @@ extern "C"
 {
 #endif
 
+    /* App-wide gain, 0 = mute and 100 = the stream's original level. */
+    void iptv_native_set_volume(unsigned percent);
+    unsigned iptv_native_get_volume(void);
+
 #define IPTV_NATIVE_BACKEND_STORAGE_BYTES (64u * 1024u)
 #if IPTV_PROBE
 #define IPTV_NATIVE_PROBE_SAMPLES 36u
@@ -181,9 +185,9 @@ extern "C"
     uint64_t iptv_native_backend_presented_frames(const iptv_native_backend_t *backend);
     int32_t iptv_native_backend_close(iptv_native_backend_t *backend);
 
-/* Development: blend the lines of every 8-bit picture as if it were
- * interlaced, to time that work on a console with an ordinary channel. */
-void iptv_native_backend_force_field_blend(int enabled);
+    /* Development: blend the lines of every 8-bit picture as if it were
+     * interlaced, to time that work on a console with an ordinary channel. */
+    void iptv_native_backend_force_field_blend(int enabled);
 
 #ifdef __cplusplus
 }

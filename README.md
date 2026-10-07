@@ -149,11 +149,18 @@ at 3840×2160. Codec and renderer details are documented in
 
 ## Phone remote
 
-While ProsperoTV is open, connect your phone to the same local network and open
-the HTTP address shown in the app footer. It requests port 8888 and uses an
-assigned port when 8888 is unavailable. The footer also shows a
-six-digit pairing code. Enter that code on the phone; it changes when the app
-restarts. No app installation or internet connection is needed for the remote.
+Connect your phone to the same Wi-Fi, then select **Settings → Pair a phone**
+on the TV. Scan the QR code (or type the displayed address) and enter the
+six-digit code on the website. The code expires after two minutes, is accepted
+once, and is cancelled when you close the pairing screen. No app installation
+or internet connection is needed for the remote.
+
+The TV remembers up to eight browsers. A saved browser reconnects after a page
+reload or app restart without another code. Its cookie lasts one year; private
+browsing, clearing cookies, or a changed console IP may require pairing again.
+Use **Forget this phone** on the website or **Forget paired phones** in TV
+Settings to revoke access. Pairing must be saved on the console before the
+website reports success.
 
 Use the arrows and OK to navigate, Back to return or stop playback, and the
 section and favorite buttons for the corresponding controller actions.
@@ -165,11 +172,16 @@ apply. Search accepts up to 39 Unicode characters and is available in the
 channel browser. It also works while the TV's native search keyboard is open.
 The **Search & filters on TV** button opens the existing advanced search panel.
 
+The **Volume** sliders in TV Settings and on the phone control the same saved
+ProsperoTV volume, including live playback and interface sounds. Zero mutes it;
+100% keeps the stream's original level. This does not change the television's
+hardware volume.
+
 The remote uses HTTP on your local network. Use it on a trusted LAN and do not
-forward the remote's port to the internet. Pairing is remembered only for the browser
-tab's session; **Disconnect phone** forgets it. If 8888 is occupied or unavailable,
-the server requests a free port from the network API; use the address shown in
-the app footer. Controller use continues even if the remote cannot start.
+forward its port to the internet. The app requests port 8888 and uses an assigned
+port when that is unavailable. Use the current address on the pairing screen;
+the saved browser credential remains valid if only the port changes. Controller
+use continues even if the remote cannot start.
 
 ## Requirements
 

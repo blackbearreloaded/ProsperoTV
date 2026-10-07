@@ -6,6 +6,7 @@
 
 #include <cstdio>
 #include <cstring>
+#include <algorithm>
 
 namespace ptv
 {
@@ -31,6 +32,8 @@ Settings load_settings(const std::string &data_dir)
             settings.reduced_motion = value != 0;
         else if (std::sscanf(line, "sounds=%d", &value) == 1)
             settings.sounds = value != 0;
+        else if (std::sscanf(line, "volume=%d", &value) == 1)
+            settings.volume = std::clamp(value, 0, 100);
         else if (std::sscanf(line, "resolution=%d", &value) == 1)
             settings.resolution = value == Settings::kFullHd ? Settings::kFullHd : Settings::kBest;
     }
@@ -45,8 +48,9 @@ bool save_settings(const std::string &data_dir, const Settings &settings)
     std::FILE *file = std::fopen(temporary.c_str(), "wb");
     if (file == nullptr)
         return false;
-    std::fprintf(file, "reduced_motion=%d\nsounds=%d\nresolution=%d\n",
-                 settings.reduced_motion ? 1 : 0, settings.sounds ? 1 : 0, settings.resolution);
+    std::fprintf(file, "reduced_motion=%d\nsounds=%d\nresolution=%d\nvolume=%d\n",
+                 settings.reduced_motion ? 1 : 0, settings.sounds ? 1 : 0, settings.resolution,
+                 std::clamp(settings.volume, 0, 100));
     const bool written = std::ferror(file) == 0 && std::fflush(file) == 0;
     const bool closed = std::fclose(file) == 0;
     if (!written || !closed)
@@ -54,7 +58,6 @@ bool save_settings(const std::string &data_dir, const Settings &settings)
         std::remove(temporary.c_str());
         return false;
     }
-    std::remove(target.c_str());
     if (std::rename(temporary.c_str(), target.c_str()) != 0)
     {
         std::remove(temporary.c_str());

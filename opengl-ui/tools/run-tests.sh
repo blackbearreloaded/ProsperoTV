@@ -22,7 +22,7 @@ build="$root/build/tests"
 mkdir -p "$build/obj"
 
 sanitize="-fsanitize=address,undefined -fno-omit-frame-pointer -g"
-includes="-I$root/src -I$root/ps5/src -I$root/host -I$kit/src -I$kit/third_party -I$tv/include"
+includes="-I$root/src -I$root/ps5/src -I$root/host -I$kit/src -I$kit/third_party -I$tv/include -I$tv/vendor/qrcodegen"
 {
     echo "rule cxx"
     echo "  command = $cache $cxx -std=c++20 -O1 $sanitize \$flags $includes -MD -MF \$out.d -c \$in -o \$out"

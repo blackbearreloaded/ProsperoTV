@@ -1,5 +1,10 @@
 # Third-party notices
 
+The offline pairing QR code uses Nayuki's QR Code generator, version 1.8.0,
+commit `720f62bddb7226106071d4728c292cb1df519ceb`, under the MIT License.
+The unmodified source and full license are in `vendor/qrcodegen/`.
+Source: https://github.com/nayuki/QR-Code-generator/tree/v1.8.0/c
+
 ## Credits and acknowledgements
 
 Special thanks to [JMUtechnologies](https://github.com/JMUtechnologies) for

@@ -20,6 +20,7 @@ struct Settings
 
     bool reduced_motion = false;
     bool sounds = true;
+    int volume = 100;
     int resolution = kBest;
 
     bool operator==(const Settings &) const = default;
