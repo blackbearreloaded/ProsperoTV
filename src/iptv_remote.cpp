@@ -14,8 +14,6 @@
 #include <cstdlib>
 #include <cstring>
 #include <ctime>
-#include <fstream>
-#include <iterator>
 #include <string>
 #include <string_view>
 
@@ -496,6 +494,19 @@ void iptv_remote_set_playback_favorite(int (*toggle)(void *), void *context)
 }
 void iptv_remote_set_icon(const char *path)
 {
-    std::ifstream file(path, std::ios::binary);
-    icon.assign(std::istreambuf_iterator<char>(file), std::istreambuf_iterator<char>());
+    icon.clear();
+    FILE *file = std::fopen(path, "rb");
+    if (!file)
+        return;
+    char chunk[4096];
+    size_t bytes = 0;
+    while ((bytes = std::fread(chunk, 1, sizeof(chunk), file)) != 0)
+    {
+        icon.append(chunk, bytes);
+        if (icon.size() > 1024 * 1024)
+            break;
+    }
+    if (std::ferror(file) || icon.size() > 1024 * 1024)
+        icon.clear();
+    std::fclose(file);
 }
