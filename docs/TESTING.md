@@ -93,6 +93,8 @@ Follow [Deployment](DEPLOYMENT.md) and the separate
 [PS5 Homebrew Development Protocol](https://github.com/blackbearreloaded/ps5-homebrew-dev-protocol)
 for console coordination, evidence collection, and milestone policy.
 
+2026-10-07 | FW 12.70 / ShadowMount | 770fbb3 / 01.000.020 | PPSA88022: phone navigation, search, keyboard dismissal and playback Back passed; clean exit | evidence: results/phone-remote/
+
 ## Adding tests
 
 - Add GoogleTest cases to C++ files under `tests/`; the `test-unit` recipe owns
