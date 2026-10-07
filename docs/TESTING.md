@@ -95,6 +95,8 @@ for console coordination, evidence collection, and milestone policy.
 
 2026-10-07 | FW 12.70 / ShadowMount | 770fbb3 / 01.000.020 | PPSA88022: phone navigation, search, keyboard dismissal and playback Back passed; clean exit | evidence: results/phone-remote/
 
+2026-10-07 | FW 12.70 / ShadowMount | 6e32fbf | 8888 unavailable; fallback 58145: user confirmed arrows, search, Clear, playback OK/Back; clean exit | evidence: results/phone-remote/port8888-*
+
 ## Adding tests
 
 - Add GoogleTest cases to C++ files under `tests/`; the `test-unit` recipe owns
