@@ -69,6 +69,7 @@ char pin[7], hint[160] = "Phone remote unavailable", remote_url[80];
 std::string pairing_store;
 std::array<std::string, 8> paired_tokens;
 uint64_t pairing_deadline = 0;
+bool connected_pending = false;
 unsigned volume = 100;
 bool (*save_volume)(unsigned, void *) = nullptr;
 void *volume_context = nullptr;
@@ -358,6 +359,7 @@ void Request(Client &client)
     }
     if (first == "GET /api/status HTTP/1.1")
     {
+        connected_pending = true;
         Reply(client, 200,
               search_enabled ? "Connected · Ready to browse"
                              : "Connected · Controls ready (Back to browse)");
@@ -543,6 +545,7 @@ void iptv_remote_stop(void)
     listener = -1;
     read_at = write_at = 0;
     search_pending = search_enabled = false;
+    connected_pending = false;
     next_pair_attempt = 0;
     iptv_remote_cancel_pairing();
     remote_url[0] = 0;
@@ -674,6 +677,7 @@ void iptv_remote_set_pairing_store(const char *path)
 }
 bool iptv_remote_begin_pairing(void)
 {
+    connected_pending = false;
     iptv_remote_cancel_pairing();
     unsigned random;
     if (listener < 0 || !Random(&random, sizeof(random)))
@@ -689,6 +693,12 @@ void iptv_remote_cancel_pairing(void)
 {
     pin[0] = 0;
     pairing_deadline = 0;
+}
+bool iptv_remote_take_connected(void)
+{
+    const bool connected = connected_pending;
+    connected_pending = false;
+    return connected;
 }
 const char *iptv_remote_url(void)
 {

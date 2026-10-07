@@ -89,6 +89,19 @@ class RemoteTest(unittest.TestCase):
         pin = self.control('pair').split(':')[1]
         self.assertEqual(self.control('cancel'), 'cancelled')
         self.request('/api/pair', pin, code=401)
+    def test_connection_confirmation_requires_a_paired_browser(self):
+        self.request('/api/status', code=401)
+        self.assertEqual(self.control('connected'), 'connected:0')
+        self.pair()
+        self.assertEqual(self.control('connected'), 'connected:0')
+        self.request('/api/status')
+        self.assertEqual(self.control('connected'), 'connected:1')
+        self.assertEqual(self.control('connected'), 'connected:0')
+        self.control('pair')
+        self.request('/api/volume')
+        self.assertEqual(self.control('connected'), 'connected:0')
+        self.request('/api/status')
+        self.assertEqual(self.control('connected'), 'connected:1')
     def test_remembered_browser_survives_restart_and_port_change(self):
         self.pair()
         self.assertEqual(self.store.stat().st_mode & 0o777, 0o600)

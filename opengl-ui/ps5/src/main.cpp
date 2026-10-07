@@ -409,6 +409,8 @@ bool run_menu(ptv::Model &model, ptv::Settings *settings, const LastPlayback &la
                                                     static_cast<std::uint64_t>(now));
             iptv_remote_enable_search(app.accepts_remote_search());
             iptv_remote_poll();
+            if (iptv_remote_take_connected())
+                app.phone_connected();
             if (app.settings().volume != settings->volume)
                 app.set_volume(settings->volume);
             if (menu_volume != settings->volume)

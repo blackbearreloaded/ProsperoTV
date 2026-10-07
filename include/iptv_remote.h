@@ -24,6 +24,7 @@ extern "C"
     void iptv_remote_set_icon(const char *path);
     void iptv_remote_stop(void);
     void iptv_remote_poll(void);
+    bool iptv_remote_take_connected(void);
     bool iptv_remote_next(iptv_input_event_t *event);
     bool iptv_remote_search(char text[IPTV_IME_MAX_TEXT_BYTES]);
     void iptv_remote_enable_search(bool enabled);

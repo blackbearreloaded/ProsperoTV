@@ -38,6 +38,7 @@ class App
     void set_volume(int volume);
     void set_pairing_info(std::string url, std::string code, unsigned seconds, unsigned phones);
     bool pairing_open() const { return pairing_open_; }
+    void phone_connected();
     bool take_pair_phone_requested() { return std::exchange(pair_requested_, false); }
     bool take_forget_phones_requested() { return std::exchange(forget_requested_, false); }
     void remote_notice(const char *message);
@@ -159,7 +160,7 @@ class App
     std::string pair_url_, pair_code_;
     std::vector<bool> pair_qr_;
     int pair_qr_size_ = 0;
-    unsigned pair_seconds_ = 0, paired_phones_ = 0, pairing_start_count_ = 0;
+    unsigned pair_seconds_ = 0;
     bool pairing_open_ = false, pair_requested_ = false, forget_requested_ = false;
     bool settings_changed_ = false;
     bool failure_seen_ = false;

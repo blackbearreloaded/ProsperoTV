@@ -153,7 +153,8 @@ Connect your phone to the same Wi-Fi, then select **Settings → Pair a phone**
 on the TV. Scan the QR code (or type the displayed address) and enter the
 six-digit code on the website. The code expires after two minutes, is accepted
 once, and is cancelled when you close the pairing screen. No app installation
-or internet connection is needed for the remote.
+or internet connection is needed for the remote. The dialog closes automatically
+when a newly paired or remembered browser connects, and the TV shows "Phone connected".
 
 The TV remembers up to eight browsers. A saved browser reconnects after a page
 reload or app restart without another code. Its cookie lasts one year; private

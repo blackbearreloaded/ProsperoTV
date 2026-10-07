@@ -508,6 +508,11 @@ TEST_F(AppTest, PairingIsASettingsModalWithAnExplicitRequest)
     press(Action::back);
     EXPECT_FALSE(app_->pairing_open());
     EXPECT_EQ(app_->tab(), 3);
+    press(Action::confirm);
+    EXPECT_TRUE(app_->pairing_open());
+    app_->phone_connected();
+    EXPECT_FALSE(app_->pairing_open());
+    EXPECT_EQ(app_->tab(), 3);
     move(Direction::down);
     press(Action::confirm);
     EXPECT_TRUE(app_->take_forget_phones_requested());

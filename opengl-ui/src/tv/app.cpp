@@ -172,6 +172,12 @@ void App::remote_notice(const char *message)
     shared_.toasts.push(ui::StatusKind::info, message);
 }
 
+void App::phone_connected()
+{
+    if (std::exchange(pairing_open_, false))
+        remote_notice("Phone connected");
+}
+
 void App::set_pairing_info(std::string url, std::string code, unsigned seconds, unsigned phones)
 {
     if (pair_url_ != url)
@@ -192,7 +198,6 @@ void App::set_pairing_info(std::string url, std::string code, unsigned seconds, 
     }
     pair_code_ = std::move(code);
     pair_seconds_ = seconds;
-    paired_phones_ = phones;
     form_.set_value_text(kRowPhones, std::to_string(phones));
     form_.set_disabled(kRowForgetPhones, phones == 0);
 }
@@ -230,9 +235,7 @@ void App::draw_pairing(ui::Canvas &canvas) const
     }
     else
     {
-        const char *message = paired_phones_ > pairing_start_count_ ? "Phone paired and remembered"
-                                                                 : "Code expired or unavailable";
-        ui::text(list, fonts.semibold, message, 825, 602, 28, tone::accent);
+        ui::text(list, fonts.semibold, "Code expired or unavailable", 825, 602, 28, tone::accent);
         ui::text(list, fonts.regular, "Press X for a new code", 825, 652, 26, theme.text_muted);
     }
     ui::text(list, fonts.regular, "Your browser reconnects automatically on future visits.",
@@ -389,7 +392,6 @@ void App::handle_screen(const InputFrame &input, ui::Feedback &feedback)
         else if (event == ui::Event::activated && form_.changed_id() == kRowPair)
         {
             pairing_open_ = pair_requested_ = true;
-            pairing_start_count_ = paired_phones_;
         }
         else if (event == ui::Event::activated && form_.changed_id() == kRowForgetPhones)
             forget_requested_ = true;
@@ -510,7 +512,6 @@ void App::step(const InputFrame &input, float dt, ui::Feedback &feedback)
         else if (input.is_pressed(Action::confirm) && pair_seconds_ == 0)
         {
             pair_requested_ = true;
-            pairing_start_count_ = paired_phones_;
         }
     }
     else if (update_.is_open())

@@ -50,6 +50,10 @@ int main(int argc, char **argv)
             {
                 std::printf("forgot:%d\n", iptv_remote_forget_phones());
             }
+            else if (std::strcmp(command, "connected\n") == 0)
+            {
+                std::printf("connected:%d\n", iptv_remote_take_connected());
+            }
             else if (std::strcmp(command, "cancel\n") == 0)
             {
                 iptv_remote_cancel_pairing();
