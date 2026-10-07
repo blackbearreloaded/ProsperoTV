@@ -97,6 +97,8 @@ for console coordination, evidence collection, and milestone policy.
 
 2026-10-07 | FW 12.70 / ShadowMount | 6e32fbf | 8888 unavailable; fallback 58145: user confirmed arrows, search, Clear, playback OK/Back; clean exit | evidence: results/phone-remote/port8888-*
 
+2026-10-07 | FW 12.70 / ShadowMount | fb56c0a | phone icon and playback Favorite add/remove/persistence passed; clean exit | evidence: results/phone-remote/favorite-*
+
 ## Adding tests
 
 - Add GoogleTest cases to C++ files under `tests/`; the `test-unit` recipe owns
