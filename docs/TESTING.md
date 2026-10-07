@@ -104,6 +104,8 @@ for console coordination, evidence collection, and milestone policy.
 
 2026-10-07 | FW 12.70 / ShadowMount | fb56c0a | phone icon and playback Favorite add/remove/persistence passed; clean exit | evidence: results/phone-remote/favorite-*
 
+2026-10-07 | FW12.70 | 77f7237 | pass: QR, remembered/new pairing auto-close, volume sync, user-confirmed mute/audio; clean exit | results/phone-remote/autoclose-*
+
 ## Adding tests
 
 - Add GoogleTest cases to C++ files under `tests/`; the `test-unit` recipe owns
