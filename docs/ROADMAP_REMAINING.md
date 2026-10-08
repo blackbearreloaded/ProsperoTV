@@ -8,8 +8,8 @@ and relevant checks work.
 
 | Requirement | Required behavior | State / evidence |
 | --- | --- | --- |
-| Local TV sources | Add HDHomeRun and Tvheadend servers, browse and play their channels | Implemented; host checks and PS5 build pass, console case pending |
-| Phone source management | Add and edit saved playlists/accounts through the paired browser | Implemented; HTTP, persistence and mobile browser checks pass, console case pending |
+| Local TV sources | Add HDHomeRun and Tvheadend servers, browse and play their channels | Implemented; host checks, PS5 build and console fixture playback pass; physical tuner untested |
+| Phone source management | Add and edit saved playlists/accounts through the paired browser | Implemented; HTTP, persistence, mobile browser and native paired-source acceptance pass |
 | Zapping | Next, previous and previously watched channel during playback | Pending |
 | Playback channel list | Select a channel from a list over the playing video | Pending |
 | Channel banner | Brief channel/guide banner on tune and on request | Pending |
@@ -57,5 +57,15 @@ at `results/roadmap/phone-sources.png`. These do not claim real tuner testing.
 
 The direct-stream path now honors Stop after draining buffered input, before
 opening another live session. All 30 tooling/lifecycle checks pass, including
-the production EOF branch exercised with a stop during drain. Console acceptance
-of this correction and the complete paired-phone source workflow remains pending.
+the production EOF branch exercised with a stop during drain.
+
+- 2026-10-08 | PR10 | 74cd24f | .30/PPSA88263 | pass: phone source actions, local TV video/audio, stop and teardown | results/roadmap/console-10 | merge after CI
+
+The console case paired through the displayed code, added both local TV types,
+renamed the authenticated account without resending its password, selected a
+source and removed another. The fixture required authentication for the
+Tvheadend playlist, guide and video. Each ten-second playback presented 231 video
+frames and decoded 469 audio frames, then reported the requested stop and clean
+cleanup. Installed executable hashes matched the frozen candidate, the title
+closed, and all three development services remained healthy. This validates
+synthetic services on the console, not physical tuners or real provider accounts.
