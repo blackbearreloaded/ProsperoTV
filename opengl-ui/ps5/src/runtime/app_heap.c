@@ -33,7 +33,7 @@ size_t sceLibcMspaceMallocUsableSize(const void *address);
 
 /* Catalogs and multilingual MP4 sample indexes share this bounded heap.
  * Keep it for the process lifetime; late C++ destructors still use it. */
-#define HUI_HEAP_SIZE (384u * 1024u * 1024u)
+#define HUI_HEAP_SIZE (512u * 1024u * 1024u)
 
 static atomic_int hui_heap_state;
 static void *hui_heap_base;
