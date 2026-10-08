@@ -293,10 +293,33 @@ struct LastPlayback
     unsigned attempts = 0;
 };
 
-// One menu session. Returns true with a channel to play; false when the menu
-// could not be opened at all.
+struct StorageJob
+{
+    ptv::StorageRequest request;
+    std::string error;
+    bool ok = false;
+    std::atomic<bool> done{false};
+    void *thread = nullptr;
+    static void *run(void *context)
+    {
+        auto &job = *static_cast<StorageJob *>(context);
+        const auto archive = job.request.drive + "/ProsperoTV-backup.sqlite3";
+        if (job.request.action == ptv::StorageAction::backup)
+            job.ok = ptv::backup_settings(tv::storage::config_dir(), archive, job.error);
+        else if (job.request.action == ptv::StorageAction::restore)
+            job.ok = ptv::restore_settings(tv::storage::config_dir(), archive, job.error);
+        else
+            job.ok = ptv::export_failure_report(
+                tv::storage::logs_dir(), job.request.drive + "/ProsperoTV-failure.txt", job.error);
+        job.done.store(true, std::memory_order_release);
+        return nullptr;
+    }
+};
+
+// True with a channel or a storage result; false if the menu could not open.
 bool run_menu(ptv::Model &model, ptv::Settings *settings, const LastPlayback &last,
-              ptv::PlayRequest *request, tv_dev::Script &script)
+              ptv::PlayRequest *request, tv_dev::Script &script, const std::string &notice,
+              std::string *storage_result)
 {
     *request = {};
     ++g_menu_sessions;
@@ -393,6 +416,14 @@ bool run_menu(ptv::Model &model, ptv::Settings *settings, const LastPlayback &la
                                        (version.empty() ? std::string("unknown") : version) +
                                            (TV_DEBUG_TRACE != 0 ? " debug trace" : ""));
         ptv::App &app = *owned;
+        if (!notice.empty())
+            app.remote_notice(notice.c_str());
+        if (TV_DEV_SCRIPTS != 0 && !tv::storage::elevated())
+        {
+            std::string unused;
+            if (save::read_file(tv::storage::app_file("dev/usb-fixture.txt"), &unused, 64))
+                app.set_usb_root(tv::storage::config_dir() + "/test-mounts");
+        }
         app.configure_images(
             [&renderer](const ptv::ImagePixels &pixels) {
                 return renderer.batch().create_texture(pixels.width, pixels.height,
@@ -424,6 +455,7 @@ bool run_menu(ptv::Model &model, ptv::Settings *settings, const LastPlayback &la
         std::int64_t previous = sys::monotonic_us();
         std::int64_t last_frame_start = previous;
         ptv::PortalResolveJob portal_link;
+        StorageJob storage;
         bool resolving_portal = false;
         float portal_age = 0;
         while (!chosen)
@@ -438,7 +470,7 @@ bool run_menu(ptv::Model &model, ptv::Settings *settings, const LastPlayback &la
             if (dt > 0.05f)
                 dt = 0.05f;
             std::size_t count = pad.read(samples);
-            if (script.active())
+            if (script.active() && !app.storage_busy())
             {
                 // The script is the controller: one sample a frame, nothing else.
                 const std::uint32_t buttons = script.step(dt, model, app);
@@ -454,9 +486,10 @@ bool run_menu(ptv::Model &model, ptv::Settings *settings, const LastPlayback &la
                                               static_cast<std::uint64_t>(now));
             iptv_remote_enable_search(!resolving_portal && app.accepts_remote_search());
             iptv_remote_set_sources_handler(
-                resolving_portal ? nullptr
-                                 : +[](const char *input, size_t bytes, char *out, size_t capacity,
-                                       void *context) -> int
+                resolving_portal || app.storage_busy()
+                    ? nullptr
+                    : +[](const char *input, size_t bytes, char *out, size_t capacity,
+                          void *context) -> int
                 {
                     std::string response;
                     const int status = static_cast<ptv::Model *>(context)->remote_sources(
@@ -470,7 +503,9 @@ bool run_menu(ptv::Model &model, ptv::Settings *settings, const LastPlayback &la
                     return status;
                 },
                 &model);
-            iptv_remote_poll();
+            // No remote mutations can race a settings snapshot or restore.
+            if (!app.storage_busy())
+                iptv_remote_poll();
             if (iptv_remote_take_connected())
                 app.phone_connected();
             if (app.settings().volume != settings->volume)
@@ -536,7 +571,22 @@ bool run_menu(ptv::Model &model, ptv::Settings *settings, const LastPlayback &la
                     iptv_remote_set_volume(static_cast<unsigned>(settings->volume));
                 }
             }
-            chosen = !resolving_portal && model.take_play_request(request);
+            auto storage_request = app.take_storage_request();
+            if (storage_request.action != ptv::StorageAction::none)
+            {
+                storage.request = std::move(storage_request);
+                iptv_remote_set_sources_handler(nullptr, nullptr);
+                iptv_remote_enable_search(false);
+                if (model.close_for_storage())
+                    storage.thread = ptv::platform::thread_start(StorageJob::run, &storage,
+                                                                 1024u * 1024u, "tv-usb");
+                if (!storage.thread)
+                {
+                    storage.error = "The USB operation could not start. No settings were changed.";
+                    storage.done.store(true, std::memory_order_release);
+                }
+            }
+            chosen = !app.storage_busy() && !resolving_portal && model.take_play_request(request);
             if (chosen)
                 app.stop_preview();
             if (chosen && !request->portal_command.empty())
@@ -651,7 +701,21 @@ bool run_menu(ptv::Model &model, ptv::Settings *settings, const LastPlayback &la
                     renderer.last_instances());
                 stats.reset();
             }
-            if (app.wants_quit())
+            if (storage.done.load(std::memory_order_acquire))
+            {
+                if (storage.thread && ptv::platform::thread_join(storage.thread) != 0)
+                    continue;
+                storage.thread = nullptr;
+                *storage_result = storage.ok
+                                      ? storage.request.action == ptv::StorageAction::restore
+                                            ? "Backup restored."
+                                        : storage.request.action == ptv::StorageAction::backup
+                                            ? "Backup saved to USB."
+                                            : "Failure report saved to USB."
+                                      : storage.error;
+                break;
+            }
+            if (!app.storage_busy() && app.wants_quit())
             {
                 // The new version is staged and its helper waits for this
                 // process to end: the app closes the way the system would
@@ -664,7 +728,7 @@ bool run_menu(ptv::Model &model, ptv::Settings *settings, const LastPlayback &la
                 pad.close();
                 sys::quit();
             }
-            if (script.wants_quit())
+            if (!app.storage_busy() && script.wants_quit())
             {
                 // A scripted run ends the app itself, the way the system
                 // would close it: nothing is killed.
@@ -700,7 +764,7 @@ bool run_menu(ptv::Model &model, ptv::Settings *settings, const LastPlayback &la
     display.close();
     log_heap("menu closed");
     say("[TV] menu closed");
-    return chosen;
+    return chosen || !storage_result->empty();
 }
 
 struct PlaybackOutcome
@@ -776,8 +840,8 @@ PlaybackOutcome play_candidates(const ptv::PlayRequest &request, unsigned stop_a
                 std::snprintf(marker, sizeof(marker), "IPTV_AUTOTEST_ATTEMPT_BEGIN candidate=%u\n",
                               static_cast<unsigned>(candidate + 1u));
             write_autotest_marker(archive_path, marker, marker_bytes);
-            std::remove(kLatestReceiptPath);
         }
+        std::remove(kLatestReceiptPath);
         outcome.result = iptv_player_run_authenticated(
             request.urls[candidate].c_str(), request.channel_name.c_str(),
             request.user_agent.empty() ? nullptr : request.user_agent.c_str(),
@@ -1072,7 +1136,14 @@ int main()
                             4u * 1024u * 1024u))
             (void)save::write_atomic(library, bytes);
     }
-    static ptv::Model model(tv::storage::config_dir(), tv::storage::cache_dir());
+    std::string storage_error;
+    if (!ptv::recover_settings(tv::storage::config_dir(), storage_error))
+    {
+        notify_failure(storage_error.c_str());
+        sys::park();
+    }
+    auto owned_model =
+        std::make_unique<ptv::Model>(tv::storage::config_dir(), tv::storage::cache_dir());
     ptv::Settings settings = ptv::load_settings(tv::storage::config_dir());
     // The diagnostic log: the viewer's switch in Settings, a debug build, or
     // (test title) a dev/diagnostics.txt left beside the app.
@@ -1121,11 +1192,35 @@ int main()
     }
     tv::start_update_check();
     LastPlayback last;
+    std::string menu_notice;
     for (;;)
     {
+        ptv::Model &model = *owned_model;
         ptv::PlayRequest request;
-        if (!run_menu(model, &settings, last, &request, script))
+        std::string storage_result;
+        if (!run_menu(model, &settings, last, &request, script, menu_notice, &storage_result))
             sys::park();
+        menu_notice.clear();
+        if (!storage_result.empty())
+        {
+            owned_model.reset();
+            if (!ptv::recover_settings(tv::storage::config_dir(), storage_error))
+            {
+                notify_failure(storage_error.c_str());
+                sys::park();
+            }
+            owned_model =
+                std::make_unique<ptv::Model>(tv::storage::config_dir(), tv::storage::cache_dir());
+            owned_model->view.tab = 4; // Return to Settings after reloading the saved state.
+            owned_model->resume_last(false);
+            settings = ptv::load_settings(tv::storage::config_dir());
+            ptv::diag::set_enabled(settings.diagnostics);
+            iptv_native_set_volume(static_cast<unsigned>(settings.volume));
+            iptv_remote_set_volume(static_cast<unsigned>(settings.volume));
+            menu_notice = std::move(storage_result);
+            last = {};
+            continue;
+        }
 
         // The menu's display and the player's must never overlap: give the
         // closed one a moment to let go.
@@ -1161,6 +1256,16 @@ int main()
         const long long seconds = (sys::monotonic_us() - started) / 1000000;
         // 1: the viewer stopped it; 0: it ended; below 0: it did not play, and why.
         const char *reason = outcome.result < 0 ? iptv_player_last_error() : nullptr;
+        if (outcome.result < 0)
+        {
+            std::string receipt;
+            (void)save::read_file(kLatestReceiptPath, &receipt, 65536);
+            const auto report = ptv::failure_report(
+                receipt, read_content_version(tv::storage::app_file("sce_sys/param.json")),
+                ptv::platform::unix_time(), outcome.result, outcome.attempts);
+            (void)save::write_atomic(tv::storage::logs_dir() + "/prosperotv-last-failure.txt",
+                                     report);
+        }
         say("[TV] playback result=%d attempts=%u selected=%u seconds=%lld%s%s%s", outcome.result,
             outcome.attempts, outcome.selected, seconds,
             reason != nullptr && reason[0] != '\0' ? " reason=\"" : "",

@@ -22,8 +22,8 @@ and relevant checks work.
 | Parental controls | PIN-protected adult categories and kids-only mode | Pending |
 | Profiles | Separate sources, favorites and history by signed-in console user | Pending |
 | Interface languages | Follow the console language for menus | Pending |
-| Backup/restore | Export sources/favorites/settings to USB and restore them safely | Pending |
-| Failure reports | Export a useful redacted diagnostic report to USB in a normal build | Pending |
+| Backup/restore | Export sources/favorites/settings to USB and restore them safely | Implemented; sanitizer checks and PS5 build pass, console case pending |
+| Failure reports | Export a useful redacted diagnostic report to USB in a normal build | Implemented; sanitizer checks and PS5 build pass, console case pending |
 
 Completion also requires host checks, a PS5 build, bounded testing on an idle
 192.168.4.30 or 192.168.4.40, an updated deliverable, and a pull request. Console
@@ -69,3 +69,31 @@ frames and decoded 469 audio frames, then reported the requested stop and clean
 cleanup. Installed executable hashes matched the frozen candidate, the title
 closed, and all three development services remained healthy. This validates
 synthetic services on the console, not physical tuners or real provider accounts.
+
+## USB data handling
+
+Settings offers backup, restore and failure-report export, with a drive chooser
+when multiple readable USB mounts are present. The backup is
+`ProsperoTV-backup.sqlite3` on the selected drive; the confirmation explains that
+it includes provider passwords. It includes source records, visibility choices,
+favorite folders, favorites, history and interface settings. Pairing tokens and
+downloaded catalogues are excluded.
+
+The menu pauses model and remote mutations, closes the database and runs the
+storage operation on a worker while showing progress. Restore checks the complete
+bounded archive and checksums before replacing any settings. A rollback journal
+recovers the original files after an interrupted restore. The model and settings
+are reconstructed before browsing resumes. A failed recovery keeps the journal
+and prevents startup from changing the affected files.
+
+A normal build saves the last playback failure as numeric decoder/network
+evidence. Successful playback does not erase it. Export writes
+`ProsperoTV-failure.txt`, retaining version, time, result and attempt count while
+excluding channel names, URLs, provider responses and credentials. USB access uses
+the app's existing filesystem access; no extra access request is made by these
+actions.
+
+Validation: all 122 UI tests pass under ASan/UBSan, including backup round trips,
+corrupt/incomplete archive rejection, interrupted-restore recovery, retained
+pairing state, multiple drives, controller confirmation and report redaction.
+The PS5 production cross-build also passes. Physical USB validation remains open.

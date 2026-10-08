@@ -162,6 +162,15 @@ class AppTest : public ::testing::Test
         frame(input);
         idle(settle);
     }
+    void settings_row(const std::string &label)
+    {
+        for (int i = 0; i < 30; ++i)
+            move(Direction::up, 0);
+        for (int i = 0; i < 30 && app_->settings_row() != label; ++i)
+            move(Direction::down, 0);
+        ASSERT_EQ(app_->settings_row(), label);
+        idle();
+    }
     // A button that goes down and stays down for that many frames.
     void hold(Action action, int frames)
     {
@@ -526,6 +535,52 @@ TEST_F(AppTest, PairingIsASettingsModalWithAnExplicitRequest)
     EXPECT_TRUE(app_->take_forget_phones_requested());
 }
 
+TEST_F(AppTest, UsbRestoreRequiresConfirmationAndCanChooseAnotherDrive)
+{
+    fs::create_directory(dir_ + "/usb0");
+    fs::create_directory(dir_ + "/usb2");
+    app_->set_usb_root(dir_);
+    for (int i = 0; i < 4; ++i)
+        press(Action::page_next);
+    settings_row("Restore from USB");
+    press(Action::confirm);
+    ASSERT_TRUE(app_->storage_open());
+    EXPECT_EQ(app_->take_storage_request().action, ptv::StorageAction::none);
+    press(Action::confirm); // Cancel has the initial focus.
+    EXPECT_FALSE(app_->storage_open());
+    EXPECT_FALSE(app_->storage_busy());
+    press(Action::confirm);
+    move(Direction::right);
+    press(Action::confirm); // Next drive, then the question opens on Cancel again.
+    ASSERT_TRUE(app_->storage_open());
+    move(Direction::right);
+    move(Direction::right);
+    press(Action::confirm);
+    auto request = app_->take_storage_request();
+    EXPECT_EQ(request.action, ptv::StorageAction::restore);
+    EXPECT_EQ(request.drive, dir_ + "/usb2");
+    EXPECT_TRUE(app_->storage_busy());
+    EXPECT_FALSE(app_->accepts_remote_search());
+    press(Action::page_prev); // Controls cannot change settings during the job.
+    EXPECT_EQ(app_->tab(), 4);
+    EXPECT_EQ(app_->take_storage_request().action, ptv::StorageAction::none);
+    EXPECT_FALSE(frame_.overlay.empty());
+}
+
+TEST_F(AppTest, UsbActionsLeaveSettingsUsableWhenNoDriveIsAttached)
+{
+    app_->set_usb_root(dir_);
+    for (int i = 0; i < 4; ++i)
+        press(Action::page_next);
+    settings_row("Back up to USB");
+    press(Action::confirm);
+    EXPECT_FALSE(app_->storage_open());
+    EXPECT_FALSE(app_->storage_busy());
+    EXPECT_EQ(app_->take_storage_request().action, ptv::StorageAction::none);
+    press(Action::page_prev);
+    EXPECT_EQ(app_->tab(), 3);
+}
+
 std::vector<std::string> g_traced;
 
 bool traced(const std::string &part)
@@ -552,9 +607,8 @@ TEST_F(AppTest, TheDiagnosticLogIsASwitchInSettingsOffByDefault)
     EXPECT_EQ(app_->tab(), 4);
     EXPECT_TRUE(g_traced.empty());
 
-    // The switch is the last row of Settings.
-    for (int i = 0; i < 12; ++i)
-        move(Direction::down);
+    // Diagnostic log follows the channel-list switches.
+    settings_row("Diagnostic log");
     press(Action::confirm);
     EXPECT_TRUE(app_->settings().diagnostics);
     EXPECT_TRUE(app_->take_settings_changed());
@@ -584,8 +638,7 @@ TEST_F(AppTest, TheDiagnosticLogIsASwitchInSettingsOffByDefault)
     press(Action::page_next);
     press(Action::page_next);
     press(Action::page_next);
-    for (int i = 0; i < 12; ++i)
-        move(Direction::down);
+    settings_row("Diagnostic log");
     press(Action::confirm);
     EXPECT_FALSE(app_->settings().diagnostics);
     EXPECT_FALSE(ptv::diag::enabled());
@@ -650,9 +703,7 @@ TEST_F(AppTest, PreviewStopsForSheetsAndCanBeTurnedOff)
     press(Action::back);
     for (int i = 0; i < 4; ++i)
         press(Action::page_next);
-    for (int i = 0; i < 14; ++i)
-        move(Direction::down);
-    move(Direction::up); // Live previews, above Diagnostic log.
+    settings_row("Live previews");
     press(Action::confirm);
     EXPECT_FALSE(app_->settings().live_preview);
     const auto started = host::preview_starts();

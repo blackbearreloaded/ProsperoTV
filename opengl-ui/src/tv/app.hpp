@@ -12,6 +12,7 @@
 #include "tv/library_sheet.hpp"
 #include "tv/guide_sheet.hpp"
 #include "tv/vod_screen.hpp"
+#include "tv/backup.hpp"
 #include "ui/components/dialog.hpp"
 #include "ui/components/form.hpp"
 #include "ui/components/tabs.hpp"
@@ -70,6 +71,23 @@ class App
         return std::exchange(forget_requested_, false);
     }
     void remote_notice(const char *message);
+    StorageRequest take_storage_request()
+    {
+        return std::exchange(storage_request_, {});
+    }
+    bool storage_busy() const
+    {
+        return storage_busy_;
+    }
+    bool storage_open() const
+    {
+        return storage_dialog_.is_open();
+    }
+    // A sandboxed test title can supply its own fixture mount directory.
+    void set_usb_root(std::string root)
+    {
+        usb_root_ = std::move(root);
+    }
     void set_remote_hint(std::string hint)
     {
         remote_hint_ = std::move(hint);
@@ -121,6 +139,10 @@ class App
     int tab() const
     {
         return tabs_.active();
+    }
+    std::string settings_row() const
+    {
+        return form_.row_at(form_.focus()).label;
     }
     bool searching() const
     {
@@ -175,6 +197,8 @@ class App
     void draw_hints(ui::Canvas &canvas) const;
     void draw_intro(ui::Canvas &canvas) const;
     void step(const InputFrame &input, float dt, ui::Feedback &feedback);
+    void open_storage(StorageAction action, ui::Feedback &feedback);
+    void storage_question(ui::Feedback &feedback);
 
     Shared shared_;
     BrowseScreen browse_;
@@ -186,6 +210,13 @@ class App
     ui::TabBar tabs_;
     ui::Form form_;
     ui::Dialog failure_;
+    ui::Dialog storage_dialog_;
+    std::string usb_root_ = "/mnt";
+    std::vector<std::string> usb_drives_;
+    std::size_t usb_choice_ = 0;
+    StorageAction storage_action_ = StorageAction::none;
+    StorageRequest storage_request_;
+    bool storage_busy_ = false;
     UpdateSheet update_;
     // What the app itself announces (a newer version): top right, for longer.
     ui::ToastStack announcements_;

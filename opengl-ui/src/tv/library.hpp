@@ -50,6 +50,7 @@ class Library
     Library(const Library &) = delete;
     Library &operator=(const Library &) = delete;
     bool open(const std::string &path);
+    bool close();
     bool ready() const
     {
         return db_ != nullptr;
