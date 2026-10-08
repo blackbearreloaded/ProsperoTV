@@ -1324,9 +1324,15 @@ int main()
         if (osd_ready)
         {
             iptv_player_set_controls(
-                [](void *context, int action) -> int {
-                    const int handled = static_cast<ptv::PlaybackOsd *>(context)->input(
-                        action, ptv::platform::monotonic_us());
+                [](void *context, int action) -> int
+                {
+                    auto &osd = *static_cast<ptv::PlaybackOsd *>(context);
+                    iptv_player_audio_state_t audio{};
+                    iptv_player_audio_state(&audio);
+                    osd.set_audio_state(audio);
+                    const int handled = osd.input(action, ptv::platform::monotonic_us());
+                    if (const auto selected = osd.take_audio_selection())
+                        (void)iptv_player_select_audio(*selected);
                     if (TV_DEV_SCRIPTS != 0 && action >= 0)
                         say("[TV] playback control action=%d handled=%d", action, handled);
                     return handled;

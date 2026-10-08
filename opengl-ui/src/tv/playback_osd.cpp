@@ -179,6 +179,35 @@ int PlaybackOsd::select(unsigned index)
     return 2;
 }
 
+void PlaybackOsd::set_audio_state(const iptv_player_audio_state_t &state)
+{
+    std::lock_guard lock(mutex_);
+    bool changed = audio_.count != state.count || audio_.selected_pid != state.selected_pid ||
+                   audio_.disabled != state.disabled || audio_.pending != state.pending ||
+                   audio_.result != state.result;
+    const auto count = std::min(state.count, IPTV_STREAM_MAX_AUDIO_TRACKS);
+    for (unsigned i = 0; i < count && !changed; ++i)
+        changed = audio_.tracks[i].pid != state.tracks[i].pid ||
+                  audio_.tracks[i].stream_type != state.tracks[i].stream_type ||
+                  audio_.tracks[i].audio_type != state.tracks[i].audio_type ||
+                  std::strncmp(audio_.tracks[i].language, state.tracks[i].language, 3) != 0;
+    if (changed)
+    {
+        audio_ = state;
+        audio_.count = count;
+        audio_focus_ = std::min(audio_focus_, count);
+        dirty_ = true;
+    }
+}
+
+std::optional<std::uint32_t> PlaybackOsd::take_audio_selection()
+{
+    std::lock_guard lock(mutex_);
+    const auto result = audio_selection_;
+    audio_selection_.reset();
+    return result;
+}
+
 int PlaybackOsd::input(int action, std::uint64_t now)
 {
     std::lock_guard lock(mutex_);
@@ -187,6 +216,36 @@ int PlaybackOsd::input(int action, std::uint64_t now)
         if (platform::unix_time() / 60 != guide_minute_)
             update_guide();
         return 0;
+    }
+    if (action == IPTV_INPUT_OPTIONS)
+    {
+        audio_menu_ = !audio_menu_;
+        list_ = false;
+        audio_focus_ = 0;
+        for (unsigned i = 0; i < audio_.count; ++i)
+            if (audio_.tracks[i].pid == audio_.selected_pid)
+                audio_focus_ = i + 1;
+        dirty_ = true;
+        return 1;
+    }
+    if (audio_menu_)
+    {
+        if (action == IPTV_INPUT_CIRCLE)
+            audio_menu_ = false;
+        else if (action == IPTV_INPUT_CROSS && audio_.count && !audio_.pending)
+            audio_selection_ = audio_focus_ ? audio_.tracks[audio_focus_ - 1].pid : 0;
+        else if (action == IPTV_INPUT_UP || action == IPTV_INPUT_DOWN ||
+                 action == IPTV_INPUT_LEFT || action == IPTV_INPUT_RIGHT)
+        {
+            const int delta = action == IPTV_INPUT_UP     ? -1
+                              : action == IPTV_INPUT_DOWN ? 1
+                              : action == IPTV_INPUT_LEFT ? -9
+                                                          : 9;
+            audio_focus_ = static_cast<unsigned>(std::clamp(static_cast<int>(audio_focus_) + delta,
+                                                            0, static_cast<int>(audio_.count)));
+        }
+        dirty_ = true;
+        return 1;
     }
     if (action == IPTV_INPUT_TRIANGLE || action == IPTV_INPUT_TOUCHPAD)
     {
@@ -215,12 +274,10 @@ int PlaybackOsd::input(int action, std::uint64_t now)
     {
         const bool backwards = action == IPTV_INPUT_L1 || action == IPTV_INPUT_DOWN;
         const auto current = current_position_;
-        const unsigned at =
-            current < 0
-                ? (backwards ? 0u : static_cast<unsigned>(channels_.size() - 1))
-                : static_cast<unsigned>(current);
-        return select(channels_[(at + channels_.size() + (backwards ? -1 : 1)) %
-                                channels_.size()]);
+        const unsigned at = current < 0
+                                ? (backwards ? 0u : static_cast<unsigned>(channels_.size() - 1))
+                                : static_cast<unsigned>(current);
+        return select(channels_[(at + channels_.size() + (backwards ? -1 : 1)) % channels_.size()]);
     }
     if (action == IPTV_INPUT_CROSS)
     {
@@ -258,7 +315,49 @@ void PlaybackOsd::line(std::string_view value, float x, float y, float size, flo
 
 void PlaybackOsd::paint()
 {
-    if (list_)
+    if (audio_menu_)
+    {
+        panel_.reset(80, 100, 820, 860);
+        line("Audio", 28, 54, 32, 760);
+        line(!audio_.count                            ? "No supported audio tracks advertised"
+             : audio_.pending                         ? "Changing audio..."
+             : audio_.result < 0                      ? "Could not switch. Choose another track."
+             : audio_.selected_pid && audio_.disabled ? "Audio unavailable. Choose another track."
+                                                      : "Choose a language or turn audio off",
+             28, 88, 22, 760);
+        const unsigned begin = (audio_focus_ / 9) * 9;
+        for (unsigned row = 0; row < 9 && begin + row <= audio_.count; ++row)
+        {
+            const unsigned index = begin + row, top = 110 + row * 72;
+            if (index == audio_focus_)
+                for (unsigned y = top; y < top + 66; ++y)
+                    std::fill_n(panel_.pixels.begin() + y * panel_.width + 16, 788, 66);
+            std::string label = "Off";
+            std::uint32_t pid = 0;
+            if (index)
+            {
+                const auto &track = audio_.tracks[index - 1];
+                pid = track.pid;
+                label = "Track " + std::to_string(index);
+                if (track.language[0])
+                    label += " (" + std::string(track.language, 3) + ")";
+                const char *codec = track.stream_type == 0x81   ? "AC-3"
+                                    : track.stream_type == 0x87 ? "E-AC-3"
+                                    : track.stream_type == 3 || track.stream_type == 4
+                                        ? "MPEG audio"
+                                        : "AAC";
+                label += std::string("  ") + codec;
+                if (track.audio_type == 2)
+                    label += "  Hearing impaired";
+                if (track.audio_type == 3)
+                    label += "  Audio description";
+            }
+            line((pid == audio_.selected_pid ? "> " : "") + label, 28, top + 43, 28, 760);
+        }
+        line("Up/Down Browse · Left/Right Page", 28, 800, 22, 760);
+        line("Cross Select · Circle Close", 28, 833, 22, 760);
+    }
+    else if (list_)
     {
         panel_.reset(80, 100, 760, 860);
         line("Channels", 28, 54, 32, 700);
@@ -286,8 +385,9 @@ void PlaybackOsd::paint()
         line(title_, 30, 52, 36, 1700);
         line(now_, 30, 101, 28, 1700);
         line(next_, 30, 143, 28, 1700);
-        line(live_ ? "Up/Down Channel · Square Last · Cross List · Triangle Info · Circle Back"
-                   : "Triangle Info · Circle Back",
+        line(live_ ? "Up/Down Channel · Square Last · Cross List · Options Audio · Triangle Info · "
+                     "Circle Back"
+                   : "Options Audio · Triangle Info · Circle Back",
              30, 204, 24, 1700);
     }
     dirty_ = false;
@@ -304,7 +404,7 @@ bool PlaybackOsd::draw(void *surface, std::size_t bytes, unsigned pitch, unsigne
         started_ = true;
         banner_until_ = now + 5000000;
     }
-    if (!list_ && now >= banner_until_)
+    if (!list_ && !audio_menu_ && now >= banner_until_)
         return false;
     if (!surface)
         return true;

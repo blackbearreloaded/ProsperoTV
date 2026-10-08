@@ -153,6 +153,17 @@ TEST_F(GuideTest, PlaybackBannerUsesMappedGuideIdsAndUpdatesOnProgrammeChange)
     std::fill(video.begin(), video.end(), 100);
     ASSERT_TRUE(osd.draw(video.data(), video.size(), 1920, 1088, 1920, 1080, 8, 3));
     capture("-list.png");
+    iptv_player_audio_state_t audio{};
+    audio.count = 3;
+    audio.selected_pid = 0x111;
+    audio.tracks[0] = {0x111, 0x0f, "eng", 0};
+    audio.tracks[1] = {0x112, 0x81, "spa", 0};
+    audio.tracks[2] = {0x113, 0x87, "fra", 3};
+    osd.set_audio_state(audio);
+    EXPECT_EQ(osd.input(IPTV_INPUT_OPTIONS, 4), 1);
+    std::fill(video.begin(), video.end(), 100);
+    ASSERT_TRUE(osd.draw(video.data(), video.size(), 1920, 1088, 1920, 1080, 8, 4));
+    capture("-audio.png");
 }
 
 TEST_F(GuideTest, TimezonesGapsAndInvalidDates)

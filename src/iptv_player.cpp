@@ -96,6 +96,7 @@ __asm__(".weak ZSTD_trace_decompress_begin\n"
 #include "iptv_stream.h"
 #include "iptv_webm.h"
 #include "iptv_media.h"
+#include <mutex>
 
 #include <atomic>
 #include <cstdarg>
@@ -200,6 +201,10 @@ char gLastPlaybackError[192]{};
 std::atomic<std::uint64_t> gSleepDeadlineUsec{0};
 iptv_player_controls_t gControls = nullptr;
 void *gControlsContext = nullptr;
+std::mutex gAudioMutex;
+iptv_player_audio_state_t gAudioState{};
+bool gAudioAvailable = false;
+std::atomic<std::uint32_t> gAudioRequest{UINT32_MAX};
 
 void SetLastPlaybackError(const char *format, ...)
 {
@@ -727,6 +732,13 @@ int AdapterDisableAudio(void *context)
     return adapter && adapter->opened ? iptv_native_backend_disable_audio(&adapter->backend) : 0;
 }
 
+int AdapterSelectAudio(void *context, std::uint32_t type)
+{
+    auto *adapter = static_cast<NativeAdapter *>(context);
+    return adapter && adapter->opened ? iptv_native_backend_select_audio(&adapter->backend, type)
+                                      : -1;
+}
+
 int AdapterDiscontinuity(void *context)
 {
     auto *adapter = static_cast<NativeAdapter *>(context);
@@ -798,6 +810,7 @@ class StreamRunner
         backend.submit_video = AdapterVideo;
         backend.submit_audio = AdapterAudio;
         backend.disable_audio = AdapterDisableAudio;
+        backend.select_audio = AdapterSelectAudio;
         backend.discontinuity = AdapterDiscontinuity;
         backend.drain = AdapterDrain;
         backend.close = AdapterClose;
@@ -1118,6 +1131,12 @@ class StreamRunner
         iptv_native_telemetry_t native{};
         if (NativeTelemetry(&native))
             RecordCleanupResult(native.cleanup_result);
+        {
+            std::lock_guard lock(gAudioMutex);
+            gAudioState = {};
+            gAudioAvailable = false;
+            gAudioRequest.store(UINT32_MAX, std::memory_order_release);
+        }
         return player_cleanup_result_;
     }
 
@@ -1170,8 +1189,26 @@ class StreamRunner
 
     void ReadAheadLoop()
     {
+        int audio_result = 0;
+        {
+            std::lock_guard lock(gAudioMutex);
+            gAudioAvailable = true;
+        }
         while (!read_ahead_stop_.load(std::memory_order_acquire))
         {
+            const auto audio_request =
+                gAudioRequest.exchange(UINT32_MAX, std::memory_order_acq_rel);
+            if (audio_request != UINT32_MAX)
+                audio_result = iptv_stream_select_audio(&session_, audio_request);
+            {
+                std::lock_guard lock(gAudioMutex);
+                gAudioState.count = static_cast<std::uint32_t>(iptv_stream_audio_tracks(
+                    &session_, gAudioState.tracks, IPTV_STREAM_MAX_AUDIO_TRACKS,
+                    &gAudioState.selected_pid));
+                gAudioState.disabled = session_.telemetry.audio_disabled;
+                gAudioState.pending = gAudioRequest.load(std::memory_order_acquire) != UINT32_MAX;
+                gAudioState.result = audio_result;
+            }
             const std::uint64_t read = read_ahead_read_.load(std::memory_order_relaxed);
             const std::uint64_t write = read_ahead_write_.load(std::memory_order_acquire);
             const std::size_t available = static_cast<std::size_t>(write - read);
@@ -1200,6 +1237,13 @@ class StreamRunner
                 break;
             }
             read_ahead_read_.store(read + chunk, std::memory_order_release);
+        }
+        {
+            std::lock_guard lock(gAudioMutex);
+            gAudioAvailable = false;
+            if (gAudioState.pending)
+                gAudioState.result = IPTV_STREAM_INVALID_STATE;
+            gAudioState.pending = 0;
         }
         read_ahead_done_.store(true, std::memory_order_release);
     }
@@ -2286,6 +2330,32 @@ void iptv_player_set_controls(iptv_player_controls_t controls, void *context)
 {
     gControls = controls;
     gControlsContext = context;
+}
+
+void iptv_player_audio_state(iptv_player_audio_state_t *state)
+{
+    if (!state)
+        return;
+    std::lock_guard lock(gAudioMutex);
+    *state = gAudioState;
+}
+
+int iptv_player_select_audio(std::uint32_t pid)
+{
+    std::lock_guard lock(gAudioMutex);
+    if (!gAudioAvailable)
+    {
+        gAudioState.result = IPTV_STREAM_INVALID_STATE;
+        return IPTV_STREAM_INVALID_STATE;
+    }
+    if (pid == UINT32_MAX)
+        return IPTV_STREAM_INVALID_ARGUMENT;
+    // Validate against the demuxer's current PMT when it handles the request;
+    // the provider may have updated its tracks since this UI snapshot.
+    gAudioState.pending = 1;
+    gAudioState.result = 0;
+    gAudioRequest.store(pid, std::memory_order_release);
+    return IPTV_STREAM_OK;
 }
 
 int iptv_player_run(const char *url, const char *channel_name)

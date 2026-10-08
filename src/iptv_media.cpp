@@ -163,7 +163,8 @@ int ReadMedia(const MediaInput &input, const MediaOutput &output, std::string *e
         return 1;
     if (opened < 0 || avformat_find_stream_info(r.demux, nullptr) < 0)
         return r.cancelled() ? 1 : fail("This MP4 or Matroska video could not be read.");
-    int video = -1, audio = -1;
+    int video = -1;
+    std::vector<int> tracks;
     for (unsigned i = 0; i < r.demux->nb_streams; ++i)
     {
         const auto *p = r.demux->streams[i]->codecpar;
@@ -171,8 +172,8 @@ int ReadMedia(const MediaInput &input, const MediaOutput &output, std::string *e
             !(r.demux->streams[i]->disposition & AV_DISPOSITION_ATTACHED_PIC) &&
             (p->codec_id == AV_CODEC_ID_H264 || p->codec_id == AV_CODEC_ID_HEVC))
             video = static_cast<int>(i);
-        if (audio < 0 && p->codec_type == AVMEDIA_TYPE_AUDIO && audio_supported(p->codec_id))
-            audio = static_cast<int>(i);
+        if (p->codec_type == AVMEDIA_TYPE_AUDIO && audio_supported(p->codec_id))
+            tracks.push_back(static_cast<int>(i));
     }
     if (video < 0)
         return fail("This video needs an H.264 or HEVC video track.");
@@ -194,7 +195,8 @@ int ReadMedia(const MediaInput &input, const MediaOutput &output, std::string *e
     r.mux->flags |= AVFMT_FLAG_CUSTOM_IO | AVFMT_FLAG_AUTO_BSF;
     r.mux->max_interleave_delta = AV_TIME_BASE;
     std::vector<int> mapping(r.demux->nb_streams, -1);
-    for (const int index : {video, audio})
+    tracks.insert(tracks.begin(), video);
+    for (const int index : tracks)
     {
         if (index < 0)
             continue;
@@ -204,6 +206,18 @@ int ReadMedia(const MediaInput &input, const MediaOutput &output, std::string *e
             return fail("The video's tracks could not be prepared.");
         stream->codecpar->codec_tag = 0;
         stream->time_base = r.demux->streams[index]->time_base;
+        stream->disposition = r.demux->streams[index]->disposition;
+        if (const auto *language =
+                av_dict_get(r.demux->streams[index]->metadata, "language", nullptr, 0))
+        {
+            // MPEG-TS carries three-letter ISO 639 language codes.
+            char code[4]{};
+            if (std::strlen(language->value) >= 3)
+            {
+                std::memcpy(code, language->value, 3);
+                av_dict_set(&stream->metadata, "language", code, 0);
+            }
+        }
         mapping[index] = stream->index;
     }
     if (avformat_write_header(r.mux, nullptr) < 0)

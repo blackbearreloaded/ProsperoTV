@@ -5,6 +5,7 @@
 
 #include "tv/model.hpp"
 #include "ui/fonts.hpp"
+#include "iptv_player.h"
 #include <mutex>
 
 namespace ptv
@@ -31,6 +32,8 @@ class PlaybackOsd
     // The control thread alone calls input and reads selected_channel. Drawing
     // can happen on the presentation worker, protected by the same mutex.
     int input(int action, std::uint64_t now);
+    void set_audio_state(const iptv_player_audio_state_t &state);
+    std::optional<std::uint32_t> take_audio_selection();
     std::optional<unsigned> selected_channel() const
     {
         return selected_;
@@ -46,6 +49,10 @@ class PlaybackOsd
     Model &model_;
     std::string current_id_, title_, now_, next_;
     bool live_ = false, list_ = false, dirty_ = true, started_ = false;
+    bool audio_menu_ = false;
+    unsigned audio_focus_ = 0;
+    iptv_player_audio_state_t audio_{};
+    std::optional<std::uint32_t> audio_selection_;
     std::uint64_t banner_until_ = 0, guide_minute_ = 0;
     std::vector<unsigned> channels_;
     unsigned focus_ = 0;

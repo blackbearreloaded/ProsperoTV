@@ -136,6 +136,77 @@ TEST(Media, ConvertsHevcLengthPrefixedPacketsForTheNativeDecoder)
     ASSERT_EQ(memory.run(&error), 0) << error;
     check_transport(memory, true);
 }
+TEST(Media, PreservesBothLanguagesAndSwitchesRealAudioWithoutReopeningVideo)
+{
+    for (const auto *name : {"two-audio.mp4", "two-audio.mkv"})
+    {
+        SCOPED_TRACE(name);
+        Memory memory(name);
+        ASSERT_FALSE(memory.bytes.empty());
+        std::string error;
+        ASSERT_EQ(memory.run(&error), 0) << error;
+        struct Counts
+        {
+            unsigned opens = 0, videos = 0, audios = 0, switches = 0;
+        } counts;
+        iptv_stream_backend_t backend{};
+        backend.context = &counts;
+        backend.open = [](void *p, const iptv_stream_format_t *)
+        {
+            ++static_cast<Counts *>(p)->opens;
+            return 0;
+        };
+        backend.submit_video = [](void *p, const std::uint8_t *, std::size_t, std::uint64_t)
+        {
+            ++static_cast<Counts *>(p)->videos;
+            return 0;
+        };
+        backend.submit_audio = [](void *p, const std::uint8_t *, std::size_t, std::uint64_t)
+        {
+            ++static_cast<Counts *>(p)->audios;
+            return 0;
+        };
+        backend.select_audio = [](void *p, std::uint32_t)
+        {
+            ++static_cast<Counts *>(p)->switches;
+            return 0;
+        };
+        backend.disable_audio = [](void *) { return 0; };
+        backend.drain = [](void *) { return 0; };
+        backend.close = [](void *) {};
+        iptv_stream_session_t session{};
+        iptv_stream_init(&session);
+        ASSERT_EQ(iptv_stream_open(&session, nullptr, &backend), 0);
+        ASSERT_EQ(iptv_stream_start(&session), 0);
+        bool switched = false;
+        for (std::size_t at = 0; at < memory.transport.size(); at += 188)
+        {
+            ASSERT_EQ(iptv_stream_push(&session, memory.transport.data() + at,
+                                       std::min<std::size_t>(188, memory.transport.size() - at)),
+                      0)
+                << session.telemetry.last_error;
+            if (counts.audios >= 5 && !switched)
+            {
+                iptv_stream_audio_track_t tracks[2]{};
+                std::uint32_t selected = 0;
+                ASSERT_EQ(iptv_stream_audio_tracks(&session, tracks, 2, &selected), 2u);
+                EXPECT_STREQ(tracks[0].language, "eng");
+                EXPECT_STREQ(tracks[1].language, "spa");
+                EXPECT_EQ(selected, tracks[0].pid);
+                ASSERT_EQ(iptv_stream_select_audio(&session, tracks[1].pid), 0);
+                switched = true;
+            }
+        }
+        EXPECT_TRUE(switched);
+        EXPECT_EQ(iptv_stream_stop(&session), 0);
+        EXPECT_EQ(counts.opens, 1u);
+        EXPECT_EQ(counts.videos, 25u);
+        EXPECT_GT(counts.audios, 25u);
+        EXPECT_EQ(counts.switches, 1u);
+        EXPECT_EQ(session.telemetry.continuity_errors, 0u);
+        EXPECT_EQ(iptv_stream_cleanup(&session), 0);
+    }
+}
 TEST(Media, StopsOnCancellationOrOutputFailureAndRejectsNonMedia)
 {
     Memory cancelled("h264-aac.mp4");

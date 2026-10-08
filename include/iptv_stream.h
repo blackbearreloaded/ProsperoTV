@@ -12,7 +12,8 @@
 extern "C" {
 #endif
 
-#define IPTV_STREAM_API_VERSION UINT32_C(3)
+#define IPTV_STREAM_API_VERSION UINT32_C(4)
+#define IPTV_STREAM_MAX_AUDIO_TRACKS 32u
 #define IPTV_STREAM_TS_PACKET_BYTES 188u
 #define IPTV_STREAM_ERROR_TEXT_BYTES 96u
 #define IPTV_STREAM_DEFAULT_MAX_PES_BYTES UINT32_C(0x800000)
@@ -84,9 +85,16 @@ typedef struct iptv_stream_config {
     uint32_t max_pes_bytes;
 } iptv_stream_config_t;
 
+typedef struct iptv_stream_audio_track {
+    uint32_t pid;
+    uint32_t stream_type;
+    char language[4]; /* ISO 639 code, or empty when not advertised. */
+    uint8_t audio_type; /* ISO 639: 2 hearing impaired, 3 visual impairment commentary. */
+} iptv_stream_audio_track_t;
+
 /* The adapter owns decoder, presenter and audio resources. Video callbacks
- * receive one complete Annex-B access unit. Audio callbacks receive one ADTS
- * frame. A callback must consume or copy data before it returns. */
+ * receive one complete Annex-B access unit. Audio callbacks receive one complete
+ * frame in the selected stream type. A callback must consume or copy data before it returns. */
 typedef struct iptv_stream_backend {
     void *context;
     int (*open)(void *context, const iptv_stream_format_t *format);
@@ -99,6 +107,9 @@ typedef struct iptv_stream_backend {
     int (*drain)(void *context);
     void (*close)(void *context);
     uint32_t hardware_validated;
+    /* Optional audio-only reconfiguration; zero type turns audio off. The old
+     * audio queue must be discarded before this returns. Video stays open. */
+    int (*select_audio)(void *context, uint32_t stream_type);
 } iptv_stream_backend_t;
 
 typedef struct iptv_stream_telemetry {
@@ -156,6 +167,13 @@ int iptv_stream_start(iptv_stream_session_t *session);
 int iptv_stream_push(iptv_stream_session_t *session,
                      const void *data, size_t bytes);
 int iptv_stream_discontinuity(iptv_stream_session_t *session);
+/* Like push(), these run on the stream owner's thread, not concurrently.
+ * Returns the total available count, copying at most capacity entries. */
+size_t iptv_stream_audio_tracks(const iptv_stream_session_t *session,
+                              iptv_stream_audio_track_t *tracks, size_t capacity,
+                              uint32_t *selected_pid);
+/* Select an advertised PID, or zero for Off. Unknown PIDs leave playback intact. */
+int iptv_stream_select_audio(iptv_stream_session_t *session, uint32_t pid);
 int iptv_stream_stop(iptv_stream_session_t *session);
 int iptv_stream_cleanup(iptv_stream_session_t *session);
 

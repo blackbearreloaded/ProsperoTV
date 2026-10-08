@@ -7,6 +7,7 @@
 #include <gtest/gtest.h>
 
 #include <array>
+#include <algorithm>
 #include <cstdint>
 #include <cstring>
 #include <iterator>
@@ -177,6 +178,8 @@ struct FakeBackend
     unsigned drains = 0;
     unsigned closes = 0;
     int drain_result = 0;
+    int select_result = 0;
+    std::vector<std::uint32_t> audio_selections;
 };
 
 int FakeOpen(void *context, const iptv_stream_format_t *format)
@@ -207,6 +210,13 @@ int FakeDisableAudio(void *context)
     return 0;
 }
 
+int FakeSelectAudio(void *context, std::uint32_t type)
+{
+    auto &fake = *static_cast<FakeBackend *>(context);
+    fake.audio_selections.push_back(type);
+    return fake.select_result;
+}
+
 int FakeDiscontinuity(void *context)
 {
     ++static_cast<FakeBackend *>(context)->discontinuities;
@@ -234,6 +244,217 @@ std::vector<std::uint8_t> StreamBytes(std::uint8_t audio_type, const Packet &thi
     bytes.insert(bytes.end(), pmt.begin(), pmt.end());
     bytes.insert(bytes.end(), third.begin(), third.end());
     return bytes;
+}
+
+std::vector<std::uint8_t> TrackPmt(const std::vector<iptv_stream_audio_track_t> &tracks)
+{
+    auto section = PmtSection(0x0f);
+    section.resize(17); // Keep the PMT header and video entry.
+    for (const auto &track : tracks)
+    {
+        section.insert(section.end(),
+                       {static_cast<std::uint8_t>(track.stream_type),
+                        static_cast<std::uint8_t>(0xe0 | (track.pid >> 8)),
+                        static_cast<std::uint8_t>(track.pid), 0xf0, 6, 0x0a, 4,
+                        static_cast<std::uint8_t>(track.language[0]),
+                        static_cast<std::uint8_t>(track.language[1]),
+                        static_cast<std::uint8_t>(track.language[2]), track.audio_type});
+    }
+    const auto length = section.size() + 1; // CRC plus bytes following section_length.
+    section[1] = static_cast<std::uint8_t>(0xb0 | (length >> 8));
+    section[2] = static_cast<std::uint8_t>(length);
+    AppendCrc(&section);
+    return section;
+}
+
+class AudioSelectionTest : public testing::Test
+{
+  protected:
+    FakeBackend fake;
+    iptv_stream_session_t session{};
+    std::uint8_t pmt_counter = 0;
+    void SetUp() override
+    {
+        iptv_stream_backend_t backend{};
+        backend.context = &fake;
+        backend.open = FakeOpen;
+        backend.submit_video = FakeVideo;
+        backend.submit_audio = FakeAudio;
+        backend.disable_audio = FakeDisableAudio;
+        backend.select_audio = FakeSelectAudio;
+        backend.drain = FakeDrain;
+        backend.close = FakeClose;
+        iptv_stream_init(&session);
+        ASSERT_EQ(iptv_stream_open(&session, nullptr, &backend), IPTV_STREAM_OK);
+        ASSERT_EQ(iptv_stream_start(&session), IPTV_STREAM_OK);
+    }
+    void TearDown() override
+    {
+        (void)iptv_stream_cleanup(&session);
+    }
+    int pmt(const std::vector<iptv_stream_audio_track_t> &tracks, bool start = false)
+    {
+        std::vector<std::uint8_t> bytes;
+        if (start)
+            AppendPacket(&bytes, PsiPacket(0, PatSection()));
+        const auto section = TrackPmt(tracks);
+        for (std::size_t at = 0; at < section.size();)
+        {
+            Packet packet;
+            packet.fill(0xff);
+            packet[0] = 0x47;
+            packet[1] = at ? 0x01 : 0x41;
+            packet[2] = 0;
+            packet[3] = 0x10 | (pmt_counter++ & 0x0f);
+            const std::size_t offset = at ? 4 : 5;
+            if (!at)
+                packet[4] = 0;
+            const auto count = std::min(section.size() - at, packet.size() - offset);
+            std::memcpy(packet.data() + offset, section.data() + at, count);
+            AppendPacket(&bytes, packet);
+            at += count;
+        }
+        if (start)
+            AppendPacket(&bytes, H264Packet(0, true));
+        return iptv_stream_push(&session, bytes.data(), bytes.size());
+    }
+    int audio(std::uint32_t pid, unsigned counter)
+    {
+        auto packet = UnsupportedAacPacket();
+        packet[1] = static_cast<std::uint8_t>(0x40 | (pid >> 8));
+        packet[2] = static_cast<std::uint8_t>(pid);
+        packet[3] = 0x10 | (counter & 0x0f);
+        return iptv_stream_push(&session, packet.data(), packet.size());
+    }
+};
+
+TEST_F(AudioSelectionTest, ChangesOnlyAudioAndRemembersSelectionAcrossProviderReordering)
+{
+    ASSERT_EQ(pmt({{0x111, 0x0f, "ENG", 0}, {0x112, 0x0f, "spa", 3}}, true), 0);
+    iptv_stream_audio_track_t tracks[2]{};
+    std::uint32_t selected = 0;
+    EXPECT_EQ(iptv_stream_audio_tracks(&session, tracks, 2, &selected), 2u);
+    EXPECT_STREQ(tracks[0].language, "eng");
+    EXPECT_STREQ(tracks[1].language, "spa");
+    EXPECT_EQ(tracks[1].audio_type, 3);
+    EXPECT_EQ(selected, 0x111u);
+    ASSERT_EQ(audio(0x111, 0), 0);
+    ASSERT_EQ(iptv_stream_select_audio(&session, 0x112), 0);
+    ASSERT_EQ(audio(0x111, 1), 0); // The old language is no longer delivered.
+    ASSERT_EQ(audio(0x112, 9), 0);
+    EXPECT_EQ(fake.audios, 2u);
+    ASSERT_EQ(pmt({{0x112, 0x0f, "spa", 3}, {0x111, 0x0f, "eng", 0}}), 0);
+    EXPECT_EQ(session.telemetry.format.audio_pid, 0x112u);
+    EXPECT_EQ(fake.audio_selections.size(), 1u);
+    ASSERT_EQ(iptv_stream_select_audio(&session, 0x111), 0);
+    ASSERT_EQ(audio(0x111, 8), 0); // Counters advanced while the PID was unselected.
+    EXPECT_EQ(session.telemetry.continuity_errors, 0u);
+    EXPECT_EQ(fake.audios, 3u);
+    ASSERT_EQ(iptv_stream_select_audio(&session, 0), 0);
+    ASSERT_EQ(audio(0x111, 9), 0);
+    ASSERT_EQ(pmt({{0x112, 0x0f, "spa", 0}}), 0);
+    EXPECT_EQ(session.telemetry.format.audio_pid, 0u);
+    EXPECT_EQ(fake.audios, 3u);
+    EXPECT_EQ(fake.audio_selections, (std::vector<std::uint32_t>{0x0f, 0x0f, 0}));
+    EXPECT_EQ(fake.opens, 1u);
+    EXPECT_EQ(fake.closes, 0u);
+    EXPECT_EQ(fake.videos, 1u);
+}
+
+TEST_F(AudioSelectionTest, RemovedLanguageFallsBackAndFailedDecoderCanBeRetried)
+{
+    ASSERT_EQ(pmt({{0x111, 0x0f, "eng", 0}, {0x112, 0x0f, "spa", 0}}, true), 0);
+    ASSERT_EQ(iptv_stream_select_audio(&session, 0x112), 0);
+    ASSERT_EQ(pmt({{0x113, 0x0f, "fra", 0}}), 0);
+    EXPECT_EQ(session.telemetry.format.audio_pid, 0x113u);
+    EXPECT_EQ(iptv_stream_select_audio(&session, 0x444), IPTV_STREAM_INVALID_ARGUMENT);
+    EXPECT_EQ(session.telemetry.format.audio_pid, 0x113u);
+    ASSERT_EQ(iptv_stream_select_audio(&session, 0), 0);
+    fake.select_result = -1;
+    EXPECT_EQ(iptv_stream_select_audio(&session, 0x113), IPTV_STREAM_NATIVE_ERROR);
+    EXPECT_EQ(session.telemetry.state, IPTV_STREAM_STATE_PLAYING);
+    EXPECT_EQ(session.telemetry.audio_disabled, 1u);
+    EXPECT_NE(std::strstr(session.telemetry.audio_warning, "choose another track"), nullptr);
+    fake.select_result = 0;
+    EXPECT_EQ(iptv_stream_select_audio(&session, 0x113), 0);
+    EXPECT_EQ(session.telemetry.audio_disabled, 0u);
+    EXPECT_EQ(session.telemetry.audio_warning[0], '\0');
+    ASSERT_EQ(audio(0x113, 0), 0);
+    EXPECT_EQ(fake.audios, 1u);
+    EXPECT_EQ(fake.opens, 1u);
+}
+
+TEST_F(AudioSelectionTest, OffBeforeDiscoveryStaysOffAndTrackCopiesAreBounded)
+{
+    ASSERT_EQ(iptv_stream_select_audio(&session, 0), 0);
+    std::vector<iptv_stream_audio_track_t> tracks;
+    for (unsigned i = 0; i < 40; ++i)
+        tracks.push_back({0x111 + i, 0x0f, "eng", 0});
+    ASSERT_EQ(pmt(tracks, true), 0);
+    EXPECT_EQ(session.telemetry.format.audio_pid, 0u);
+    struct
+    {
+        iptv_stream_audio_track_t track{};
+        std::uint32_t guard = 123456;
+    } copy;
+    EXPECT_EQ(iptv_stream_audio_tracks(&session, &copy.track, 1, nullptr),
+              IPTV_STREAM_MAX_AUDIO_TRACKS);
+    EXPECT_EQ(copy.guard, 123456u);
+    EXPECT_EQ(copy.track.pid, 0x111u);
+    EXPECT_EQ(iptv_stream_select_audio(&session, 0x111 + 32), IPTV_STREAM_INVALID_ARGUMENT);
+    EXPECT_EQ(iptv_stream_select_audio(&session, 0x111 + 31), 0);
+    EXPECT_EQ(session.telemetry.format.audio_pid, 0x111u + 31);
+}
+
+TEST_F(AudioSelectionTest, RejectsDuplicateAudioPidsWithoutChangingDecoder)
+{
+    ASSERT_EQ(pmt({{0x111, 0x0f, "eng", 0}}, true), 0);
+    EXPECT_EQ(pmt({{0x112, 0x0f, "eng", 0}, {0x112, 0x0f, "spa", 0}}), IPTV_STREAM_MALFORMED_TS);
+    EXPECT_TRUE(fake.audio_selections.empty());
+}
+
+TEST_F(AudioSelectionTest, AlignsNewAudioWithVideoOnEitherSideOfTransportClockWrap)
+{
+    const auto stamped = [](Packet packet, std::uint64_t pts)
+    {
+        const auto length = static_cast<unsigned>(packet[8]) * 256u + packet[9];
+        std::memmove(packet.data() + 18, packet.data() + 13, length - 3);
+        packet[8] = static_cast<std::uint8_t>((length + 5) >> 8);
+        packet[9] = static_cast<std::uint8_t>(length + 5);
+        packet[11] = 0x80;
+        packet[12] = 5;
+        packet[13] = 0x21 | static_cast<std::uint8_t>((pts >> 29) & 0x0e);
+        packet[14] = static_cast<std::uint8_t>(pts >> 22);
+        packet[15] = 1 | static_cast<std::uint8_t>((pts >> 14) & 0xfe);
+        packet[16] = static_cast<std::uint8_t>(pts >> 7);
+        packet[17] = 1 | static_cast<std::uint8_t>((pts << 1) & 0xfe);
+        return packet;
+    };
+    const std::uint64_t wrap = UINT64_C(1) << 33;
+    ASSERT_EQ(pmt({{0x111, 0x0f, "eng", 0}, {0x112, 0x0f, "spa", 0}}, true), 0);
+    for (const auto &packet :
+         {stamped(H264Packet(1, false), wrap - 90000), stamped(H264Packet(2, false), 90000)})
+        ASSERT_EQ(iptv_stream_push(&session, packet.data(), packet.size()), 0);
+    ASSERT_EQ(iptv_stream_select_audio(&session, 0x112), 0);
+    auto packet = stamped(UnsupportedAacPacket(), 90000);
+    packet[2] = 0x12;
+    ASSERT_EQ(iptv_stream_push(&session, packet.data(), packet.size()), 0);
+    const auto usec = [](std::uint64_t ticks)
+    { return (ticks / 90) * 1000 + (ticks % 90) * 1000 / 90; };
+    EXPECT_EQ(session.telemetry.last_audio_pts_us, usec(wrap + 90000));
+    ASSERT_EQ(iptv_stream_select_audio(&session, 0x111), 0);
+    packet = stamped(UnsupportedAacPacket(), wrap - 45000);
+    ASSERT_EQ(iptv_stream_push(&session, packet.data(), packet.size()), 0);
+    EXPECT_EQ(session.telemetry.last_audio_pts_us, usec(wrap - 45000));
+}
+
+TEST_F(AudioSelectionTest, RejectsMalformedLanguageDescriptors)
+{
+    ASSERT_EQ(pmt({{0x111, 0x0f, "eng", 0}}, true), 0);
+    const auto packet =
+        PsiPacket(0x100, PmtSection(0x0f, 0x112, 0x1b, {0x0a, 3, 'e', 'n', 'g'}), pmt_counter++);
+    EXPECT_EQ(iptv_stream_push(&session, packet.data(), packet.size()), IPTV_STREAM_MALFORMED_TS);
+    EXPECT_TRUE(fake.audio_selections.empty());
 }
 
 TEST(IptvStreamTest, RoutesAacMainToAudioBackend)

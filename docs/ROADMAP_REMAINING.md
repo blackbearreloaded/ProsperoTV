@@ -18,7 +18,7 @@ and relevant checks work.
 | Zapping | Next, previous and previously watched channel during playback | Implemented; 140 UI sanitizer tests and PS5 build pass; console case pending |
 | Playback channel list | Select a channel from a list over the playing video | Implemented; host input/render checks and PS5 build pass; console case pending |
 | Channel banner | Brief channel/guide banner on tune and on request | Implemented; mapped guide, timing and rendered image checks pass; console case pending |
-| Audio/subtitles | Select available language tracks and render subtitles | Pending |
+| Audio/subtitles | Select available language tracks and render subtitles | In progress: embedded audio selection implemented and host-tested; subtitles and native acceptance pending |
 | Sleep timer | Stop playback at a selected deadline | Implemented; 134 UI sanitizer tests and PS5 build pass; console case pending |
 | Live pause/rewind | Pause and replay several minutes of the current live channel | Pending |
 | Deinterlacing | Preserve field-rate motion on interlaced broadcast video | Pending |
@@ -239,3 +239,38 @@ only the `hide_failed` settings label; the case validator checks all six receipt
 and teardown. The phone's Favorite command has a different meaning from the
 controller's Square button, so physical last-channel recall, visual overlay
 capture and compositor-cost measurements remain unverified.
+
+## Audio selection
+
+Options during playback opens Audio. Up/Down selects a track, Left/Right changes
+page, Cross applies it, and Circle or Options closes the panel. The same controls
+work for live television, movies and catch-up. Off mutes the selected stream.
+The panel shows provider ISO 639 language codes, codec and accessibility labels;
+an absent language remains a numbered track. Selection lasts for this playback
+session. The channel list and live zapping are suspended while the panel is open.
+
+The transport reader retains up to 32 supported audio PIDs, preserves selection
+when a recurring PMT reorders tracks, and falls back when a provider removes the
+selected PID. Off remains Off through those updates. MP4 and Matroska remuxing
+preserves all supported audio tracks and their language metadata. The existing
+AAC, MPEG audio, AC-3 and E-AC-3 codec limits still apply. Separately downloaded
+HLS audio renditions and subtitles remain to be implemented.
+
+The demux worker applies requests between chunks and publishes a synchronized
+snapshot to the controls. The native backend discards and joins the old audio
+worker, opens the selected audio decoder and keeps the video decoder and
+presentation alive. New audio waits for the displayed timestamp; a bounded
+fallback handles broken timestamps. Changing audio cannot hold video behind the
+ordinary audio buffering gate. Decoder failures are reported in the panel and a
+different track can be selected. Native switch latency and synchronization still
+require measurement on hardware.
+
+Validation: 79 core tests, 42 tooling/remote checks, four MP4/Matroska tests and
+142 UI tests pass. The parser tests cover PMT reordering/removal, Off, retries,
+bounded track copies, malformed descriptors, continuity counters and transport
+clock wrap. Real generated two-language MP4 and Matroska fixtures switch audio
+while retaining one video backend. The PS5 cross-build and native buffering
+state check pass. The rendered panel was inspected at
+`results/roadmap/playback-audio.png`. No console installation is claimed for
+these changes; the last recorded installed test build remains 72c5141.
+
