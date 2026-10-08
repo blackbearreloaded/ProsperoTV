@@ -31,8 +31,9 @@ void sceLibcMspaceFree(void *mspace, void *address);
 int sceLibcMspacePosixMemalign(void *mspace, void **address, size_t alignment, size_t size);
 size_t sceLibcMspaceMallocUsableSize(const void *address);
 
-/* Fixed, process-lifetime heap: do not unmap underneath late C++ destructors. */
-#define HUI_HEAP_SIZE (192u * 1024u * 1024u)
+/* Catalogs and multilingual MP4 sample indexes share this bounded heap.
+ * Keep it for the process lifetime; late C++ destructors still use it. */
+#define HUI_HEAP_SIZE (384u * 1024u * 1024u)
 
 static atomic_int hui_heap_state;
 static void *hui_heap_base;
