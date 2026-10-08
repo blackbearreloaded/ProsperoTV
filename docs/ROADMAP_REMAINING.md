@@ -224,6 +224,18 @@ criteria.
 The first playback case installed and verified this candidate. The fixture server
 started late after a host process-launch error; the script then left focus above
 the channel grid. Pairing and a subsequent remote-selected channel worked, but
-the script's report had already been collected. Native next/previous/last,
-list selection, display capture and compositor cost remain unverified. The next
-case must verify fixture health before launch and use a timed remote sequence.
+the script's report had already been collected. The later case below verifies
+fixture health before launch and uses a timed remote sequence.
+
+- 2026-10-08 | PR13 | 2162453 | .30/PPSA88265 | pass: next/previous, Up/Down, list selection/close and teardown | results/roadmap/console-13 | physical last-channel and overlay checks
+
+All 141 UI sanitizer tests and the fresh PS5 build pass. The console case paired
+through the displayed code and exercised six native playback sessions, switching
+Alpha/Beta through next, previous, Up/Down and the playback list. Every session
+presented video, decoded audio and completed cleanup. Closing the list retained
+playback; the next Back returned to browsing. Installed hashes matched, the title
+closed and all development services remained healthy. The generic runner flagged
+only the `hide_failed` settings label; the case validator checks all six receipts
+and teardown. The phone's Favorite command has a different meaning from the
+controller's Square button, so physical last-channel recall, visual overlay
+capture and compositor-cost measurements remain unverified.
