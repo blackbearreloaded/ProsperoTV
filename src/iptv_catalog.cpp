@@ -324,7 +324,7 @@ struct Record
     std::uint32_t at[kCoreFieldCount];
     std::uint16_t bytes[kCoreFieldCount];
     std::uint8_t playback;
-    std::uint8_t reserved;
+    std::uint8_t adult;
     std::uint32_t source_line;
     std::uint32_t urls;   // its first other address, or kNone
     std::uint32_t groups; // its first other category, or kNone
@@ -608,6 +608,7 @@ ChannelView Catalog::operator[](std::size_t index) const
         view.catchup_days = archive->second[2];
         view.portal_command = archive->second[3];
     }
+    view.adult = record.adult != 0;
     view.source_line = record.source_line;
     view.playback_status = static_cast<PlaybackStatus>(record.playback);
     if (view.playback_status != PlaybackStatus::unknown)
@@ -711,6 +712,7 @@ bool Catalog::Add(const ChannelView &channel)
             has_archive = has_archive || !texts[field].empty();
         }
     }
+    record.adult = channel.adult;
     record.source_line = channel.source_line;
     record.urls = kNone;
     record.groups = kNone;
@@ -766,6 +768,12 @@ bool Catalog::Set(std::size_t index, Field field, std::string_view value)
     record.at[at] = place;
     record.bytes[at] = static_cast<std::uint16_t>(value.size());
     return true;
+}
+
+void Catalog::SetAdult(std::size_t index, bool adult)
+{
+    if (index < size())
+        storage_->At(index).adult = adult;
 }
 
 void Catalog::SetPlayback(std::size_t index, PlaybackStatus status, int result,
@@ -910,9 +918,9 @@ ChannelView::ChannelView(const Channel &channel)
       tvg_language(channel.tvg_language), http_user_agent(channel.http_user_agent),
       http_referrer(channel.http_referrer), catchup(channel.catchup),
       catchup_source(channel.catchup_source), catchup_days(channel.catchup_days),
-      portal_command(channel.portal_command), source_line(channel.source_line),
-      playback_status(channel.playback_status), playback_result(channel.playback_result),
-      playback_checked_unix(channel.playback_checked_unix)
+      portal_command(channel.portal_command), adult(channel.adult),
+      source_line(channel.source_line), playback_status(channel.playback_status),
+      playback_result(channel.playback_result), playback_checked_unix(channel.playback_checked_unix)
 {
 }
 
@@ -937,6 +945,7 @@ Channel ChannelView::Copy() const
     channel.catchup_source = catchup_source;
     channel.catchup_days = catchup_days;
     channel.portal_command = portal_command;
+    channel.adult = adult;
     channel.source_line = source_line;
     channel.playback_status = playback_status;
     channel.playback_result = playback_result;
@@ -961,6 +970,7 @@ struct EntryMetadata
     std::string http_user_agent;
     std::string http_referrer;
     std::string catchup, catchup_source, catchup_days, guide_urls;
+    bool adult = false;
 };
 
 struct PendingEntry
@@ -1025,6 +1035,8 @@ void SetAttribute(std::string_view key, std::string &&value, EntryMetadata *meta
         metadata->catchup_days = std::move(value);
     else if (key == "url-tvg" || key == "x-tvg-url" || key == "tvg-url")
         metadata->guide_urls = std::move(value);
+    if (key == "is-adult" || key == "is_adult" || key == "adult")
+        metadata->adult = metadata->adult || value == "1" || value == "true";
     if (key == "tvg-id")
     {
         metadata->tvg_id = std::move(value);
@@ -1275,6 +1287,8 @@ void MergeChannel(Catalog *catalog, std::size_t index, const EntryMetadata &meta
                   std::string_view canonical_url, const EffectiveLimits &limits)
 {
     const ChannelView existing = (*catalog)[index];
+    if (metadata.adult)
+        catalog->SetAdult(index, true);
     if (existing.url != canonical_url && !canonical_url.empty() &&
         !Contains(existing.alternate_urls, canonical_url) &&
         existing.alternate_urls.size() < limits.max_alternate_urls)
@@ -1507,6 +1521,7 @@ struct M3uParser::State
         channel.name = !metadata.title.empty()      ? std::string_view(metadata.title)
                        : !metadata.tvg_name.empty() ? std::string_view(metadata.tvg_name)
                                                     : std::string_view(canonical_url);
+        channel.adult = metadata.adult;
         channel.source_line = entry.line;
         const std::uint32_t inserted = static_cast<std::uint32_t>(catalog->size());
         if (!catalog->Add(channel))

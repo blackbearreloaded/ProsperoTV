@@ -48,13 +48,13 @@ struct Parser
     const iptv::XtreamCredentials &account;
     VodKind kind;
     iptv::Catalog &catalog;
-    std::unordered_map<std::string, std::string> categories;
+    std::unordered_map<std::string, iptv::XtreamCategory> categories;
     std::unordered_set<std::string> ids;
     std::size_t text_bytes = 0;
     bool full = false;
     bool item(JsonReader *reader, std::string_view season = {})
     {
-        std::string id, name, logo, category, extension, episode, season_number(season);
+        std::string id, name, logo, category, extension, episode, season_number(season), adult;
         if (!ReadObject(reader,
                         [&](const std::string &key, JsonReader *value)
                         {
@@ -66,6 +66,8 @@ struct Parser
                                 return value->StringOrScalar(&name);
                             if (key == "stream_icon" || key == "cover")
                                 return value->StringOrScalar(&logo, iptv::kDefaultMaxUrlBytes);
+                            if (key == "is_adult")
+                                return value->StringOrScalar(&adult, 8);
                             if (key == "category_id")
                                 return value->StringOrScalar(&category, 64);
                             if (key == "container_extension")
@@ -100,7 +102,9 @@ struct Parser
         if (iptv::CanonicalizeStreamUrl(logo, &canonical))
             item.tvg_logo = std::move(canonical);
         const auto group = categories.find(category);
-        item.group_title = group == categories.end() ? "Other" : group->second;
+        item.group_title = group == categories.end() ? "Other" : group->second.name;
+        item.adult =
+            adult == "1" || adult == "true" || (group != categories.end() && group->second.adult);
         if (kind == VodKind::episodes)
         {
             const auto season_id = std::min(999u, integer(season_number));
@@ -174,7 +178,7 @@ bool load_vod(const iptv::XtreamCredentials &account, VodKind kind, std::string_
             iptv::ParseXtreamCategories(reply, &categories) == iptv::XtreamStatus::ok)
         {
             for (const auto &category : categories)
-                parser.categories.emplace(category.id, category.name);
+                parser.categories.emplace(category.id, category);
             iptv::BuildXtreamApiUrl(
                 account, kind == VodKind::movies ? "get_vod_streams" : "get_series", &url);
             ListSplitter splitter;
@@ -265,6 +269,7 @@ void VodLibrary::select(VodKind kind, std::string series, bool force)
         key_ = key;
         iptv::StoreReport report;
         loaded_ = iptv::LoadCatalog(file(), &catalog_, {}, &report) == iptv::StoreStatus::ok &&
+                  report.catalog_version >= 5 &&
                   catalog_.source_id == iptv::XtreamSourceId(account_);
         if (!loaded_)
             catalog_.Clear();

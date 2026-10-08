@@ -58,6 +58,7 @@ struct XtreamCategory
     std::string id;
     std::string name;
     std::string parent_id{};
+    bool adult = false;
 };
 
 bool NormalizeXtreamServerUrl(std::string_view input, std::string *normalized);

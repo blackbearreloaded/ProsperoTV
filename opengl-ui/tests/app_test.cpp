@@ -535,6 +535,47 @@ TEST_F(AppTest, PairingIsASettingsModalWithAnExplicitRequest)
     EXPECT_TRUE(app_->take_forget_phones_requested());
 }
 
+TEST_F(AppTest, ParentPinMasksInputLocksRestoreAndRequiresUnlockToLeaveKidsMode)
+{
+    fs::create_directory(dir_ + "/usb0");
+    app_->set_usb_root(dir_);
+    for (int i = 0; i < 4; ++i)
+        press(Action::page_next);
+    settings_row("Set or change parent PIN");
+    press(Action::confirm);
+    ASSERT_TRUE(model_->pin_prompt());
+    press(Action::page_next); // IME must own input while the PIN is being entered.
+    EXPECT_EQ(app_->tab(), 4);
+    host::set_keyboard_text("483920");
+    idle();
+    EXPECT_EQ(host::keyboard_title(), "Confirm parent PIN");
+    host::set_keyboard_text("483920");
+    idle();
+    ASSERT_TRUE(model_->parental().enabled());
+    EXPECT_FALSE(model_->parental().unlocked());
+    settings_row("Restore from USB");
+    press(Action::confirm);
+    EXPECT_FALSE(app_->storage_open());
+    EXPECT_EQ(app_->take_storage_request().action, ptv::StorageAction::none);
+    settings_row("Unlock parental controls");
+    press(Action::confirm);
+    host::set_keyboard_text("483920");
+    idle();
+    ASSERT_TRUE(model_->parental().unlocked());
+    settings_row("Toggle kids-only mode");
+    press(Action::confirm);
+    EXPECT_TRUE(model_->parental().kids_only());
+    EXPECT_FALSE(model_->parental().unlocked());
+    press(Action::confirm);
+    EXPECT_TRUE(model_->parental().kids_only());
+    settings_row("Unlock parental controls");
+    press(Action::confirm);
+    host::cancel_keyboard();
+    idle();
+    EXPECT_FALSE(model_->pin_prompt());
+    EXPECT_FALSE(model_->parental().unlocked());
+}
+
 TEST_F(AppTest, UsbRestoreRequiresConfirmationAndCanChooseAnotherDrive)
 {
     fs::create_directory(dir_ + "/usb0");

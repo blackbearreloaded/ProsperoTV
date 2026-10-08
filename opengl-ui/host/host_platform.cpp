@@ -233,6 +233,11 @@ extern "C" void iptv_ime_poll(void)
         g_keyboard.callback(answer.c_str(), g_keyboard.user_data);
 }
 
+extern "C" bool iptv_ime_busy(void)
+{
+    return g_keyboard.pending;
+}
+
 extern "C" void iptv_ime_cancel(void)
 {
     g_keyboard.pending = false;

@@ -90,6 +90,53 @@ class VodTest : public ::testing::Test
     int number = 0;
 };
 
+TEST_F(VodTest, ParentalPolicyAppliesToProviderFlagsAndEpisodesOfTheSelectedShow)
+{
+    response(
+        "get_vod_categories",
+        R"([{"category_id":3,"category_name":"Kids","is_adult":1},{"category_id":2,"category_name":"General"}])");
+    ptv::Model model(dir);
+    ASSERT_TRUE(model.open());
+    model.vod().select(ptv::VodKind::movies);
+    ASSERT_TRUE(settle(model));
+    ASSERT_EQ(model.vod().catalog().size(), 2u);
+    EXPECT_TRUE(model.vod().catalog()[0].adult);
+    model.parental_action(ptv::Model::ParentalAction::set_pin);
+    model.poll();
+    host::set_keyboard_text("123456");
+    model.poll();
+    host::set_keyboard_text("123456");
+    model.poll();
+    EXPECT_FALSE(model.vod_allowed(0));
+    EXPECT_FALSE(model.play_vod(0));
+    EXPECT_TRUE(model.vod_allowed(1));
+    model.parental_action(ptv::Model::ParentalAction::unlock);
+    model.poll();
+    host::set_keyboard_text("123456");
+    model.poll();
+    ASSERT_TRUE(model.parental().unlocked());
+    EXPECT_TRUE(model.play_vod(0));
+    model.view.vod_series_group = "Kids";
+    model.view.vod_series_adult = true;
+    model.vod().select(ptv::VodKind::episodes, "20");
+    ASSERT_TRUE(settle(model));
+    ASSERT_EQ(model.vod().catalog().size(), 3u);
+    model.parental_action(ptv::Model::ParentalAction::lock);
+    EXPECT_FALSE(model.vod_allowed(0));
+    EXPECT_FALSE(model.play_vod(0));
+    model.parental_action(ptv::Model::ParentalAction::unlock);
+    model.poll();
+    host::set_keyboard_text("123456");
+    model.poll();
+    model.parental_action(ptv::Model::ParentalAction::kids);
+    EXPECT_FALSE(model.vod_allowed(0));
+    model.view.vod_series_adult = false;
+    EXPECT_TRUE(model.vod_allowed(0));
+    model.view.vod_series_group = "Comedy";
+    EXPECT_FALSE(model.play_vod(0));
+    model.close();
+}
+
 TEST_F(VodTest, DownloadsNestedCategoriesAndEscapesMovieAndEpisodeCredentials)
 {
     iptv::Catalog catalog;

@@ -283,6 +283,11 @@ static void start_requested(void)
     requested = false;
 }
 
+bool iptv_ime_busy(void)
+{
+    return active || requested;
+}
+
 void iptv_ime_poll(void)
 {
     if (requested && !iptv_input_pressed(IPTV_INPUT_CROSS))

@@ -19,6 +19,7 @@
 #include "tv/guide.hpp"
 #include "tv/portal.hpp"
 #include "tv/vod.hpp"
+#include "tv/parental.hpp"
 
 #include <array>
 #include <atomic>
@@ -110,6 +111,8 @@ struct ViewState
     int vod_kind = -1, vod_focus = 0;
     bool vod_all = false;
     std::string vod_category, vod_series, vod_series_name, vod_series_cover, vod_query;
+    std::string vod_series_group;
+    bool vod_series_adult = false;
 };
 
 class Model
@@ -141,9 +144,32 @@ class Model
     // Attempts startup playback once per application lifetime, after a catalog arrives.
     void resume_last(bool enabled);
 
+    enum class ParentalAction
+    {
+        set_pin,
+        unlock,
+        lock,
+        kids,
+        remove_pin
+    };
+    void parental_action(ParentalAction action);
+    const Parental &parental() const
+    {
+        return parental_;
+    }
+    bool pin_prompt() const
+    {
+        return pin_step_ != PinStep::none;
+    }
+    bool require_parent();
+    bool content_allowed(const iptv::ChannelView &channel) const;
+    bool vod_allowed(unsigned index) const;
+    int category_rule(std::string_view category, bool inherited = true) const;
+    bool set_category_rule(std::string_view category, int rule);
+
     std::span<const Facet> provider_categories() const
     {
-        return index_.provider_categories;
+        return parental_.unlocked() ? index_.provider_categories : protected_categories_;
     }
     const std::string &provider_category() const
     {
@@ -432,6 +458,23 @@ class Model
     ViewState view;
 
   private:
+    enum class PinStep
+    {
+        none,
+        create,
+        confirm,
+        unlock
+    };
+    void poll_pin();
+    void clear_pin();
+    void parental_changed();
+    static void on_pin(const char *text, void *self);
+    Parental parental_;
+    PinStep pin_step_ = PinStep::none;
+    bool pin_pending_ = false;
+    std::string first_pin_;
+    std::map<std::string, int> category_rules_;
+    std::vector<Facet> protected_categories_;
     enum class AccountStep : std::uint8_t
     {
         none,

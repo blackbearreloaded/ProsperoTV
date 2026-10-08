@@ -38,6 +38,11 @@ bool integer(std::string_view text, std::int64_t &value)
 
 int Model::remote_sources(std::string_view input, std::string &output)
 {
+    if (!parental_.unlocked() || pin_prompt())
+    {
+        output = "Unlock parental controls in Settings on the TV first.";
+        return 403;
+    }
     if (input.empty())
     {
         output = "[";

@@ -75,6 +75,22 @@ TEST(PortalAddress, AcceptsPortalPagesAndExplicitEndpointsAndNormalizesMac)
     EXPECT_FALSE(ptv::portal_mac("00:1A:79:12:AB", &result));
 }
 
+TEST_F(PortalTest, AdultFlagsAreInheritedFromGenresAndRetainedOnIndividualChannels)
+{
+    response(
+        "type=itv&action=get_genres",
+        R"({"js":[{"id":"1","title":"General","censored":1},{"id":"2","title":"HD","parent_id":"1"}]})");
+    response(
+        "type=itv&action=get_all_channels",
+        R"({"js":{"data":[{"id":12,"name":"One","cmd":"https://test.invalid/1","tv_genre_id":2},{"id":13,"name":"Two","cmd":"https://test.invalid/2","censored":"1"}]}})");
+    ptv::PortalClient client(credentials, nullptr);
+    iptv::Catalog catalog;
+    ASSERT_TRUE(client.load(&catalog, nullptr)) << client.error();
+    ASSERT_EQ(catalog.size(), 2u);
+    EXPECT_TRUE(catalog[0].adult);
+    EXPECT_TRUE(catalog[1].adult);
+}
+
 TEST_F(PortalTest, SignsInStreamsNestedCategoriesAndPersistsOpaqueCommands)
 {
     ptv::PortalClient client(credentials, nullptr);

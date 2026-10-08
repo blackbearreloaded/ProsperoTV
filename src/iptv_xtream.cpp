@@ -399,9 +399,12 @@ XtreamStatus ParseXtreamCategories(std::string_view json, std::vector<XtreamCate
         [&](JsonReader *entry)
         {
             XtreamCategory category;
+            std::string adult;
             if (!ReadObject(entry,
                             [&](const std::string &key, JsonReader *value)
                             {
+                                if (key == "is_adult")
+                                    return value->StringOrScalar(&adult, 8);
                                 if (key == "category_id")
                                     return value->StringOrScalar(&category.id, 64u);
                                 if (key == "category_name")
@@ -411,6 +414,7 @@ XtreamStatus ParseXtreamCategories(std::string_view json, std::vector<XtreamCate
                                 return value->SkipValue();
                             }))
                 return false;
+            category.adult = adult == "1" || adult == "true";
             if (!category.id.empty() && categories->size() < kMaxCategories)
                 categories->push_back(std::move(category));
             return true;
@@ -434,6 +438,7 @@ XtreamStatus ParseXtreamCategories(std::string_view json, std::vector<XtreamCate
             if (found_parent == by_id.end())
                 break;
             const auto &ancestor = originals[found_parent->second];
+            category.adult = category.adult || ancestor.adult;
             if (category.name.size() + ancestor.name.size() + 3 > kDefaultMaxFieldBytes)
                 break;
             if (!ancestor.name.empty())
@@ -449,6 +454,7 @@ struct XtreamStreamsParser::State
 {
     std::string live_prefix;
     std::unordered_map<std::string, std::string> category_names;
+    std::unordered_map<std::string, bool> category_adult;
     std::uint64_t source_id = 0;
     Catalog *catalog = nullptr;
     ParseReport local_report;
@@ -481,11 +487,13 @@ struct XtreamStreamsParser::State
         std::string extension;
         std::string direct_source;
         std::string stream_url;
-        std::string archive, archive_days;
+        std::string archive, archive_days, adult;
         JsonReader entry(element);
         if (!ReadObject(&entry,
                         [&](const std::string &key, JsonReader *value)
                         {
+                            if (key == "is_adult")
+                                return value->StringOrScalar(&adult, 8);
                             if (key == "stream_id")
                                 return value->StringOrScalar(&stream_id, 64u);
                             if (key == "tv_archive")
@@ -535,6 +543,9 @@ struct XtreamStreamsParser::State
         channel.tvg_name = name;
         channel.tvg_id = epg_id;
         channel.group_title = CategoryName(category_names, category_id);
+        const auto adult_group = category_adult.find(category_id);
+        channel.adult = adult == "1" || adult == "true" ||
+                        (adult_group != category_adult.end() && adult_group->second);
         channel.source_line = source_line;
         if (archive == "1")
         {
@@ -580,7 +591,10 @@ XtreamStreamsParser::XtreamStreamsParser(const XtreamCredentials &credentials,
     state.category_names.reserve(categories.size());
     for (const XtreamCategory &category : categories)
         if (!category.id.empty())
+        {
             state.category_names.emplace(category.id, category.name);
+            state.category_adult.emplace(category.id, category.adult);
+        }
     catalog->Clear();
     catalog->source_id = source_id;
 }
