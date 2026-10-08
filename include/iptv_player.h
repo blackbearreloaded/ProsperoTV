@@ -36,6 +36,8 @@ extern "C"
     typedef struct iptv_player_audio_state
     {
         iptv_stream_audio_track_t tracks[IPTV_STREAM_MAX_AUDIO_TRACKS];
+        char titles[IPTV_STREAM_MAX_AUDIO_TRACKS][128];
+        char languages[IPTV_STREAM_MAX_AUDIO_TRACKS][32];
         uint32_t count, selected_pid, disabled, pending;
         int32_t result;
     } iptv_player_audio_state_t;

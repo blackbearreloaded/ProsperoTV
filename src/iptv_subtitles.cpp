@@ -333,8 +333,9 @@ bool Subtitles::push(std::uint32_t id, const std::uint8_t *data, std::size_t byt
 {
     std::lock_guard lock(state_->mutex);
     auto &s = *state_;
-    if (std::none_of(s.tracks.begin(), s.tracks.end(),
-                     [&](const auto &track) { return track.info.id == id; }))
+    const auto track = std::find_if(s.tracks.begin(), s.tracks.end(),
+                                    [&](const auto &item) { return item.info.id == id; });
+    if (track == s.tracks.end())
         return true;
     if (!data || !bytes || bytes > max_packet)
     {
@@ -342,6 +343,17 @@ bool Subtitles::push(std::uint32_t id, const std::uint8_t *data, std::size_t byt
         return false;
     }
     if (pts_us < 0 || pts_us > std::numeric_limits<std::int64_t>::max() - kMaxDuration)
+        return true;
+    // HLS repeats a WebVTT cue in every segment it overlaps. Cache/decode it once,
+    // including while captions are Off, so language changes cannot double it.
+    if (track->info.codec == SubtitleCodec::webvtt &&
+        std::any_of(s.buffered.begin(), s.buffered.end(),
+                    [&](const auto &packet)
+                    {
+                        return packet.id == id && packet.pts == pts_us &&
+                               packet.duration == duration_us && packet.data.size() == bytes &&
+                               std::memcmp(packet.data.data(), data, bytes) == 0;
+                    }))
         return true;
     while (!s.buffered.empty() &&
            (s.buffered.size() >= 2048 || s.buffered_bytes + bytes > 16 * 1024 * 1024))

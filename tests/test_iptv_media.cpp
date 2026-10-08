@@ -8,6 +8,7 @@
 #include <cstring>
 #include <fstream>
 #include <iterator>
+#include <memory>
 #include <vector>
 
 namespace
@@ -20,24 +21,32 @@ struct Memory
     unsigned seeks = 0;
     iptv::Subtitles *subtitles = nullptr;
     unsigned subtitle_language = 0;
+    std::string url;
+    unsigned opened = 0, closed = 0, ranges = 0;
+    Memory *owner = nullptr;
+    std::vector<iptv::MediaAudioTrack> audio_tracks;
+    std::vector<std::int64_t> subtitle_times;
     explicit Memory(const char *name)
     {
         std::ifstream file(std::string("build/media-tests/fixtures/") + name, std::ios::binary);
         bytes.assign(std::istreambuf_iterator<char>(file), {});
+        if (std::string_view(name).ends_with("master.m3u8"))
+            url = std::string("https://fixture.test/") + name;
+    }
+    static int read(void *self, std::uint8_t *out, int cap)
+    {
+        auto &m = *static_cast<Memory *>(self);
+        const auto count =
+            std::min({m.bytes.size() - m.at, m.piece, static_cast<std::size_t>(cap)});
+        if (count)
+            std::memcpy(out, m.bytes.data() + m.at, count);
+        m.at += count;
+        return static_cast<int>(count);
     }
     int run(std::string *error)
     {
-        const iptv::MediaInput input{
-            this,
-            [](void *self, std::uint8_t *out, int cap)
-            {
-                auto &m = *static_cast<Memory *>(self);
-                const auto count =
-                    std::min({m.bytes.size() - m.at, m.piece, static_cast<std::size_t>(cap)});
-                std::memcpy(out, m.bytes.data() + m.at, count);
-                m.at += count;
-                return static_cast<int>(count);
-            },
+        iptv::MediaInput input{
+            this, read,
             [](void *self, std::int64_t offset)
             {
                 auto &m = *static_cast<Memory *>(self);
@@ -50,6 +59,48 @@ struct Memory
             [](void *self)
             { return static_cast<std::int64_t>(static_cast<Memory *>(self)->bytes.size()); },
             [](void *self) { return static_cast<Memory *>(self)->stop; }};
+        if (!url.empty())
+        {
+            input.url = url.c_str();
+            input.open_resource = [](void *self, const char *url, std::int64_t begin,
+                                     std::int64_t end, iptv::MediaInput *resource)
+            {
+                auto &m = *static_cast<Memory *>(self);
+                const std::string_view address(url), prefix("https://fixture.test/");
+                if (begin || end >= 0)
+                    ++m.ranges;
+                if (!address.starts_with(prefix) || address.find("..") != std::string_view::npos)
+                    return false;
+                auto path = std::string(address.substr(prefix.size()));
+                const bool redirect = path == "redirected-video.m3u8";
+                if (redirect)
+                    path = "hls-mpegts/video.m3u8";
+                auto child = std::make_unique<Memory>(path.c_str());
+                if (child->bytes.empty() || begin < 0 ||
+                    static_cast<std::uint64_t>(begin) > child->bytes.size())
+                    return false;
+                if (end >= 0 && static_cast<std::uint64_t>(end) < child->bytes.size())
+                    child->bytes.resize(static_cast<std::size_t>(end));
+                child->at = static_cast<std::size_t>(begin);
+                child->owner = &m;
+                child->piece = m.piece;
+                if (redirect)
+                {
+                    child->url = std::string(prefix) + path;
+                    resource->url = child->url.c_str();
+                }
+                resource->read = read;
+                resource->close = [](void *self)
+                {
+                    auto *child = static_cast<Memory *>(self);
+                    ++child->owner->closed;
+                    delete child;
+                };
+                resource->context = child.release();
+                ++m.opened;
+                return true;
+            };
+        }
         const iptv::MediaOutput output{
             this,
             [](void *self, const std::uint8_t *bytes, std::size_t count)
@@ -73,9 +124,12 @@ struct Memory
                std::int64_t pts, std::int64_t duration)
             {
                 auto &m = *static_cast<Memory *>(self);
+                m.subtitle_times.push_back(pts);
                 if (m.subtitles)
                     EXPECT_TRUE(m.subtitles->push(id, bytes, count, pts, duration));
-            }};
+            },
+            [](void *self, const std::vector<iptv::MediaAudioTrack> &tracks)
+            { static_cast<Memory *>(self)->audio_tracks = tracks; }};
         return iptv::ReadMedia(input, output, error);
     }
 };
@@ -157,13 +211,19 @@ TEST(Media, ConvertsHevcLengthPrefixedPacketsForTheNativeDecoder)
 }
 TEST(Media, PreservesBothLanguagesAndSwitchesRealAudioWithoutReopeningVideo)
 {
-    for (const auto *name : {"two-audio.mp4", "two-audio.mkv"})
+    for (const auto *name : {"two-audio.mp4", "two-audio.mkv", "hls-mpegts/master.m3u8",
+                             "hls-fmp4/master.m3u8", "hls-ranged/master.m3u8"})
     {
         SCOPED_TRACE(name);
         Memory memory(name);
         ASSERT_FALSE(memory.bytes.empty());
         std::string error;
         ASSERT_EQ(memory.run(&error), 0) << error;
+        EXPECT_EQ(memory.opened, memory.closed);
+        if (!memory.url.empty())
+            EXPECT_GE(memory.opened, 6u);
+        if (memory.url.find("hls-ranged") != memory.url.npos)
+            EXPECT_GE(memory.ranges, 6u);
         struct Counts
         {
             unsigned opens = 0, videos = 0, audios = 0, switches = 0;
@@ -228,7 +288,8 @@ TEST(Media, PreservesBothLanguagesAndSwitchesRealAudioWithoutReopeningVideo)
 }
 TEST(Media, EmbeddedSubtitlesUseTheSameTimelineAsRemuxedVideo)
 {
-    for (const auto *name : {"subtitles.mp4", "subtitles.mkv"})
+    for (const auto *name : {"subtitles.mp4", "subtitles.mkv", "hls-mpegts/subtitles-master.m3u8",
+                             "hls-fmp4/subtitles-master.m3u8", "hls-ranged/subtitles-master.m3u8"})
         for (unsigned language = 0; language < 2; ++language)
         {
             SCOPED_TRACE(name);
@@ -236,15 +297,33 @@ TEST(Media, EmbeddedSubtitlesUseTheSameTimelineAsRemuxedVideo)
             iptv::Subtitles subtitles;
             Memory memory(name);
             memory.subtitles = &subtitles;
+            memory.piece = 7; // Sniffed WebVTT headers may span HTTP reads.
             memory.subtitle_language = language;
             std::string error;
             ASSERT_FALSE(memory.bytes.empty());
             ASSERT_EQ(memory.run(&error), 0) << error;
+            EXPECT_EQ(memory.opened, memory.closed);
+            if (!memory.url.empty())
+            {
+                ASSERT_EQ(memory.audio_tracks.size(), 2u);
+                EXPECT_EQ(memory.audio_tracks[0].pid, 0x101u);
+                EXPECT_EQ(memory.audio_tracks[0].language, "en-US");
+                EXPECT_EQ(memory.audio_tracks[0].title, "English");
+                EXPECT_EQ(memory.audio_tracks[1].language, "es");
+                EXPECT_EQ(memory.audio_tracks[1].title, "Español");
+                EXPECT_EQ(memory.audio_tracks[1].audio_type, 3u);
+            }
             const auto state = subtitles.state();
             ASSERT_EQ(state.tracks.size(), 2u);
             EXPECT_EQ(state.tracks[0].language, "eng");
             EXPECT_EQ(state.tracks[1].language, "spa");
             EXPECT_EQ(state.selected, state.tracks[language].id);
+            if (!memory.url.empty())
+            {
+                EXPECT_EQ(state.tracks[0].title, "English CC");
+                EXPECT_TRUE(state.tracks[0].hearing_impaired);
+                EXPECT_TRUE(state.tracks[1].forced);
+            }
             std::uint64_t first_pts = IPTV_STREAM_PTS_UNKNOWN;
             iptv_stream_backend_t backend{};
             backend.context = &first_pts;
@@ -271,7 +350,10 @@ TEST(Media, EmbeddedSubtitlesUseTheSameTimelineAsRemuxedVideo)
             ASSERT_EQ(iptv_stream_push(&session, memory.transport.data(), memory.transport.size()),
                       0);
             ASSERT_EQ(iptv_stream_stop(&session), 0);
+            EXPECT_EQ(iptv_stream_cleanup(&session), 0);
             ASSERT_NE(first_pts, IPTV_STREAM_PTS_UNKNOWN);
+            SCOPED_TRACE("video first pts=" + std::to_string(first_pts));
+            SCOPED_TRACE(::testing::PrintToString(memory.subtitle_times));
             EXPECT_TRUE(subtitles.at(first_pts).empty());
             const auto first = subtitles.at(first_pts + 250000);
             ASSERT_EQ(first.size(), 1u);
@@ -281,7 +363,6 @@ TEST(Media, EmbeddedSubtitlesUseTheSameTimelineAsRemuxedVideo)
             ASSERT_EQ(second.size(), 1u);
             EXPECT_EQ(second[0]->text, language ? "Otra línea" : "Second line");
             EXPECT_TRUE(subtitles.at(first_pts + 1000000).empty());
-            EXPECT_EQ(iptv_stream_cleanup(&session), 0);
         }
 }
 TEST(Media, StopsOnCancellationOrOutputFailureAndRejectsNonMedia)
@@ -300,5 +381,62 @@ TEST(Media, StopsOnCancellationOrOutputFailureAndRejectsNonMedia)
     EXPECT_EQ(invalid.run(&error), -1);
     EXPECT_FALSE(error.empty());
     EXPECT_FALSE(iptv::LooksLikeMedia(invalid.bytes.data(), invalid.bytes.size()));
+}
+TEST(Media, MapsWebVttClocksAndPreservesCueTextAcrossClockWrap)
+{
+    std::string result;
+    ASSERT_TRUE(iptv::NormalizeHlsWebVtt(
+        "\xef\xbb\xbfWEBVTT\r\nX-TIMESTAMP-MAP=MPEGTS:180000,LOCAL:00:10.000\r\n\r\n"
+        "NOTE ignored --> comment\r\n\r\nidentifier\r\n00:10.250 --> 00:10.750 align:start\r\n"
+        "A --> B\r\n中文\r\n",
+        result));
+    EXPECT_NE(result.find("00:00:02.250 --> 00:00:02.750 align:start"), result.npos);
+    EXPECT_NE(result.find("A --> B\n中文\n"), result.npos);
+    EXPECT_EQ(result.find("X-TIMESTAMP-MAP"), result.npos);
+    ASSERT_TRUE(
+        iptv::NormalizeHlsWebVtt("WEBVTT\nX-TIMESTAMP-MAP=LOCAL:00:00.000,MPEGTS:8589916592\n\n"
+                                 "00:00.250 --> 00:00.750\nAfter wrap\n",
+                                 result));
+    EXPECT_NE(result.find("00:00:00.050 --> 00:00:00.550"), result.npos);
+    ASSERT_TRUE(iptv::NormalizeHlsWebVtt("WEBVTT\n\n00:00.250 --> 00:00.750\nNo map\n", result));
+    EXPECT_NE(result.find("00:00:00.250 --> 00:00:00.750"), result.npos);
+    for (const auto *invalid :
+         {"WEBVTTx\n\n", "WEBVTT\nX-TIMESTAMP-MAP=LOCAL:00:00.000,MPEGTS:8589934592\n\n",
+          "WEBVTT\nX-TIMESTAMP-MAP=LOCAL:00:00.000\n\n",
+          "WEBVTT\nX-TIMESTAMP-MAP=LOCAL:00:00.000,MPEGTS:-1\n\n",
+          "WEBVTT\n\n00:61.000 --> 00:62.000\nBad seconds\n",
+          "WEBVTT\n\n00:01.000 --> 00:00.000\nBackwards\n"})
+        EXPECT_FALSE(iptv::NormalizeHlsWebVtt(invalid, result)) << invalid;
+    EXPECT_FALSE(iptv::NormalizeHlsWebVtt(std::string(1024 * 1024 + 1, 'x'), result));
+}
+TEST(Media, HlsClosesEveryResourceOnFailureAndNeverOpensLocalPaths)
+{
+    std::string error;
+    Memory failed("hls-fmp4/master.m3u8");
+    failed.reject_output = true;
+    EXPECT_EQ(failed.run(&error), -1);
+    EXPECT_GT(failed.opened, 0u);
+    EXPECT_EQ(failed.opened, failed.closed);
+    Memory denied("hls-mpegts/master.m3u8");
+    const std::string manifest =
+        "#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=500000\nfile:///secret-name/credentials.ts\n";
+    denied.bytes.assign(manifest.begin(), manifest.end());
+    EXPECT_EQ(denied.run(&error), -1);
+    EXPECT_EQ(denied.opened, 0u);
+    EXPECT_EQ(error.find("secret-name"), error.npos);
+    EXPECT_EQ(error.find("credentials"), error.npos);
+}
+TEST(Media, HlsResolvesSegmentsAgainstTheRedirectedPlaylist)
+{
+    Memory memory("hls-mpegts/master.m3u8");
+    std::string manifest(memory.bytes.begin(), memory.bytes.end());
+    const auto at = manifest.find("video.m3u8");
+    ASSERT_NE(at, manifest.npos);
+    manifest.replace(at, 10, "https://fixture.test/redirected-video.m3u8");
+    memory.bytes.assign(manifest.begin(), manifest.end());
+    std::string error;
+    ASSERT_EQ(memory.run(&error), 0) << error;
+    EXPECT_EQ(memory.opened, memory.closed);
+    check_transport(memory, false);
 }
 } // namespace

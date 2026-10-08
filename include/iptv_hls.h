@@ -160,6 +160,13 @@ const char *iptv_hls_result_name(iptv_hls_result_t result);
 
 #ifdef __cplusplus
 }
+#include <string>
+namespace iptv
+{
+// One already-selected variant and its matching rendition groups, with resolved
+// URLs. Empty output means no external renditions and keeps the ordinary TS path.
+bool HlsVariantManifest(const iptv_hls_playlist_t &master, uint32_t index, std::string &text);
+}
 #endif
 
 #endif

@@ -46,6 +46,23 @@ std::vector<std::uint8_t> dvb(bool clear = false)
     return out;
 }
 
+TEST(Subtitles, RepeatedHlsCuesAreRenderedOnceAfterChangingLanguage)
+{
+    iptv::Subtitles subtitles;
+    subtitles.set_tracks({track(iptv::SubtitleCodec::webvtt)});
+    EXPECT_TRUE(text(subtitles, "Same cue"));
+    EXPECT_TRUE(text(subtitles, "Same cue"));
+    ASSERT_TRUE(subtitles.select(1));
+    ASSERT_EQ(subtitles.at(1250000).size(), 1u);
+    EXPECT_TRUE(text(subtitles, "Same cue"));
+    EXPECT_EQ(subtitles.at(1250000).size(), 1u);
+    EXPECT_TRUE(subtitles.select(0));
+    EXPECT_TRUE(subtitles.select(1));
+    EXPECT_EQ(subtitles.at(1250000).size(), 1u);
+    EXPECT_TRUE(text(subtitles, "Different cue"));
+    EXPECT_EQ(subtitles.at(1250000).size(), 2u);
+}
+
 TEST(Subtitles, UsesPictureTimestampsRatherThanDownloadTimeAndPreservesUnicode)
 {
     iptv::Subtitles subtitles;

@@ -187,6 +187,8 @@ void PlaybackOsd::set_audio_state(const iptv_player_audio_state_t &state)
         changed = audio_.tracks[i].pid != state.tracks[i].pid ||
                   audio_.tracks[i].stream_type != state.tracks[i].stream_type ||
                   audio_.tracks[i].audio_type != state.tracks[i].audio_type ||
+                  std::strncmp(audio_.titles[i], state.titles[i], 128) != 0 ||
+                  std::strncmp(audio_.languages[i], state.languages[i], 32) != 0 ||
                   std::strncmp(audio_.tracks[i].language, state.tracks[i].language, 3) != 0;
     if (changed)
     {
@@ -414,8 +416,13 @@ void PlaybackOsd::paint()
             {
                 const auto &track = audio_.tracks[index - 1];
                 pid = track.pid;
-                label = "Track " + std::to_string(index);
-                if (track.language[0])
+                const auto *title = audio_.titles[index - 1];
+                const auto *language = audio_.languages[index - 1];
+                label = title[0] ? std::string(title, strnlen(title, 128))
+                                 : "Track " + std::to_string(index);
+                if (language[0])
+                    label += " (" + std::string(language, strnlen(language, 32)) + ")";
+                else if (track.language[0])
                     label += " (" + std::string(track.language, 3) + ")";
                 const char *codec = track.stream_type == 0x81   ? "AC-3"
                                     : track.stream_type == 0x87 ? "E-AC-3"

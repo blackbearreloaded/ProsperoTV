@@ -44,6 +44,40 @@ TEST(IptvHlsTest, AcceptsDeclaredHighResolutionCodecLevels)
     EXPECT_EQ(playlist.variants[2].level, 153u);
 }
 
+TEST(IptvHlsTest, IsolatesSelectedVariantAndItsRenditionsForPlayback)
+{
+    auto master = ParseMaster(
+        "#EXTM3U\n"
+        "#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID=\"a\",NAME=\"English\",LANGUAGE=\"en-US\","
+        "DEFAULT=YES,AUTOSELECT=YES,URI=\"sound/a.m3u8\"\n"
+        "#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID=\"b\",NAME=\"Other quality\",URI=\"other.m3u8\"\n"
+        "#EXT-X-MEDIA:TYPE=SUBTITLES,GROUP-ID=\"s\",NAME=\"Captions\",LANGUAGE=\"zh-Hans\","
+        "FORCED=YES,CHARACTERISTICS=\"public.accessibility.describes-music-and-sound\",URI=\"s."
+        "m3u8\"\n"
+        "#EXT-X-STREAM-INF:BANDWIDTH=200000,AUDIO=\"a\",SUBTITLES=\"s\"\nfirst.m3u8\n"
+        "#EXT-X-STREAM-INF:BANDWIDTH=500000,AUDIO=\"b\"\nsecond.m3u8\n"
+        "#EXT-X-STREAM-INF:BANDWIDTH=100000\nsimple.m3u8\n");
+    std::string text;
+    ASSERT_TRUE(iptv::HlsVariantManifest(master, 0, text));
+    const auto selected = ParseMaster(text.c_str());
+    ASSERT_EQ(selected.variant_count, 1u);
+    EXPECT_STREQ(selected.variants[0].url, master.variants[0].url);
+    ASSERT_EQ(selected.rendition_count, 2u);
+    EXPECT_STREQ(selected.renditions[0].url, "http://fixture.test/sound/a.m3u8");
+    EXPECT_STREQ(selected.renditions[0].language, "en-US");
+    EXPECT_TRUE(selected.renditions[0].is_default);
+    EXPECT_TRUE(selected.renditions[1].hearing_impaired);
+    EXPECT_TRUE(selected.renditions[1].forced);
+    EXPECT_EQ(text.find("second.m3u8"), text.npos);
+    EXPECT_EQ(text.find("other.m3u8"), text.npos);
+    EXPECT_TRUE(iptv::HlsVariantManifest(master, 2, text));
+    EXPECT_TRUE(text.empty());
+    EXPECT_FALSE(iptv::HlsVariantManifest(master, 3, text));
+    std::strcpy(master.renditions[0].name, "Injected\"\n#EXT-X-MEDIA:");
+    EXPECT_FALSE(iptv::HlsVariantManifest(master, 0, text));
+    EXPECT_TRUE(text.empty());
+}
+
 TEST(IptvHlsTest, KeepsMissingAndNonStandardResolutionVariantsEligible)
 {
     const auto playlist =

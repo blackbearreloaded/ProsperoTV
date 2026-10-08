@@ -1251,3 +1251,74 @@ extern "C" const char *iptv_hls_result_name(iptv_hls_result_t result)
         return "unknown HLS result";
     }
 }
+
+bool iptv::HlsVariantManifest(const iptv_hls_playlist_t &master, uint32_t index, std::string &text)
+{
+    text.clear();
+    if (master.kind != IPTV_HLS_KIND_MASTER || master.variant_count > IPTV_HLS_MAX_VARIANTS ||
+        index >= master.variant_count || master.rendition_count > IPTV_HLS_MAX_RENDITIONS)
+        return false;
+    const auto clean = [](const auto &value)
+    {
+        for (size_t i = 0; i < sizeof(value); ++i)
+        {
+            const auto c = static_cast<unsigned char>(value[i]);
+            if (!c)
+                return true;
+            if (c < 32 || c == 127 || c == '"')
+                return false;
+        }
+        return false;
+    };
+    const auto &variant = master.variants[index];
+    if (!clean(variant.url) || !clean(variant.audio_group) || !clean(variant.subtitle_group))
+        return false;
+    std::string result = "#EXTM3U\n#EXT-X-VERSION:7\n";
+    bool external = false;
+    for (uint32_t i = 0; i < master.rendition_count; ++i)
+    {
+        const auto &r = master.renditions[i];
+        if (!clean(r.group))
+            return false;
+        const bool audio = r.kind == IPTV_HLS_RENDITION_AUDIO;
+        if ((audio && (!variant.audio_group[0] || std::strcmp(r.group, variant.audio_group))) ||
+            (!audio && (r.kind != IPTV_HLS_RENDITION_SUBTITLE || !variant.subtitle_group[0] ||
+                        std::strcmp(r.group, variant.subtitle_group))))
+            continue;
+        if (!clean(r.name) || !clean(r.language) || !clean(r.url))
+            return false;
+        external |= r.url[0] != 0;
+        result += std::string("#EXT-X-MEDIA:TYPE=") + (audio ? "AUDIO" : "SUBTITLES") +
+                  ",GROUP-ID=\"" + r.group + "\",NAME=\"" + r.name + "\"";
+        if (r.language[0])
+            result += std::string(",LANGUAGE=\"") + r.language + "\"";
+        result += r.is_default ? ",DEFAULT=YES" : ",DEFAULT=NO";
+        result += r.autoselect ? ",AUTOSELECT=YES" : ",AUTOSELECT=NO";
+        if (!audio)
+            result += r.forced ? ",FORCED=YES" : ",FORCED=NO";
+        if (r.hearing_impaired || r.visual_impaired)
+        {
+            result += ",CHARACTERISTICS=\"";
+            if (r.hearing_impaired)
+                result += "public.accessibility.describes-music-and-sound";
+            if (r.hearing_impaired && r.visual_impaired)
+                result += ',';
+            if (r.visual_impaired)
+                result += "public.accessibility.describes-video";
+            result += '"';
+        }
+        if (r.url[0])
+            result += std::string(",URI=\"") + r.url + "\"";
+        result += '\n';
+    }
+    if (!external)
+        return true;
+    result += "#EXT-X-STREAM-INF:BANDWIDTH=" + std::to_string(variant.bandwidth);
+    if (variant.audio_group[0])
+        result += std::string(",AUDIO=\"") + variant.audio_group + "\"";
+    if (variant.subtitle_group[0])
+        result += std::string(",SUBTITLES=\"") + variant.subtitle_group + "\"";
+    result += std::string("\n") + variant.url + "\n";
+    text = std::move(result);
+    return true;
+}

@@ -20,5 +20,5 @@ gtest=$(bash tools/setup-test-dependencies.sh | tail -1)
     tests/test_iptv_media.cpp tests/test_iptv_subtitles.cpp src/iptv_media.cpp src/iptv_stream.cpp src/iptv_subtitles.cpp \
     "$gtest/googletest/src/gtest-all.cc" "$gtest/googletest/src/gtest_main.cc" \
     "$ffmpeg/lib/libavformat.a" "$ffmpeg/lib/libavcodec.a" "$ffmpeg/lib/libavutil.a" \
-    -lm -o "$build/media_tests"
+    -lssl -lcrypto -lm -o "$build/media_tests"
 ASAN_OPTIONS=detect_leaks=1 UBSAN_OPTIONS=halt_on_error=1 "$build/media_tests" "$@"

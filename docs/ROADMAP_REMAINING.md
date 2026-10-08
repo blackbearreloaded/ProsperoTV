@@ -18,7 +18,7 @@ and relevant checks work.
 | Zapping | Next, previous and previously watched channel during playback | Implemented; 140 UI sanitizer tests and PS5 build pass; console case pending |
 | Playback channel list | Select a channel from a list over the playing video | Implemented; host input/render checks and PS5 build pass; console case pending |
 | Channel banner | Brief channel/guide banner on tune and on request | Implemented; mapped guide, timing and rendered image checks pass; console case pending |
-| Audio/subtitles | Select available language tracks and render subtitles | Embedded audio and container/DVB subtitles implemented with host checks; external HLS renditions and native acceptance pending |
+| Audio/subtitles | Select available language tracks and render subtitles | Embedded/HLS audio and container/DVB/WebVTT subtitles implemented with host checks; live-provider and native acceptance pending |
 | Sleep timer | Stop playback at a selected deadline | Implemented; 134 UI sanitizer tests and PS5 build pass; console case pending |
 | Live pause/rewind | Pause and replay several minutes of the current live channel | Pending |
 | Deinterlacing | Preserve field-rate motion on interlaced broadcast video | Pending |
@@ -253,8 +253,8 @@ The transport reader retains up to 32 supported audio PIDs, preserves selection
 when a recurring PMT reorders tracks, and falls back when a provider removes the
 selected PID. Off remains Off through those updates. MP4 and Matroska remuxing
 preserves all supported audio tracks and their language metadata. The existing
-AAC, MPEG audio, AC-3 and E-AC-3 codec limits still apply. Separately downloaded
-HLS audio and subtitle renditions remain to be implemented.
+AAC, MPEG audio, AC-3 and E-AC-3 codec limits still apply. Separate HLS audio and
+WebVTT renditions use the same controls, as described below.
 
 The demux worker applies requests between chunks and publishes a synchronized
 snapshot to the controls. The native backend discards and joins the old audio
@@ -317,5 +317,34 @@ and up to 32 advertised renditions, including resolved HTTP(S) URLs, BCP 47
 languages, default/forced flags and accessibility labels. It checks duplicate
 names/defaults, missing groups, required subtitle URLs and bounded labels against
 [RFC 8216](https://www.rfc-editor.org/rfc/rfc8216.html#section-4.3.4.1).
-The 86-test core sanitizer suite, 42 tooling checks and PS5 build pass. This is discovery only: rendition
-downloading, timestamp alignment and playback selection are still pending.
+The discovery change passed the 86-test core sanitizer suite, 42 tooling checks
+and PS5 build.
+
+The player now gives FFmpeg one selected quality and only its matching audio and
+subtitle groups. Each nested request uses the application's HTTP client,
+origin-scoped credentials, redirect handling and validated byte ranges. The
+reader bounds playlist and WebVTT resources, rejects local-file access and keeps
+provider URLs out of FFmpeg diagnostics. HLS without external renditions retains
+the existing transport-stream path and its stale-segment recovery.
+
+Separate audio is remuxed alongside the video, retaining all supported languages
+so the existing demux worker can switch at the displayed picture after network
+read-ahead. This downloads the advertised audio tracks; only the selected track
+is decoded. Provider names and BCP 47 language tags remain visible in the panel.
+Fragmented MP4 initialization segments and byte ranges are handled by the same
+reader without transcoding.
+
+WebVTT resources apply their `X-TIMESTAMP-MAP` before demux, align the wrapping
+transport clock with the video, and suppress identical cues repeated in adjacent
+segments. Subtitles are enabled before stream probing so initial dialogue is
+retained even while the panel is Off. A small, version-checked patch fixes the
+pinned FFmpeg reader's subtitle context and AVIO buffer cleanup; generated
+multi-segment fixtures cover the lifetime under LeakSanitizer.
+
+Validation: 87 core, 17 media/subtitle and 144 UI sanitizer tests, plus 42 tooling
+and remote checks. The generated HLS fixtures cover transport stream, fragmented
+MP4, byte ranges, redirected playlists, two audio/subtitle languages, mapped
+timestamps, repeated captions and resource cleanup on failure. The PS5 executable
+cross-build also passes. Live-provider discontinuities,
+native synchronization, selection latency and resource cost remain acceptance
+work. These changes have not been installed on a console.
