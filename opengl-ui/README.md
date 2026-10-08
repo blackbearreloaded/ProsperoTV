@@ -11,11 +11,11 @@ the player are the same sources as before, used from the folder above.
 It asks for filesystem access the way ProsperoEden does, keeps its files in
 `/data/prosperotv`, and makes every request with libcurl.
 
-**This is the released app.** A release is this folder built at the tagged
-commit, run on consoles and attached to the GitHub Release. The repository's
-root `Makefile` still builds the interface of 01.000.015 and earlier, which
-shares those sources and keeps their tests; nothing in this folder is built by
-it or by the workflow.
+**This is the released app.** The workflow's `app` job tests and builds this
+folder on every push and pull request, and on a version tag its ZIP becomes
+the GitHub Release. The repository's root `Makefile` still builds the
+interface of 01.000.015 and earlier, which shares those sources and keeps
+their tests; it builds nothing of this folder.
 
 The kit is a dependency fetched when something is built; none of its code is
 kept in this repository. It compiles against two source trees:

@@ -5,9 +5,10 @@ lint, host tests, the runtime reproduction, and the packaging steps. The result 
 14 days under a name that says which pull request and which commit it came from.
 
 The workflow builds the app at the root of the repository (`src/`, through `make ffpfsc`).
-The released interface is built from `opengl-ui/` by the maintainer and is **not** what
-this artifact contains: use the artifact to check that a pull request builds and packages,
-and build `opengl-ui/` yourself to try the released interface on a console.
+The released interface is built from `opengl-ui/` by the same run's `app` job and is
+**not** what this artifact contains: that one is uploaded as
+`ProsperoTV-app-PR<number>-<commit>` and holds `PPSA99003.zip`, the folder to try on a
+console.
 
 ## What a pull request produces
 

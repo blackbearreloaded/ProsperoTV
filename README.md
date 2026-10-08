@@ -74,7 +74,7 @@
 | Shell title | `ProsperoTV` |
 | Title ID | `PPSA99003` |
 | Shell category | Media |
-| Current version | `01.000.020` |
+| Current version | `01.000.030` |
 | Release-version source | [`sce_sys/param.json`](sce_sys/param.json) |
 | Built-in catalog | `https://iptv-org.github.io/iptv/index.m3u` |
 | Writable data | `/data/prosperotv`; the title's own `/download0` when filesystem access is not available |
@@ -315,9 +315,11 @@ decoder telemetry, and teardown checks.
 GitHub Actions runs linting, the host tests, and deterministic runtime
 reproduction on every push, and checks that a version tag matches
 `contentVersion`. A pull request's build is uploaded under its number and
-commit: see [Pull-request builds](docs/PULL_REQUEST_BUILDS.md). It does not publish: a release is the app built from
-`opengl-ui/` at the tagged commit, run on consoles, and attached with its
-`SHA256SUMS`.
+commit: see [Pull-request builds](docs/PULL_REQUEST_BUILDS.md). The same run
+builds the released app from `opengl-ui/` on a clean machine, fetching every
+dependency at its pinned version. A version tag also publishes: the ZIP that
+run built is attached to a GitHub Release with its `SHA256SUMS` and the notes
+in `docs/releases/<version>.md`. No release is built anywhere else.
 
 ## Source layout
 
@@ -349,11 +351,12 @@ PS5 `NN.NNN.NNN` format without a `v` prefix.
 
 ```bash
 # After updating param.json and passing the release gates:
-git tag 01.000.020
-git push origin main 01.000.020
+git tag 01.000.030
+git push origin main 01.000.030
 ```
 
-The workflow rejects a mismatched tag. See
+The workflow rejects a mismatched tag, builds the app, and publishes the
+release with the notes in `docs/releases/01.000.030.md`. See
 [Configuration](docs/CONFIGURATION.md) for the coordinated metadata fields.
 
 ## Stream compatibility and limitations

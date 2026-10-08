@@ -1,8 +1,11 @@
 # ps5-native-app-boilerplate - ProsperoTV lint, test, build, and release validation.
 #
-# A version tag is checked against param.json and built like any other commit.
-# It does not publish anything: a release is the app built from opengl-ui/ at
-# the tagged commit, tested on consoles and attached by the maintainer.
+# Two builds on every push and pull request: the shared code with the earlier
+# interface (job "build": lint, tests, the clean-room runtime), and the released
+# app from opengl-ui/ (job "app"). A version tag, which must equal param.json's
+# contentVersion, also publishes: job "release" attaches the ZIP job "app"
+# built, with its checksum, to a GitHub Release. Nothing built anywhere else is
+# ever attached.
 # Copyright (C) 2026 BlackBearReloaded
 # SPDX-License-Identifier: GPL-3.0-or-later
 
@@ -131,3 +134,166 @@ jobs:
           if-no-files-found: error
           compression-level: 0
           retention-days: 14
+
+  app:
+    name: Build the app (opengl-ui)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    outputs:
+      artifact: ${{ steps.label.outputs.artifact }}
+      title_id: ${{ steps.identity.outputs.title_id }}
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.13"
+
+      - name: Install the toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes clang-18 lld-18 llvm-18 ninja-build ccache libsqlite3-dev make pkg-config curl tar unzip wget xz-utils
+
+      - name: Read app identity and version
+        id: identity
+        shell: bash
+        run: |
+          metadata=$(python3 -c 'import json; p=json.load(open("sce_sys/param.json")); print(p["titleId"], p["contentVersion"])')
+          read -r title_id content_version <<< "$metadata"
+          [[ $title_id =~ ^PPSA[0-9]{5}$ ]] || exit 2
+          [[ $content_version =~ ^[0-9]{2}\.[0-9]{3}\.[0-9]{3}$ ]] || exit 2
+          if [[ $GITHUB_REF_TYPE == tag && $GITHUB_REF_NAME != "$content_version" ]]; then
+            echo "Release tag must exactly match param.json contentVersion: $content_version" >&2
+            exit 2
+          fi
+          echo "TITLE_ID=$title_id" >> "$GITHUB_ENV"
+          echo "CONTENT_VERSION=$content_version" >> "$GITHUB_ENV"
+          echo "title_id=$title_id" >> "$GITHUB_OUTPUT"
+
+      - name: Name the app's artifact
+        id: label
+        shell: bash
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          if [[ $GITHUB_EVENT_NAME == pull_request ]]; then
+            echo "artifact=${GITHUB_REPOSITORY##*/}-app-PR$PR_NUMBER-${PR_HEAD:0:7}" >> "$GITHUB_OUTPUT"
+          else
+            echo "artifact=${GITHUB_REPOSITORY##*/}-app-$CONTENT_VERSION-${GITHUB_SHA:0:7}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Test the interface and its logic
+        run: HOST_CXX=clang++-18 bash opengl-ui/tools/run-tests.sh
+
+      # Everything the app is built from is fetched here at a pinned version and
+      # checked: the UI kit, the OpenGL SDK, the payload SDK, the ports, the
+      # audio decoders, the fonts and the helper sent to the payload loader.
+      - name: Assemble the build tree
+        run: HOST_CXX=clang++-18 bash opengl-ui/ps5/assemble.sh "$RUNNER_TEMP/app-build"
+
+      - name: Build the app
+        run: make -C "$RUNNER_TEMP/app-build" app
+
+      - name: Package the release ZIP
+        shell: bash
+        run: |
+          mkdir -p dist-app
+          cp "$RUNNER_TEMP/app-build/dist/$TITLE_ID.zip" "dist-app/$TITLE_ID.zip"
+          python3 tools/zip-open-modes.py "dist-app/$TITLE_ID.zip"
+          python3 - "dist-app/$TITLE_ID.zip" "$TITLE_ID" "$CONTENT_VERSION" <<'PY'
+          import json, sys, zipfile
+          path, title, version = sys.argv[1:4]
+          with zipfile.ZipFile(path) as archive:
+              entries = archive.infolist()
+              wrong = [i.filename for i in entries if (i.external_attr >> 16) & 0o777 != 0o777]
+              if not entries or wrong or archive.testzip() is not None:
+                  raise SystemExit(f"ZIP check failed: {len(entries)} entries, not 0777: {wrong[:5]}")
+              names = {i.filename for i in entries}
+              outside = [n for n in names if not n.startswith(title + "/")]
+              if outside:
+                  raise SystemExit(f"ZIP check failed: entries outside {title}/: {outside[:5]}")
+              for needed in ("eboot.bin", "sce_sys/param.json", "sce_sys/icon0.png", "lapy.elf",
+                             "self-updater.elf"):
+                  if f"{title}/{needed}" not in names:
+                      raise SystemExit(f"ZIP check failed: {title}/{needed} is missing")
+              param = json.loads(archive.read(f"{title}/sce_sys/param.json"))
+              if param["titleId"] != title or param["contentVersion"] != version:
+                  raise SystemExit("ZIP check failed: param.json is not this title at this version")
+              print(f"{len(entries)} entries, all stored as 0777; {title} {version}")
+          PY
+          (cd dist-app && sha256sum "$TITLE_ID.zip" > SHA256SUMS && cat SHA256SUMS)
+
+      - name: Upload the app
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ${{ steps.label.outputs.artifact }}
+          path: |
+            dist-app/${{ env.TITLE_ID }}.zip
+            dist-app/SHA256SUMS
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 30
+
+  release:
+    name: GitHub release
+    if: github.ref_type == 'tag'
+    needs: [build, app]
+    runs-on: ubuntu-24.04
+    permissions:
+      actions: read
+      contents: write
+
+    steps:
+      - name: Check out the release notes
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          sparse-checkout: docs/releases
+
+      - name: Download the app this run built
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ARTIFACT: ${{ needs.app.outputs.artifact }}
+        run: >-
+          gh run download "$GITHUB_RUN_ID"
+          --repo "$GITHUB_REPOSITORY"
+          --name "$ARTIFACT"
+          --dir release
+
+      - name: Check the download
+        shell: bash
+        env:
+          TITLE_ID: ${{ needs.app.outputs.title_id }}
+        run: |
+          set -euo pipefail
+          cd release
+          mapfile -d '' files < <(find . -type f -print0)
+          if (( ${#files[@]} != 2 )) || [[ ! -f $TITLE_ID.zip || ! -f SHA256SUMS ]]; then
+            echo "Expected exactly $TITLE_ID.zip and SHA256SUMS in the artifact." >&2
+            exit 1
+          fi
+          sha256sum -c SHA256SUMS
+
+      - name: Publish the GitHub release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TITLE_ID: ${{ needs.app.outputs.title_id }}
+        run: |
+          set -euo pipefail
+          assets=("release/$TITLE_ID.zip" "release/SHA256SUMS")
+          notes="docs/releases/$GITHUB_REF_NAME.md"
+          if gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" "${assets[@]}" --clobber --repo "$GITHUB_REPOSITORY"
+          elif [[ -f $notes ]]; then
+            gh release create "$GITHUB_REF_NAME" "${assets[@]}" \
+              --repo "$GITHUB_REPOSITORY" --verify-tag --latest \
+              --title "ProsperoTV $GITHUB_REF_NAME" --notes-file "$notes"
+          else
+            gh release create "$GITHUB_REF_NAME" "${assets[@]}" \
+              --repo "$GITHUB_REPOSITORY" --verify-tag --latest \
+              --title "ProsperoTV $GITHUB_REF_NAME" --generate-notes
+          fi
