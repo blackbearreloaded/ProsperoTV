@@ -319,9 +319,9 @@ struct StorageJob
         if (job.ok && job.request.action == ptv::StorageAction::report && TV_DEV_SCRIPTS != 0 &&
             !tv::storage::elevated())
         {
-            std::string ignored;
-            (void)ptv::export_failure_report(tv::storage::logs_dir(),
-                tv::storage::logs_dir() + "/dev/exported-failure.txt", ignored);
+            std::string exported;
+            if (save::read_file(job.request.drive + "/ProsperoTV-failure.txt", &exported, 8192))
+                (void)save::write_atomic(tv::storage::logs_dir() + "/dev/exported-failure.txt", exported);
         }
         job.done.store(true, std::memory_order_release);
         return nullptr;
