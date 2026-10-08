@@ -27,6 +27,8 @@ std::vector<std::string> usb_drives(const std::string &mount_root = "/mnt");
 bool backup_settings(const std::string &directory, const std::string &archive, std::string &error);
 bool restore_settings(const std::string &directory, const std::string &archive, std::string &error);
 bool recover_settings(const std::string &directory, std::string &error);
+// First profile only: copy legacy settings without replacing anything already saved.
+bool copy_legacy_settings(const std::string &from, const std::string &to, std::string &error);
 bool export_failure_report(const std::string &logs, const std::string &target, std::string &error);
 std::string failure_report(std::string_view receipt, std::string_view version,
                            std::uint64_t timestamp, int result, unsigned attempts);

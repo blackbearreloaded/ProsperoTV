@@ -18,9 +18,9 @@
 //   quit [seconds]              write the report, wait, then close the app
 //
 // While a script runs the controller is not read. The output (handled.txt,
-// report.txt, the pictures) goes to /data/prosperotv/logs/dev; without
-// filesystem access it goes to /download0/prosperotv/dev, which a PC reads at
-// /mnt/sandbox/<TITLE>_000/download0/prosperotv/dev only while the title
+// report.txt, the pictures) goes to the active profile's logs/dev folder.
+// In the sandbox this is /download0/profiles/<USER>/logs/dev, which a PC reads at
+// /mnt/sandbox/<TITLE>_000/download0/profiles/<USER>/logs/dev only while the title
 // runs: that is why "quit" waits before it closes the app. A token is
 // honoured once.
 

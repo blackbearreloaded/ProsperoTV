@@ -71,6 +71,7 @@ class App
         return std::exchange(forget_requested_, false);
     }
     void remote_notice(const char *message);
+    void set_profile_name(std::string name);
     StorageRequest take_storage_request()
     {
         return std::exchange(storage_request_, {});

@@ -20,7 +20,7 @@ and relevant checks work.
 | HDR | Preserve HDR metadata and output HDR on compatible displays | Pending |
 | Multiview | Two or four simultaneous channels, within measured decoder limits | Pending |
 | Parental controls | PIN-protected adult categories and kids-only mode | Pending |
-| Profiles | Separate sources, favorites and history by signed-in console user | Pending |
+| Profiles | Separate sources, favorites and history by signed-in console user | Implemented; isolation/migration sanitizer tests and PS5 build pass, console case pending |
 | Interface languages | Follow the console language for menus | Pending |
 | Backup/restore | Export sources/favorites/settings to USB and restore them safely | Implemented; sanitizer checks and PS5 build pass, console case pending |
 | Failure reports | Export a useful redacted diagnostic report to USB in a normal build | Implemented; sanitizer checks and PS5 build pass, console case pending |
@@ -97,3 +97,23 @@ Validation: all 122 UI tests pass under ASan/UBSan, including backup round trips
 corrupt/incomplete archive rejection, interrupted-restore recovery, retained
 pairing state, multiple drives, controller confirmation and report redaction.
 The PS5 production cross-build also passes. Physical USB validation remains open.
+
+## Console profiles
+
+The user who opens the title owns its profile. Sources, favorite folders, recent
+channels, settings, cache, pairing tokens and logs live under that user's folder.
+The account service and controllers use the same initial console user. Settings
+shows that person's console name. Reopen the app from another console user to use
+their profile; the application does not change the console's signed-in user.
+
+The first user to launch this version inherits the old shared settings once.
+Original files are retained. Other users start with empty personal libraries,
+and phones must be paired to the new profile. Interrupted migration resumes
+without replacing existing profile files. Missing user identity or a damaged
+migration record stops startup instead of exposing shared accounts.
+
+Validation: 125 UI tests under ASan/UBSan and the PS5 build pass. Profile tests
+cover two users, private pairing/settings paths, first-user-only migration,
+resuming an interrupted copy and retaining deliberate deletions after migration.
+Console profile discovery is supported by the test runner; changing console
+users is not automated.

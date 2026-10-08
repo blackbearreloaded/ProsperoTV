@@ -272,6 +272,31 @@ bool backup_settings(const std::string &directory, const std::string &archive, s
     return true;
 }
 
+bool copy_legacy_settings(const std::string &from, const std::string &to, std::string &error)
+{
+    Files files;
+    if (!recover_settings(from, error))
+        return false;
+    if (!read_files(from, files))
+    {
+        error = "The previous settings could not be read. They have been left in place.";
+        return false;
+    }
+    for (std::size_t i = 0; i < files.size(); ++i)
+    {
+        bool exists;
+        const auto path = to + '/' + kNames[i];
+        if (!regular(path, kFileLimit, exists) ||
+            (!exists && files[i].present && !replace_file(path, files[i])))
+        {
+            error = "The previous settings could not be copied to your profile. Restart to retry.";
+            return false;
+        }
+    }
+    error.clear();
+    return true;
+}
+
 bool recover_settings(const std::string &directory, std::string &error)
 {
     const auto journal = directory + kJournal;

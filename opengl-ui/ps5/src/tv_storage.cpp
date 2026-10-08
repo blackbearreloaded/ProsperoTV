@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 #include "tv_storage.hpp"
+#include "tv/profiles.hpp"
 
 #include "elevation/elevation.hpp"
 #include "platform/ps5/system.hpp"
@@ -97,7 +98,6 @@ Place place_of(const char *name)
     return Place::config;
 }
 
-// The receipts were beside everything else in the sandbox, not in its log folder.
 const char *folder_of(Place place)
 {
     switch (place)
@@ -105,7 +105,7 @@ const char *folder_of(Place place)
     case Place::cache:
         return cache().c_str();
     case Place::logs:
-        return g_elevated ? logs().c_str() : kSandboxData;
+        return logs().c_str();
     case Place::app:
         return app().c_str();
     case Place::config:
@@ -254,6 +254,23 @@ void initialize()
         log("[TV] carried over %s (%zu bytes): %s", kCarried[i], carried[i].bytes.size(),
             write_whole(target, carried[i].bytes) ? "ok" : "FAILED");
     }
+}
+
+bool select_profile(int user_id, std::string &error)
+{
+    ptv::ProfilePaths paths;
+    if (!ptv::prepare_profile(g_elevated ? kDataRoot : kSandboxData, config(), user_id, paths,
+                              error))
+        return false;
+    config() = std::move(paths.config);
+    cache() = std::move(paths.cache);
+    logs() = std::move(paths.logs);
+    pthread_mutex_lock(&g_lock);
+    for (int i = 0; i < g_slot_count; ++i)
+        fill(g_slots[i]);
+    pthread_mutex_unlock(&g_lock);
+    tv_log_move(logs().c_str());
+    return true;
 }
 
 bool elevated()

@@ -63,6 +63,9 @@
 extern "C" int sceKernelUsleep(std::uint32_t microseconds);
 extern "C" int sceSysmoduleLoadModule(std::uint32_t id);
 extern "C" int sceCommonDialogInitialize(void);
+extern "C" int sceUserServiceInitialize(void *);
+extern "C" int sceUserServiceGetInitialUser(std::int32_t *);
+extern "C" int sceUserServiceGetUserName(std::int32_t, char *, std::size_t);
 // The player's decoders, loaded and woken (ps5/patch_tree.py adds it to the
 // player's backend): [0] the video module, [1] its compute part, [2..4] H.264,
 // HEVC and VP9, [5] the audio module and its AAC library.
@@ -106,6 +109,7 @@ constexpr std::uint32_t kKeyboardModule = 0x0096;
 bool g_cross_held = false;
 bool g_splash_hidden = false;
 std::uint64_t g_menu_sessions = 0;
+std::string g_profile_name;
 
 struct NotificationRequest
 {
@@ -416,6 +420,7 @@ bool run_menu(ptv::Model &model, ptv::Settings *settings, const LastPlayback &la
                                        (version.empty() ? std::string("unknown") : version) +
                                            (TV_DEBUG_TRACE != 0 ? " debug trace" : ""));
         ptv::App &app = *owned;
+        app.set_profile_name(g_profile_name);
         if (!notice.empty())
             app.remote_notice(notice.c_str());
         if (TV_DEV_SCRIPTS != 0 && !tv::storage::elevated())
@@ -1109,6 +1114,25 @@ int main()
     // be asked for while the process has a single thread: nothing above or in
     // it starts one.
     tv::storage::initialize();
+    // Keep UserService alive for the title's lifetime. The menu and player
+    // attach their controllers to the same initial user and do not own it.
+    const int user_service = sceUserServiceInitialize(nullptr);
+    std::int32_t profile_user = -1;
+    std::string profile_error;
+    if ((user_service != 0 && user_service != static_cast<int>(0x80960003)) ||
+        sceUserServiceGetInitialUser(&profile_user) != 0 ||
+        !tv::storage::select_profile(profile_user, profile_error))
+    {
+        notify_failure(profile_error.empty() ? "The console profile could not be opened."
+                                             : profile_error.c_str());
+        sys::park();
+    }
+    char profile_name[64]{};
+    if (sceUserServiceGetUserName(profile_user, profile_name, sizeof(profile_name)) == 0)
+    {
+        profile_name[sizeof(profile_name) - 1] = '\0';
+        g_profile_name = profile_name;
+    }
     iptv_remote_set_pairing_store((tv::storage::config_dir() + "/phone-pairing-v1.txt").c_str());
     iptv_remote_set_icon(tv::storage::app_file("sce_sys/icon0.png").c_str());
     iptv_remote_start(8888);

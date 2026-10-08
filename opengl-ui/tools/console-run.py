@@ -295,7 +295,12 @@ def main():
     while time.time() - started < 120 and dev is None:
         time.sleep(3)
         console = connect()
-        for place in places:
+        profile_places = []
+        for root in ("/data/prosperotv/profiles", f"{storage}/profiles"):
+            for name, facts in (console.entries(root) or {}).items():
+                if re.fullmatch(r"[0-9a-f]{8}", name) and facts.get("type") == "dir":
+                    profile_places.append(f"{root}/{name}/logs/dev")
+        for place in places + profile_places:
             if (console.read(f"{place}/handled.txt") or b"").decode().strip() == token:
                 dev = place
         console.close()
@@ -323,14 +328,16 @@ def main():
     if report:
         (results / "report.txt").write_text(report)
     elevated = dev.startswith("/data/")
-    logs = "/data/prosperotv/logs" if elevated else f"{storage}/prosperotv"
+    logs = dev.rsplit("/", 1)[0]
     log = console.read(f"{logs}/app.log") or b""
     (results / "app.log").write_bytes(log)
     trace = console.read(f"{logs}/debug-trace.txt")
     if trace:
         (results / "debug-trace.txt").write_bytes(trace)
     for name in ("iptv-last-receipt.txt", "iptv-attempt-receipt.txt"):
-        receipt = console.read(f"{logs if elevated else storage}/{name}")
+        receipt = console.read(f"{logs}/{name}")
+        if not receipt and not elevated and "/profiles/" not in dev:
+            receipt = console.read(f"{storage}/{name}")
         if receipt:
             (results / name).write_bytes(receipt)
     # Only what this run made: the app's storage keeps earlier runs' files.

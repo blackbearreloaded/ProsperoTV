@@ -55,6 +55,7 @@ enum FormRow : int
     kRowBackup,
     kRowRestore,
     kRowReport,
+    kRowProfile,
 };
 
 constexpr const char *kTabNames[] = {"Live TV",   "Favorites", "Sources",
@@ -176,6 +177,10 @@ App::App(Model &model, const ui::Fonts &fonts, std::uint32_t glass_texture,
         "Records what the app does in logs/debug-trace.txt, to send with a report.";
     form_.add_action(kRowReport, "Export failure report to USB").description =
         "Saves the most recent playback failure without account details or stream addresses.";
+    form_.add_header("Household");
+    form_.add_value(kRowProfile, "Console profile", "Current console user").description =
+        "Sources, favorites, history and paired phones belong to the console user who opened the "
+        "app.";
     form_.add_header("Backup and restore");
     form_.add_action(kRowBackup, "Back up to USB");
     form_.add_action(kRowRestore, "Restore from USB");
@@ -205,6 +210,11 @@ void App::set_volume(int volume)
 {
     shared_.settings.volume = std::clamp(volume, 0, 100);
     form_.set_slider(kRowVolume, static_cast<float>(shared_.settings.volume));
+}
+
+void App::set_profile_name(std::string name)
+{
+    form_.set_value_text(kRowProfile, name.empty() ? "Current console user" : std::move(name));
 }
 
 void App::remote_notice(const char *message)
