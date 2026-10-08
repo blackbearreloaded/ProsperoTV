@@ -433,6 +433,7 @@ bool run_menu(ptv::Model &model, ptv::Settings *settings, const LastPlayback &la
                 (void)mkdir(mounts.c_str(), 0700);
                 (void)mkdir((mounts + "/usb0").c_str(), 0700);
                 app.set_usb_root(mounts);
+                say("[TV] sandbox USB fixture path=%s drives=%zu", mounts.c_str(), ptv::usb_drives(mounts).size());
             }
         }
         app.configure_images(
@@ -586,6 +587,7 @@ bool run_menu(ptv::Model &model, ptv::Settings *settings, const LastPlayback &la
             if (storage_request.action != ptv::StorageAction::none)
             {
                 storage.request = std::move(storage_request);
+                say("[TV] storage operation=%d started", static_cast<int>(storage.request.action));
                 iptv_remote_set_sources_handler(nullptr, nullptr);
                 iptv_remote_enable_search(false);
                 if (model.close_for_storage())
@@ -717,6 +719,7 @@ bool run_menu(ptv::Model &model, ptv::Settings *settings, const LastPlayback &la
                 if (storage.thread && ptv::platform::thread_join(storage.thread) != 0)
                     continue;
                 storage.thread = nullptr;
+                say("[TV] storage operation=%d completed=%d", static_cast<int>(storage.request.action), storage.ok ? 1 : 0);
                 *storage_result = storage.ok
                                       ? storage.request.action == ptv::StorageAction::restore
                                             ? "Backup restored."
@@ -1134,6 +1137,8 @@ int main()
         sys::park();
     }
     char profile_name[64]{};
+    say("[TV] profile paths config=%s cache=%s logs=%s", tv::storage::config_dir().c_str(),
+        tv::storage::cache_dir().c_str(), tv::storage::logs_dir().c_str());
     if (sceUserServiceGetUserName(profile_user, profile_name, sizeof(profile_name)) == 0)
     {
         profile_name[sizeof(profile_name) - 1] = '\0';
