@@ -161,10 +161,19 @@ int ReadMedia(const MediaInput &input, const MediaOutput &output, std::string *e
     av_dict_free(&options);
     if (r.cancelled())
         return 1;
-    if (opened < 0 || avformat_find_stream_info(r.demux, nullptr) < 0)
+    if (opened < 0 || r.demux->nb_streams > 32)
+        return r.cancelled() ? 1 : fail("This MP4 or Matroska video could not be read.");
+    std::vector<AVDictionary *> probe_options(r.demux->nb_streams, nullptr);
+    for (auto &option : probe_options)
+        av_dict_set(&option, "threads", "1", 0);
+    const int info = avformat_find_stream_info(r.demux, probe_options.data());
+    for (auto &option : probe_options)
+        av_dict_free(&option);
+    if (info < 0)
         return r.cancelled() ? 1 : fail("This MP4 or Matroska video could not be read.");
     int video = -1;
     std::vector<int> tracks;
+    std::vector<SubtitleTrack> subtitles;
     for (unsigned i = 0; i < r.demux->nb_streams; ++i)
     {
         const auto *p = r.demux->streams[i]->codecpar;
@@ -174,6 +183,27 @@ int ReadMedia(const MediaInput &input, const MediaOutput &output, std::string *e
             video = static_cast<int>(i);
         if (p->codec_type == AVMEDIA_TYPE_AUDIO && audio_supported(p->codec_id))
             tracks.push_back(static_cast<int>(i));
+        if (p->codec_type == AVMEDIA_TYPE_SUBTITLE &&
+            subtitle_codec(p->codec_id) != SubtitleCodec::none && p->extradata_size >= 0 &&
+            p->extradata_size <= 64 * 1024)
+        {
+            const auto *stream = r.demux->streams[i];
+            SubtitleTrack track;
+            track.info.id = i + 1;
+            track.info.codec = subtitle_codec(p->codec_id);
+            track.info.forced = (stream->disposition & AV_DISPOSITION_FORCED) != 0;
+            track.info.hearing_impaired =
+                (stream->disposition & AV_DISPOSITION_HEARING_IMPAIRED) != 0;
+            if (const auto *language = av_dict_get(stream->metadata, "language", nullptr, 0))
+                track.info.language.assign(language->value, strnlen(language->value, 32));
+            if (const auto *title = av_dict_get(stream->metadata, "title", nullptr, 0))
+                track.info.title.assign(title->value, strnlen(title->value, 128));
+            if (p->extradata_size && p->extradata)
+                track.extra.assign(p->extradata, p->extradata + p->extradata_size);
+            track.width = static_cast<unsigned>(std::max(0, p->width));
+            track.height = static_cast<unsigned>(std::max(0, p->height));
+            subtitles.push_back(std::move(track));
+        }
     }
     if (video < 0)
         return fail("This video needs an H.264 or HEVC video track.");
@@ -182,6 +212,14 @@ int ReadMedia(const MediaInput &input, const MediaOutput &output, std::string *e
         return fail("This video's resolution is not supported.");
     if (avformat_alloc_output_context2(&r.mux, nullptr, "mpegts", nullptr) < 0 || !r.mux)
         return fail("The video transport could not start.");
+    // Give video, audio and separate subtitle packets one explicit timeline.
+    // A positive lead-in accommodates normal B-frame decoding timestamps.
+    const auto origin = r.demux->start_time == AV_NOPTS_VALUE ? INT64_C(0) : r.demux->start_time;
+    if (origin < INT64_C(2000000) - std::numeric_limits<std::int64_t>::max())
+        return fail("This video's timestamps are not supported.");
+    const auto timestamp_offset = INT64_C(2000000) - origin;
+    r.mux->output_ts_offset = timestamp_offset;
+    r.mux->avoid_negative_ts = AVFMT_AVOID_NEG_TS_DISABLED;
     buffer = static_cast<std::uint8_t *>(av_malloc(kBufferBytes));
     if (!buffer)
         return fail("Not enough memory to open this video.");
@@ -220,8 +258,14 @@ int ReadMedia(const MediaInput &input, const MediaOutput &output, std::string *e
         }
         mapping[index] = stream->index;
     }
-    if (avformat_write_header(r.mux, nullptr) < 0)
+    AVDictionary *mux_options = nullptr;
+    av_dict_set(&mux_options, "mpegts_copyts", "1", 0);
+    const int header = avformat_write_header(r.mux, &mux_options);
+    av_dict_free(&mux_options);
+    if (header < 0)
         return fail("This video's tracks are not supported.");
+    if (output.subtitle_tracks)
+        output.subtitle_tracks(output.context, subtitles);
     r.packet = av_packet_alloc();
     if (!r.packet)
         return fail("Not enough memory to open this video.");
@@ -242,6 +286,21 @@ int ReadMedia(const MediaInput &input, const MediaOutput &output, std::string *e
             // interleave queue when a provider's audio timestamps are broken.
             if (av_write_frame(r.mux, r.packet) < 0 || r.out->error < 0)
                 return r.cancelled() ? 1 : fail("The video's media packets could not be played.");
+        }
+        else if (output.subtitle_packet && r.packet->pts != AV_NOPTS_VALUE &&
+                 std::any_of(subtitles.begin(), subtitles.end(), [&](const auto &track)
+                             { return track.info.id == static_cast<unsigned>(source) + 1; }))
+        {
+            const auto base = av_rescale_q(r.packet->pts, r.demux->streams[source]->time_base,
+                                           AVRational{1, AV_TIME_BASE});
+            const auto duration =
+                av_rescale_q(r.packet->duration, r.demux->streams[source]->time_base,
+                             AVRational{1, AV_TIME_BASE});
+            if ((timestamp_offset >= 0 && base <= INT64_MAX - timestamp_offset) ||
+                (timestamp_offset < 0 && base >= INT64_MIN - timestamp_offset))
+                output.subtitle_packet(output.context, static_cast<unsigned>(source) + 1,
+                                       r.packet->data, static_cast<std::size_t>(r.packet->size),
+                                       base + timestamp_offset, duration);
         }
         av_packet_unref(r.packet);
     }

@@ -51,6 +51,12 @@ extern "C"
 
 #ifdef __cplusplus
 }
+#include "iptv_subtitles.h"
+namespace iptv
+{
+// The foreground session owns this synchronized decoder and cue queue.
+Subtitles &player_subtitles();
+}
 #endif
 
 #endif

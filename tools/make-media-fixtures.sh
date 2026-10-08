@@ -16,5 +16,25 @@ ffmpeg -hide_banner -loglevel error -y -i "$output/h264-aac.mp4" -c copy "$outpu
 ffmpeg -hide_banner -loglevel error -y -i "$output/h264-aac.mp4" -c copy -movflags +faststart "$output/h264-aac-fast.mp4"
 ffmpeg -hide_banner -loglevel error -y -i "$output/h264-aac.mp4" -f lavfi -i sine=frequency=880:sample_rate=48000 -t 1 -map 0:v -map 0:a -map 1:a -c:v copy -c:a aac -b:a 64k -metadata:s:a:0 language=eng -metadata:s:a:1 language=spa "$output/two-audio.mp4"
 ffmpeg -hide_banner -loglevel error -y -i "$output/two-audio.mp4" -map 0 -c copy "$output/two-audio.mkv"
+cat > "$output/english.srt" <<'CAPTIONS'
+1
+00:00:00,200 --> 00:00:00,600
+Hello, <i>world</i>!
+
+2
+00:00:00,650 --> 00:00:00,900
+Second line
+CAPTIONS
+cat > "$output/spanish.srt" <<'CAPTIONS'
+1
+00:00:00,200 --> 00:00:00,600
+Hola, mundo!
+
+2
+00:00:00,650 --> 00:00:00,900
+Otra línea
+CAPTIONS
+ffmpeg -hide_banner -loglevel error -y -i "$output/h264-aac.mp4" -i "$output/english.srt" -i "$output/spanish.srt" -map 0 -map 1 -map 2 -c copy -c:s mov_text -metadata:s:s:0 language=eng -metadata:s:s:1 language=spa "$output/subtitles.mp4"
+ffmpeg -hide_banner -loglevel error -y -i "$output/h264-aac.mp4" -i "$output/english.srt" -i "$output/spanish.srt" -map 0 -map 1 -map 2 -c copy -c:s srt -metadata:s:s:0 language=eng -metadata:s:s:1 language=spa "$output/subtitles.mkv"
 ffmpeg -hide_banner -loglevel error -y -f lavfi -i testsrc2=size=160x96:rate=10 -t 0.5 -c:v libx265 -x265-params pools=1:frame-threads=1:log-level=error -an "$output/hevc.mp4"
 printf '%s\n' "$stamp" > "$output/.complete"

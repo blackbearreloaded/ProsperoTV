@@ -205,6 +205,7 @@ std::mutex gAudioMutex;
 iptv_player_audio_state_t gAudioState{};
 bool gAudioAvailable = false;
 std::atomic<std::uint32_t> gAudioRequest{UINT32_MAX};
+iptv::Subtitles gSubtitles;
 
 void SetLastPlaybackError(const char *format, ...)
 {
@@ -741,6 +742,7 @@ int AdapterSelectAudio(void *context, std::uint32_t type)
 
 int AdapterDiscontinuity(void *context)
 {
+    gSubtitles.reset_timeline();
     auto *adapter = static_cast<NativeAdapter *>(context);
     return adapter && adapter->opened ? iptv_native_backend_discontinuity(&adapter->backend) : -1;
 }
@@ -811,6 +813,35 @@ class StreamRunner
         backend.submit_audio = AdapterAudio;
         backend.disable_audio = AdapterDisableAudio;
         backend.select_audio = AdapterSelectAudio;
+        backend.subtitle_tracks =
+            [](void *, const iptv_stream_subtitle_track_t *tracks, std::size_t count)
+        {
+            std::vector<iptv::SubtitleTrack> available;
+            for (std::size_t i = 0; i < count; ++i)
+            {
+                const auto &broadcast = tracks[i];
+                iptv::SubtitleTrack track;
+                track.info.id = (broadcast.pid << 16) | broadcast.composition_page;
+                track.info.codec = iptv::SubtitleCodec::dvb;
+                track.info.language = broadcast.language;
+                track.info.hearing_impaired = broadcast.subtitling_type >= 0x20u;
+                track.extra = {static_cast<std::uint8_t>(broadcast.composition_page >> 8),
+                               static_cast<std::uint8_t>(broadcast.composition_page),
+                               static_cast<std::uint8_t>(broadcast.ancillary_page >> 8),
+                               static_cast<std::uint8_t>(broadcast.ancillary_page)};
+                available.push_back(std::move(track));
+            }
+            gSubtitles.set_tracks(std::move(available));
+        };
+        backend.subtitle_packet = [](void *, const iptv_stream_subtitle_track_t *track,
+                                     const std::uint8_t *bytes, std::size_t count,
+                                     std::uint64_t pts)
+        {
+            if (pts <= INT64_MAX)
+                (void)gSubtitles.push((track->pid << 16) | track->composition_page, bytes, count,
+                                      static_cast<std::int64_t>(pts), 0);
+        };
+        backend.subtitle_reset = [](void *) { gSubtitles.reset_timeline(); };
         backend.discontinuity = AdapterDiscontinuity;
         backend.drain = AdapterDrain;
         backend.close = AdapterClose;
@@ -1131,6 +1162,7 @@ class StreamRunner
         iptv_native_telemetry_t native{};
         if (NativeTelemetry(&native))
             RecordCleanupResult(native.cleanup_result);
+        gSubtitles.clear();
         {
             std::lock_guard lock(gAudioMutex);
             gAudioState = {};
@@ -1930,7 +1962,11 @@ int RunContainer(const char *url, StreamRunner *runner, const iptv::http::Reques
                                  { return static_cast<File *>(self)->runner->StopRequested(); }};
     const iptv::MediaOutput output{
         runner, [](void *self, const std::uint8_t *bytes, std::size_t count)
-        { return static_cast<StreamRunner *>(self)->Push(bytes, count) == IPTV_STREAM_OK; }};
+        { return static_cast<StreamRunner *>(self)->Push(bytes, count) == IPTV_STREAM_OK; },
+        [](void *, const std::vector<iptv::SubtitleTrack> &tracks)
+        { gSubtitles.set_tracks(tracks); },
+        [](void *, std::uint32_t id, const std::uint8_t *bytes, std::size_t count, std::int64_t pts,
+           std::int64_t duration) { (void)gSubtitles.push(id, bytes, count, pts, duration); }};
     std::string error;
     const int result = iptv::ReadMedia(input, output, &error);
     if (result < 0)
@@ -2338,6 +2374,11 @@ void iptv_player_audio_state(iptv_player_audio_state_t *state)
         return;
     std::lock_guard lock(gAudioMutex);
     *state = gAudioState;
+}
+
+iptv::Subtitles &iptv::player_subtitles()
+{
+    return gSubtitles;
 }
 
 int iptv_player_select_audio(std::uint32_t pid)

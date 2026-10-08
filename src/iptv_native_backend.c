@@ -1594,6 +1594,7 @@ static int32_t present_video_output(backend_state_t *state, const videodec2_fram
         (uint32_t)state->config.codec, state->config.visible_width,
         state->config.visible_height,  state->frame_rate_x100,
         state->bitrate_kbps,           rate_now - state->controls_started_us < CONTROLS_OVERLAY_US,
+        presentation_pts_us,
     };
     if (state->config.picture)
     {

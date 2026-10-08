@@ -919,6 +919,52 @@ TEST_F(ModelTest, PlaybackAudioMenuHandlesChangingTracksAndLastPage)
     model.close();
 }
 
+TEST_F(ModelTest, SubtitleSelectionUsesItsOwnTabAndCaptionsOutliveTheBanner)
+{
+    ptv::Model model(dir_);
+    load(model);
+    ptv::PlayRequest request;
+    ASSERT_TRUE(model.play(model.visible(0)));
+    ASSERT_TRUE(model.take_play_request(&request));
+    ptv::PlaybackOsd controls(model, request);
+    iptv::SubtitleState state;
+    state.tracks = {{11, iptv::SubtitleCodec::subrip, "eng", "English", false, false},
+                    {12, iptv::SubtitleCodec::subrip, "spa", "Español", false, false}};
+    controls.set_subtitle_state(state);
+    EXPECT_EQ(controls.input(IPTV_INPUT_OPTIONS, 1), 1);
+    EXPECT_EQ(controls.input(IPTV_INPUT_R1, 2), 1);
+    EXPECT_FALSE(controls.selected_channel());
+    EXPECT_EQ(controls.input(IPTV_INPUT_DOWN, 3), 1);
+    EXPECT_EQ(controls.input(IPTV_INPUT_CROSS, 4), 1);
+    EXPECT_EQ(controls.take_subtitle_selection(), 11u);
+    EXPECT_FALSE(controls.take_audio_selection());
+    EXPECT_FALSE(controls.take_subtitle_selection());
+    state.selected = 11;
+    controls.set_subtitle_state(state);
+    EXPECT_EQ(controls.input(IPTV_INPUT_UP, 5), 1);
+    EXPECT_EQ(controls.input(IPTV_INPUT_CROSS, 6), 1);
+    EXPECT_EQ(controls.take_subtitle_selection(), 0u);
+    EXPECT_EQ(controls.input(IPTV_INPUT_CIRCLE, 7), 1);
+    ASSERT_NE(std::getenv("KIT_FONTS"), nullptr);
+    ASSERT_TRUE(controls.load_fonts(std::getenv("KIT_FONTS")));
+    EXPECT_TRUE(controls.draw(nullptr, 0, 1920, 1088, 1920, 1080, 8, 1));
+    auto cue = std::make_shared<iptv::SubtitleCue>();
+    cue->text = "Hello, world!\n字幕测试";
+    std::vector<std::shared_ptr<const iptv::SubtitleCue>> cues{cue};
+    std::vector<std::uint8_t> video(1920 * 1088 * 3 / 2, 77);
+    EXPECT_TRUE(
+        controls.draw(video.data(), video.size(), 1920, 1088, 1920, 1080, 8, 10000000, cues));
+    EXPECT_GT(std::count(video.begin(), video.begin() + 1920 * 1080, 235), 100);
+    EXPECT_FALSE(controls.draw(nullptr, 0, 1920, 1088, 1920, 1080, 8, 11000000));
+    EXPECT_EQ(controls.input(IPTV_INPUT_OPTIONS, 12000000), 1);
+    EXPECT_EQ(controls.input(IPTV_INPUT_L1, 12000001), 1);
+    state.tracks.clear();
+    controls.set_subtitle_state(state);
+    EXPECT_EQ(controls.input(IPTV_INPUT_CROSS, 12000002), 1);
+    EXPECT_FALSE(controls.take_subtitle_selection());
+    model.close();
+}
+
 TEST_F(ModelTest, PlaybackBannerExpiresFromFirstPictureAndCanBeRequestedAgain)
 {
     ptv::Model model(dir_);

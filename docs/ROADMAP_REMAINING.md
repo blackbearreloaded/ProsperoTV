@@ -18,7 +18,7 @@ and relevant checks work.
 | Zapping | Next, previous and previously watched channel during playback | Implemented; 140 UI sanitizer tests and PS5 build pass; console case pending |
 | Playback channel list | Select a channel from a list over the playing video | Implemented; host input/render checks and PS5 build pass; console case pending |
 | Channel banner | Brief channel/guide banner on tune and on request | Implemented; mapped guide, timing and rendered image checks pass; console case pending |
-| Audio/subtitles | Select available language tracks and render subtitles | In progress: embedded audio selection implemented and host-tested; subtitles and native acceptance pending |
+| Audio/subtitles | Select available language tracks and render subtitles | Embedded audio and container/DVB subtitles implemented with host checks; external HLS renditions and native acceptance pending |
 | Sleep timer | Stop playback at a selected deadline | Implemented; 134 UI sanitizer tests and PS5 build pass; console case pending |
 | Live pause/rewind | Pause and replay several minutes of the current live channel | Pending |
 | Deinterlacing | Preserve field-rate motion on interlaced broadcast video | Pending |
@@ -242,7 +242,7 @@ capture and compositor-cost measurements remain unverified.
 
 ## Audio selection
 
-Options during playback opens Audio. Up/Down selects a track, Left/Right changes
+Options during playback opens Audio; L1/R1 switches to Subtitles. Up/Down selects a track, Left/Right changes
 page, Cross applies it, and Circle or Options closes the panel. The same controls
 work for live television, movies and catch-up. Off mutes the selected stream.
 The panel shows provider ISO 639 language codes, codec and accessibility labels;
@@ -254,7 +254,7 @@ when a recurring PMT reorders tracks, and falls back when a provider removes the
 selected PID. Off remains Off through those updates. MP4 and Matroska remuxing
 preserves all supported audio tracks and their language metadata. The existing
 AAC, MPEG audio, AC-3 and E-AC-3 codec limits still apply. Separately downloaded
-HLS audio renditions and subtitles remain to be implemented.
+HLS audio and subtitle renditions remain to be implemented.
 
 The demux worker applies requests between chunks and publishes a synchronized
 snapshot to the controls. The native backend discards and joins the old audio
@@ -274,3 +274,40 @@ state check pass. The rendered panel was inspected at
 `results/roadmap/playback-audio.png`. No console installation is claimed for
 these changes; the last recorded installed test build remains 72c5141.
 
+## Subtitles
+
+The playback track panel lists embedded subtitle languages and an Off choice,
+including forced and hearing-impaired labels supplied by the provider. MP4 and
+Matroska expose supported text, SubRip, ASS, WebVTT, mov_text, DVB, DVD and PGS
+tracks through the existing FFmpeg dependency. Text keeps punctuation, Unicode,
+line breaks and word wrapping; ASS styling and vector drawings are omitted.
+Bitmap captions retain their palette, transparency and source-canvas position.
+The presenter composites captions onto its scratch surface at the displayed
+video timestamp, including native ten-bit surfaces and text above the banner.
+
+Live MPEG-TS and TS HLS segments discover DVB subtitle languages and page IDs
+from the provider's PMT. The reader assembles complete bounded PES packets,
+preserves partial packets across repeated PMTs, ignores duplicates, and drops
+incomplete captions after packet loss. Removed languages disappear from the
+panel. Bad subtitle framing and scrambled subtitle PIDs leave clear audio and
+video running. Subtitle timestamps use the video's transport-clock epoch.
+The framing follows the existing [FFmpeg transport reader](https://github.com/FFmpeg/FFmpeg/blob/n8.0.1/libavformat/mpegts.c).
+
+Only the selected language is decoded. A bounded compressed-packet cache retains
+captions downloaded ahead of playback while subtitles are Off, allowing a
+language change to recover the caption for the current picture. Cues expire by
+video time. Packet, track, rectangle, pixel and queue limits isolate subtitle
+failures. Discontinuities discard old captions and bitmap decoder state; track
+changes and immutable presentation snapshots are synchronized across threads.
+
+Host checks cover MP4/Matroska subtitle-to-video timing in two languages, actual
+DVB palette decoding and clearing, transport fragmentation/loss/clock wrap,
+provider updates, language changes, resource limits and eight/ten-bit compositing
+without touching frame padding. The rendered menu and English/Chinese captions
+were inspected in `results/roadmap/playback-subtitle-menu.png` and
+`playback-subtitles.png`. Native timing, language-switch latency and compositor
+cost remain console acceptance work. No newer console installation is claimed.
+
+Validation: 83 core tests, 13 media/subtitle tests and 144 UI tests pass under
+ASan/UBSan, and the PS5 production cross-build passes. Separate HLS renditions
+remain the next part of this feature; these checks do not close that requirement.

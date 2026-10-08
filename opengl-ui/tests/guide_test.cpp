@@ -164,6 +164,21 @@ TEST_F(GuideTest, PlaybackBannerUsesMappedGuideIdsAndUpdatesOnProgrammeChange)
     std::fill(video.begin(), video.end(), 100);
     ASSERT_TRUE(osd.draw(video.data(), video.size(), 1920, 1088, 1920, 1080, 8, 4));
     capture("-audio.png");
+    iptv::SubtitleState subtitles;
+    subtitles.tracks = {{11, iptv::SubtitleCodec::subrip, "eng", "English", false, false},
+                        {12, iptv::SubtitleCodec::subrip, "spa", "Español", false, true}};
+    subtitles.selected = 11;
+    osd.set_subtitle_state(subtitles);
+    EXPECT_EQ(osd.input(IPTV_INPUT_R1, 5), 1);
+    std::fill(video.begin(), video.end(), 100);
+    ASSERT_TRUE(osd.draw(video.data(), video.size(), 1920, 1088, 1920, 1080, 8, 5));
+    capture("-subtitle-menu.png");
+    EXPECT_EQ(osd.input(IPTV_INPUT_CIRCLE, 6), 1);
+    auto cue = std::make_shared<iptv::SubtitleCue>();
+    cue->text = "Hello, world!\n字幕测试";
+    std::fill(video.begin(), video.end(), 100);
+    ASSERT_TRUE(osd.draw(video.data(), video.size(), 1920, 1088, 1920, 1080, 8, 10000000, {cue}));
+    capture("-subtitles.png");
 }
 
 TEST_F(GuideTest, TimezonesGapsAndInvalidDates)

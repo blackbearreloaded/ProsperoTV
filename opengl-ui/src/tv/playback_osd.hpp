@@ -23,6 +23,9 @@ struct VideoPanel
     bool composite(void *surface, std::size_t bytes, unsigned pitch, unsigned surface_height,
                    unsigned visible_width, unsigned visible_height, unsigned depth) const;
 };
+bool composite_subtitle_bitmaps(const iptv::SubtitleCue &cue, void *surface, std::size_t bytes,
+                                unsigned pitch, unsigned surface_height, unsigned visible_width,
+                                unsigned visible_height, unsigned depth);
 
 class PlaybackOsd
 {
@@ -34,16 +37,20 @@ class PlaybackOsd
     int input(int action, std::uint64_t now);
     void set_audio_state(const iptv_player_audio_state_t &state);
     std::optional<std::uint32_t> take_audio_selection();
+    void set_subtitle_state(const iptv::SubtitleState &state);
+    std::optional<std::uint32_t> take_subtitle_selection();
     std::optional<unsigned> selected_channel() const
     {
         return selected_;
     }
     bool draw(void *surface, std::size_t bytes, unsigned pitch, unsigned surface_height,
-              unsigned visible_width, unsigned visible_height, unsigned depth, std::uint64_t now);
+              unsigned visible_width, unsigned visible_height, unsigned depth, std::uint64_t now,
+              const std::vector<std::shared_ptr<const iptv::SubtitleCue>> &subtitles = {});
 
   private:
     void update_guide();
     void paint();
+    void paint_subtitles();
     int select(unsigned index);
     void line(std::string_view value, float x, float y, float size, float width);
     Model &model_;
@@ -53,6 +60,11 @@ class PlaybackOsd
     unsigned audio_focus_ = 0;
     iptv_player_audio_state_t audio_{};
     std::optional<std::uint32_t> audio_selection_;
+    iptv::SubtitleState subtitles_;
+    bool subtitle_tab_ = false;
+    unsigned subtitle_focus_ = 0;
+    std::optional<std::uint32_t> subtitle_selection_;
+    std::vector<std::shared_ptr<const iptv::SubtitleCue>> subtitle_cues_;
     std::uint64_t banner_until_ = 0, guide_minute_ = 0;
     std::vector<unsigned> channels_;
     unsigned focus_ = 0;
@@ -62,5 +74,6 @@ class PlaybackOsd
     hui::gfx::Font regular_, east_asian_, korean_;
     hui::ui::Fonts fonts_;
     VideoPanel panel_;
+    VideoPanel subtitle_panel_;
 };
 } // namespace ptv

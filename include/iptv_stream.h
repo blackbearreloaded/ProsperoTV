@@ -12,8 +12,9 @@
 extern "C" {
 #endif
 
-#define IPTV_STREAM_API_VERSION UINT32_C(4)
+#define IPTV_STREAM_API_VERSION UINT32_C(5)
 #define IPTV_STREAM_MAX_AUDIO_TRACKS 32u
+#define IPTV_STREAM_MAX_SUBTITLE_TRACKS 32u
 #define IPTV_STREAM_TS_PACKET_BYTES 188u
 #define IPTV_STREAM_ERROR_TEXT_BYTES 96u
 #define IPTV_STREAM_DEFAULT_MAX_PES_BYTES UINT32_C(0x800000)
@@ -92,6 +93,14 @@ typedef struct iptv_stream_audio_track {
     uint8_t audio_type; /* ISO 639: 2 hearing impaired, 3 visual impairment commentary. */
 } iptv_stream_audio_track_t;
 
+typedef struct iptv_stream_subtitle_track {
+    uint32_t pid;
+    uint16_t composition_page;
+    uint16_t ancillary_page;
+    char language[4];
+    uint8_t subtitling_type; /* DVB: 0x10..0x1f normal, 0x20..0x2f hearing impaired. */
+} iptv_stream_subtitle_track_t;
+
 /* The adapter owns decoder, presenter and audio resources. Video callbacks
  * receive one complete Annex-B access unit. Audio callbacks receive one complete
  * frame in the selected stream type. A callback must consume or copy data before it returns. */
@@ -110,6 +119,14 @@ typedef struct iptv_stream_backend {
     /* Optional audio-only reconfiguration; zero type turns audio off. The old
      * audio queue must be discarded before this returns. Video stays open. */
     int (*select_audio)(void *context, uint32_t stream_type);
+    /* Optional DVB subtitle callbacks, independent of video backend startup.
+     * Metadata changes include removal of all tracks. Packet data contains DVB
+     * segments without the PES/data_identifier framing, on the video timeline. */
+    void (*subtitle_tracks)(void *context, const iptv_stream_subtitle_track_t *tracks,
+                            size_t count);
+    void (*subtitle_packet)(void *context, const iptv_stream_subtitle_track_t *track,
+                            const uint8_t *data, size_t bytes, uint64_t pts_us);
+    void (*subtitle_reset)(void *context);
 } iptv_stream_backend_t;
 
 typedef struct iptv_stream_telemetry {

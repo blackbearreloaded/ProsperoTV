@@ -1330,9 +1330,12 @@ int main()
                     iptv_player_audio_state_t audio{};
                     iptv_player_audio_state(&audio);
                     osd.set_audio_state(audio);
+                    osd.set_subtitle_state(iptv::player_subtitles().state());
                     const int handled = osd.input(action, ptv::platform::monotonic_us());
                     if (const auto selected = osd.take_audio_selection())
                         (void)iptv_player_select_audio(*selected);
+                    if (const auto selected = osd.take_subtitle_selection())
+                        (void)iptv::player_subtitles().select(*selected);
                     if (TV_DEV_SCRIPTS != 0 && action >= 0)
                         say("[TV] playback control action=%d handled=%d", action, handled);
                     return handled;
@@ -1340,12 +1343,14 @@ int main()
                 &controls);
             iptv_native_agc_set_osd(
                 [](void *context, void *surface, std::size_t bytes, std::uint32_t pitch,
-                   std::uint32_t sh, std::uint32_t width, std::uint32_t height,
-                   std::uint32_t depth) -> int
+                   std::uint32_t sh, std::uint32_t width, std::uint32_t height, std::uint32_t depth,
+                   std::uint64_t pts) -> int
                 {
+                    const auto subtitles = iptv::player_subtitles().at(
+                        pts <= INT64_MAX ? static_cast<std::int64_t>(pts) : -1);
                     return static_cast<ptv::PlaybackOsd *>(context)->draw(
                                surface, bytes, pitch, sh, width, height, depth,
-                               ptv::platform::monotonic_us())
+                               ptv::platform::monotonic_us(), subtitles)
                                ? 1
                                : 0;
                 },

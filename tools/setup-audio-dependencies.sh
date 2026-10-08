@@ -37,16 +37,19 @@ cd "$build"
 "$source/configure" --prefix="$prefix" "${cross[@]}" --disable-autodetect --disable-everything \
     --disable-programs --disable-doc --disable-network --disable-avdevice \
     --disable-avfilter --disable-swscale --disable-shared --enable-static \
-    --disable-pthreads --disable-w32threads --disable-os2threads --disable-x86asm \
+    --enable-pthreads --disable-w32threads --disable-os2threads --disable-x86asm \
     --enable-avcodec --enable-avutil --enable-swresample --enable-avformat \
     --enable-demuxer=mov,matroska --enable-muxer=mpegts \
     --enable-parser=h264,hevc,aac,aac_latm,ac3,mpegaudio \
     --enable-bsf=h264_mp4toannexb,hevc_mp4toannexb \
-    --enable-decoder=aac,aac_latm,ac3,eac3,mp2,mp3,h264,hevc
+    --enable-decoder=aac,aac_latm,ac3,eac3,mp2,mp3,h264,hevc,text,subrip,ass,movtext,webvtt,dvbsub,dvdsub,pgssub
 # The SDK probe linker permits unresolved imports. PS5 exports gmtime, not
 # gmtime_r; select FFmpeg's own portability fallback instead of a bogus import.
 if [[ $target == ps5 ]]; then
     sed -i 's/^#define HAVE_GMTIME_R 1$/#define HAVE_GMTIME_R 0/' config.h
+    # Thread synchronization is required even with one decoding thread per
+    # context. Optional FreeBSD thread naming functions are not PS5 imports.
+    sed -i -E 's/^(#define HAVE_PTHREAD_SET_?NAME_NP) 1$/\1 0/' config.h
 fi
 make -j"${BUILD_JOBS:-4}"
 make install

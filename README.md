@@ -165,7 +165,9 @@ at 3840×2160. Codec and renderer details are documented in
 | Touchpad in Live TV / Favorites | Provider categories / favorite folders |
 | R3 in the channel browser | Open the programme guide |
 | Options | Refresh the selected catalog source |
-| Circle / Options during playback | Stop playback and return to the browser |
+| Circle during playback | Close the open panel, or stop playback and return to the browser |
+| Options during playback | Open or close the audio/subtitle track panel |
+| L1 / R1 in the track panel | Switch between Audio and Subtitles |
 | Touchpad + R1 during playback | Toggle codec and performance statistics |
 
 ## Phone remote

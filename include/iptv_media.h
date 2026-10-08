@@ -2,6 +2,7 @@
 // Copyright (C) 2026 BlackBearReloaded
 // SPDX-License-Identifier: GPL-3.0-or-later
 #pragma once
+#include "iptv_subtitles.h"
 #include <cstddef>
 #include <cstdint>
 #include <string>
@@ -23,6 +24,9 @@ struct MediaOutput
 {
     void *context = nullptr;
     bool (*write)(void *, const std::uint8_t *, std::size_t) = nullptr;
+    void (*subtitle_tracks)(void *, const std::vector<SubtitleTrack> &) = nullptr;
+    void (*subtitle_packet)(void *, std::uint32_t, const std::uint8_t *, std::size_t,
+                            std::int64_t pts_us, std::int64_t duration_us) = nullptr;
 };
 // 0: complete, 1: cancelled, -1: error. Streaming I/O, no transcoding.
 int ReadMedia(const MediaInput &input, const MediaOutput &output, std::string *error);

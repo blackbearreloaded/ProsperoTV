@@ -18,6 +18,8 @@ struct Memory
     std::size_t at = 0, piece = 4096;
     bool stop = false, reject_output = false;
     unsigned seeks = 0;
+    iptv::Subtitles *subtitles = nullptr;
+    unsigned subtitle_language = 0;
     explicit Memory(const char *name)
     {
         std::ifstream file(std::string("build/media-tests/fixtures/") + name, std::ios::binary);
@@ -49,13 +51,30 @@ struct Memory
             { return static_cast<std::int64_t>(static_cast<Memory *>(self)->bytes.size()); },
             [](void *self) { return static_cast<Memory *>(self)->stop; }};
         const iptv::MediaOutput output{
-            this, [](void *self, const std::uint8_t *bytes, std::size_t count)
+            this,
+            [](void *self, const std::uint8_t *bytes, std::size_t count)
             {
                 auto &m = *static_cast<Memory *>(self);
                 if (m.reject_output)
                     return false;
                 m.transport.insert(m.transport.end(), bytes, bytes + count);
                 return true;
+            },
+            [](void *self, const std::vector<iptv::SubtitleTrack> &tracks)
+            {
+                auto &m = *static_cast<Memory *>(self);
+                if (!m.subtitles)
+                    return;
+                m.subtitles->set_tracks(tracks);
+                ASSERT_LT(m.subtitle_language, tracks.size());
+                EXPECT_TRUE(m.subtitles->select(tracks[m.subtitle_language].info.id));
+            },
+            [](void *self, std::uint32_t id, const std::uint8_t *bytes, std::size_t count,
+               std::int64_t pts, std::int64_t duration)
+            {
+                auto &m = *static_cast<Memory *>(self);
+                if (m.subtitles)
+                    EXPECT_TRUE(m.subtitles->push(id, bytes, count, pts, duration));
             }};
         return iptv::ReadMedia(input, output, error);
     }
@@ -206,6 +225,64 @@ TEST(Media, PreservesBothLanguagesAndSwitchesRealAudioWithoutReopeningVideo)
         EXPECT_EQ(session.telemetry.continuity_errors, 0u);
         EXPECT_EQ(iptv_stream_cleanup(&session), 0);
     }
+}
+TEST(Media, EmbeddedSubtitlesUseTheSameTimelineAsRemuxedVideo)
+{
+    for (const auto *name : {"subtitles.mp4", "subtitles.mkv"})
+        for (unsigned language = 0; language < 2; ++language)
+        {
+            SCOPED_TRACE(name);
+            SCOPED_TRACE(language);
+            iptv::Subtitles subtitles;
+            Memory memory(name);
+            memory.subtitles = &subtitles;
+            memory.subtitle_language = language;
+            std::string error;
+            ASSERT_FALSE(memory.bytes.empty());
+            ASSERT_EQ(memory.run(&error), 0) << error;
+            const auto state = subtitles.state();
+            ASSERT_EQ(state.tracks.size(), 2u);
+            EXPECT_EQ(state.tracks[0].language, "eng");
+            EXPECT_EQ(state.tracks[1].language, "spa");
+            EXPECT_EQ(state.selected, state.tracks[language].id);
+            std::uint64_t first_pts = IPTV_STREAM_PTS_UNKNOWN;
+            iptv_stream_backend_t backend{};
+            backend.context = &first_pts;
+            backend.open = [](void *, const iptv_stream_format_t *) { return 0; };
+            backend.submit_video =
+                [](void *self, const std::uint8_t *, std::size_t, std::uint64_t pts)
+            {
+                auto &first = *static_cast<std::uint64_t *>(self);
+                if (first == IPTV_STREAM_PTS_UNKNOWN)
+                    first = pts;
+                return 0;
+            };
+            backend.submit_audio = [](void *, const std::uint8_t *, std::size_t, std::uint64_t)
+            { return 0; };
+            backend.disable_audio = [](void *) { return 0; };
+            backend.drain = [](void *) { return 0; };
+            backend.close = [](void *) {};
+            backend.subtitle_tracks = [](void *, const iptv_stream_subtitle_track_t *, std::size_t)
+            { ADD_FAILURE() << "An empty remux PMT must not replace container subtitle tracks"; };
+            iptv_stream_session_t session{};
+            iptv_stream_init(&session);
+            ASSERT_EQ(iptv_stream_open(&session, nullptr, &backend), 0);
+            ASSERT_EQ(iptv_stream_start(&session), 0);
+            ASSERT_EQ(iptv_stream_push(&session, memory.transport.data(), memory.transport.size()),
+                      0);
+            ASSERT_EQ(iptv_stream_stop(&session), 0);
+            ASSERT_NE(first_pts, IPTV_STREAM_PTS_UNKNOWN);
+            EXPECT_TRUE(subtitles.at(first_pts).empty());
+            const auto first = subtitles.at(first_pts + 250000);
+            ASSERT_EQ(first.size(), 1u);
+            EXPECT_EQ(first[0]->text, language ? "Hola, mundo!" : "Hello, world!");
+            EXPECT_TRUE(subtitles.at(first_pts + 625000).empty());
+            const auto second = subtitles.at(first_pts + 750000);
+            ASSERT_EQ(second.size(), 1u);
+            EXPECT_EQ(second[0]->text, language ? "Otra línea" : "Second line");
+            EXPECT_TRUE(subtitles.at(first_pts + 1000000).empty());
+            EXPECT_EQ(iptv_stream_cleanup(&session), 0);
+        }
 }
 TEST(Media, StopsOnCancellationOrOutputFailureAndRejectsNonMedia)
 {

@@ -139,7 +139,8 @@ Packet PesPacket(std::uint16_t pid, std::uint8_t counter, std::uint8_t stream_id
     packet[10] = 0x80;
     packet[11] = 0;
     packet[12] = 0;
-    std::memcpy(packet.data() + 13u, payload.data(), payload.size());
+    if (!payload.empty())
+        std::memcpy(packet.data() + 13u, payload.data(), payload.size());
     return packet;
 }
 
@@ -163,6 +164,22 @@ Packet H264Packet(std::uint8_t counter, bool parameter_sets, std::uint8_t nal_he
     return PesPacket(0x110, counter, 0xe0, payload);
 }
 
+Packet StampedPacket(Packet packet, std::uint64_t pts)
+{
+    const auto length = static_cast<unsigned>(packet[8]) * 256u + packet[9];
+    std::memmove(packet.data() + 18, packet.data() + 13, length - 3);
+    packet[8] = static_cast<std::uint8_t>((length + 5) >> 8);
+    packet[9] = static_cast<std::uint8_t>(length + 5);
+    packet[11] = 0x80;
+    packet[12] = 5;
+    packet[13] = 0x21 | static_cast<std::uint8_t>((pts >> 29) & 0x0e);
+    packet[14] = static_cast<std::uint8_t>(pts >> 22);
+    packet[15] = 1 | static_cast<std::uint8_t>((pts >> 14) & 0xfe);
+    packet[16] = static_cast<std::uint8_t>(pts >> 7);
+    packet[17] = 1 | static_cast<std::uint8_t>((pts << 1) & 0xfe);
+    return packet;
+}
+
 void AppendPacket(std::vector<std::uint8_t> *bytes, const Packet &packet)
 {
     bytes->insert(bytes->end(), packet.begin(), packet.end());
@@ -180,6 +197,15 @@ struct FakeBackend
     int drain_result = 0;
     int select_result = 0;
     std::vector<std::uint32_t> audio_selections;
+    std::vector<iptv_stream_subtitle_track_t> subtitle_tracks;
+    unsigned subtitle_updates = 0, subtitle_resets = 0;
+    struct Caption
+    {
+        iptv_stream_subtitle_track_t track;
+        std::vector<std::uint8_t> bytes;
+        std::uint64_t pts;
+    };
+    std::vector<Caption> captions;
 };
 
 int FakeOpen(void *context, const iptv_stream_format_t *format)
@@ -284,6 +310,21 @@ class AudioSelectionTest : public testing::Test
         backend.select_audio = FakeSelectAudio;
         backend.drain = FakeDrain;
         backend.close = FakeClose;
+        backend.subtitle_tracks =
+            [](void *ctx, const iptv_stream_subtitle_track_t *tracks, std::size_t count)
+        {
+            auto &state = *static_cast<FakeBackend *>(ctx);
+            state.subtitle_tracks.assign(tracks, tracks + count);
+            ++state.subtitle_updates;
+        };
+        backend.subtitle_packet = [](void *ctx, const iptv_stream_subtitle_track_t *track,
+                                     const std::uint8_t *data, std::size_t bytes, std::uint64_t pts)
+        {
+            static_cast<FakeBackend *>(ctx)->captions.push_back(
+                {*track, {data, data + bytes}, pts});
+        };
+        backend.subtitle_reset = [](void *ctx)
+        { ++static_cast<FakeBackend *>(ctx)->subtitle_resets; };
         iptv_stream_init(&session);
         ASSERT_EQ(iptv_stream_open(&session, nullptr, &backend), IPTV_STREAM_OK);
         ASSERT_EQ(iptv_stream_start(&session), IPTV_STREAM_OK);
@@ -294,10 +335,13 @@ class AudioSelectionTest : public testing::Test
     }
     int pmt(const std::vector<iptv_stream_audio_track_t> &tracks, bool start = false)
     {
+        return section(TrackPmt(tracks), start);
+    }
+    int section(const std::vector<std::uint8_t> &section, bool start = false)
+    {
         std::vector<std::uint8_t> bytes;
         if (start)
             AppendPacket(&bytes, PsiPacket(0, PatSection()));
-        const auto section = TrackPmt(tracks);
         for (std::size_t at = 0; at < section.size();)
         {
             Packet packet;
@@ -327,6 +371,229 @@ class AudioSelectionTest : public testing::Test
         return iptv_stream_push(&session, packet.data(), packet.size());
     }
 };
+
+class SubtitleStreamTest : public AudioSelectionTest
+{
+  protected:
+    int subtitles(const std::vector<iptv_stream_subtitle_track_t> &tracks, bool start = false)
+    {
+        auto pmt = TrackPmt({{0x111, 0x0f, "eng", 0}});
+        pmt.resize(pmt.size() - 4);
+        for (const auto &track : tracks)
+            pmt.insert(pmt.end(),
+                       {6, static_cast<std::uint8_t>(0xe0 | (track.pid >> 8)),
+                        static_cast<std::uint8_t>(track.pid), 0xf0, 10, 0x59, 8,
+                        static_cast<std::uint8_t>(track.language[0]),
+                        static_cast<std::uint8_t>(track.language[1]),
+                        static_cast<std::uint8_t>(track.language[2]), track.subtitling_type,
+                        static_cast<std::uint8_t>(track.composition_page >> 8),
+                        static_cast<std::uint8_t>(track.composition_page),
+                        static_cast<std::uint8_t>(track.ancillary_page >> 8),
+                        static_cast<std::uint8_t>(track.ancillary_page)});
+        const auto length = pmt.size() + 1;
+        pmt[1] = static_cast<std::uint8_t>(0xb0 | (length >> 8));
+        pmt[2] = static_cast<std::uint8_t>(length);
+        AppendCrc(&pmt);
+        return section(pmt, start);
+    }
+    std::vector<std::uint8_t> pes(std::uint64_t pts = 90000)
+    {
+        return {0,
+                0,
+                1,
+                0xbd,
+                0,
+                18,
+                0x80,
+                0x80,
+                5,
+                static_cast<std::uint8_t>(0x21 | ((pts >> 29) & 0x0e)),
+                static_cast<std::uint8_t>(pts >> 22),
+                static_cast<std::uint8_t>(1 | ((pts >> 14) & 0xfe)),
+                static_cast<std::uint8_t>(pts >> 7),
+                static_cast<std::uint8_t>(1 | ((pts << 1) & 0xfe)),
+                0x20,
+                0,
+                0x0f,
+                0x80,
+                0,
+                1,
+                0,
+                1,
+                0xff,
+                0xff}; // Segment body ends in 0xff.
+    }
+    int packet(std::uint16_t pid, unsigned counter, bool start,
+               const std::vector<std::uint8_t> &data)
+    {
+        EXPECT_LE(data.size(), 183u);
+        Packet packet{};
+        packet.fill(0xff);
+        packet[0] = 0x47;
+        packet[1] = static_cast<std::uint8_t>((start ? 0x40 : 0) | (pid >> 8));
+        packet[2] = static_cast<std::uint8_t>(pid);
+        packet[3] = static_cast<std::uint8_t>(0x30 | (counter & 0xf));
+        packet[4] = static_cast<std::uint8_t>(183 - data.size());
+        if (packet[4])
+            packet[5] = 0;
+        std::copy(data.begin(), data.end(), packet.end() - data.size());
+        return iptv_stream_push(&session, packet.data(), packet.size());
+    }
+};
+
+TEST_F(SubtitleStreamTest, DiscoversLanguagePagesAndAssemblesSplitHeadersAcrossRecurringPmt)
+{
+    const std::vector<iptv_stream_subtitle_track_t> tracks{
+        {0x120, 1, 2, "ENG", 0x10}, {0x120, 3, 4, "spa", 0x20}, {0x121, 5, 6, "fra", 0x14}};
+    ASSERT_EQ(subtitles(tracks, true), 0);
+    ASSERT_EQ(fake.subtitle_tracks.size(), 3u);
+    EXPECT_STREQ(fake.subtitle_tracks[0].language, "eng");
+    EXPECT_EQ(fake.subtitle_tracks[1].subtitling_type, 0x20);
+    EXPECT_EQ(fake.subtitle_tracks[1].ancillary_page, 4);
+    const auto bytes = pes();
+    ASSERT_EQ(packet(0x120, 0, true, {bytes.begin(), bytes.begin() + 2}), 0);
+    ASSERT_EQ(packet(0x120, 0, true, {bytes.begin(), bytes.begin() + 2}), 0); // Duplicate.
+    ASSERT_EQ(subtitles(tracks), 0);
+    EXPECT_EQ(fake.subtitle_updates, 1u);
+    ASSERT_EQ(packet(0x120, 1, false, {bytes.begin() + 2, bytes.begin() + 7}), 0);
+    ASSERT_EQ(packet(0x120, 2, false, {bytes.begin() + 7, bytes.end()}), 0);
+    ASSERT_EQ(fake.captions.size(), 2u);
+    EXPECT_EQ(fake.captions[0].bytes, (std::vector<std::uint8_t>{0x0f, 0x80, 0, 1, 0, 1, 0xff}));
+    EXPECT_EQ(fake.captions[0].pts, 1000000u);
+    EXPECT_EQ(fake.captions[1].track.composition_page, 3);
+    EXPECT_EQ(fake.subtitle_resets, 0u);
+    EXPECT_EQ(session.telemetry.duplicate_packets, 1u);
+    EXPECT_EQ(session.telemetry.continuity_errors, 0u);
+    ASSERT_EQ(audio(0x111, 0), 0);
+    EXPECT_EQ(fake.audios, 1u);
+    EXPECT_EQ(fake.videos, 1u);
+    EXPECT_EQ(fake.opens, 1u);
+    ASSERT_EQ(subtitles({tracks[2]}), 0);
+    ASSERT_EQ(packet(0x120, 3, true, bytes), 0);
+    EXPECT_EQ(fake.captions.size(), 2u); // Removed PIDs cannot deliver stale language data.
+    ASSERT_EQ(subtitles({}), 0);
+    EXPECT_TRUE(fake.subtitle_tracks.empty());
+    EXPECT_EQ(fake.subtitle_updates, 3u);
+}
+
+TEST_F(SubtitleStreamTest, BrokenSubtitlesAndPacketLossRecoverWithoutDisablingAudioOrVideo)
+{
+    ASSERT_EQ(subtitles({{0x120, 1, 1, "eng", 0x10}}, true), 0);
+    unsigned counter = 0;
+    auto valid = pes();
+    for (unsigned corruption = 0; corruption < 6; ++corruption)
+    {
+        auto broken = valid;
+        switch (corruption)
+        {
+        case 0:
+            broken[5] = 0;
+            break; // Unbounded private stream is invalid.
+        case 1:
+            broken[14] = 0;
+            break; // Wrong data_identifier.
+        case 2:
+            broken[21] = 100;
+            break; // Segment extends beyond the PES.
+        case 3:
+            broken[9] &= ~1u;
+            break; // Broken PTS marker.
+        case 4:
+            broken[7] = 0;
+            break; // No timed caption.
+        case 5:
+            broken[8] = 255;
+            break; // Optional header extends beyond PES.
+        }
+        ASSERT_EQ(packet(0x120, counter++, true, broken), 0);
+        EXPECT_EQ(fake.captions.size(), corruption);
+        ASSERT_EQ(packet(0x120, counter++, true, valid), 0);
+        EXPECT_EQ(fake.captions.size(), corruption + 1u);
+    }
+    ASSERT_EQ(packet(0x120, counter++, true, {valid.begin(), valid.begin() + 16}), 0);
+    ++counter; // One lost packet discards the incomplete PES and decoder page state.
+    ASSERT_EQ(packet(0x120, counter++, false, {valid.begin() + 16, valid.end()}), 0);
+    EXPECT_EQ(fake.captions.size(), 6u);
+    ASSERT_EQ(packet(0x120, counter++, true, valid), 0);
+    EXPECT_EQ(fake.captions.size(), 7u);
+    EXPECT_EQ(fake.subtitle_resets, 7u);
+    EXPECT_EQ(session.telemetry.continuity_errors, 1u);
+    for (unsigned corruption = 0; corruption < 3; ++corruption)
+    {
+        auto broken = PesPacket(0x120, counter++ & 15, 0xbd, {});
+        if (corruption == 0)
+            broken[3] |= 0x80; // Scrambled captions cannot stop a clear video PID.
+        else if (corruption == 1)
+            broken[3] &= 0x0f; // Reserved adaptation mode.
+        else
+        {
+            broken[3] |= 0x20;
+            broken[4] = 255; // Adaptation extends beyond the TS packet.
+        }
+        ASSERT_EQ(iptv_stream_push(&session, broken.data(), broken.size()), 0);
+    }
+    EXPECT_EQ(fake.subtitle_resets, 10u);
+    ASSERT_EQ(packet(0x120, counter++, true, valid), 0);
+    EXPECT_EQ(fake.captions.size(), 8u);
+    ASSERT_EQ(audio(0x111, 0), 0);
+    const auto video = H264Packet(1, false);
+    ASSERT_EQ(iptv_stream_push(&session, video.data(), video.size()), 0);
+    EXPECT_EQ(fake.audios, 1u);
+    EXPECT_EQ(fake.videos, 2u);
+    EXPECT_EQ(session.telemetry.audio_disabled, 0u);
+    EXPECT_EQ(session.telemetry.state, IPTV_STREAM_STATE_PLAYING);
+}
+
+TEST_F(SubtitleStreamTest, BoundsTracksReusesRemovedPidSlotsAndRetainsContinuityForEveryLanguage)
+{
+    std::vector<iptv_stream_subtitle_track_t> tracks;
+    for (unsigned i = 0; i < 40; ++i)
+        tracks.push_back({0x120 + i, 1, 1, "eng", 0x10});
+    ASSERT_EQ(subtitles(tracks, true), 0);
+    EXPECT_EQ(fake.subtitle_tracks.size(), IPTV_STREAM_MAX_SUBTITLE_TRACKS);
+    for (unsigned i = 0; i < 32; ++i)
+    {
+        ASSERT_EQ(packet(0x120 + i, 0, true, pes()), 0);
+        ASSERT_EQ(packet(0x120 + i, 0, true, pes()), 0);
+    }
+    EXPECT_EQ(fake.captions.size(), 32u);
+    EXPECT_EQ(session.telemetry.duplicate_packets, 32u);
+    for (auto &track : tracks)
+        track.pid += 100;
+    ASSERT_EQ(subtitles(tracks), 0);
+    for (unsigned i = 0; i < 32; ++i)
+    {
+        ASSERT_EQ(packet(0x120 + 100 + i, 0, true, pes()), 0);
+        ASSERT_EQ(packet(0x120 + 100 + i, 0, true, pes()), 0);
+    }
+    EXPECT_EQ(fake.captions.size(), 64u);
+    EXPECT_EQ(session.telemetry.duplicate_packets, 64u);
+    ASSERT_EQ(iptv_stream_discontinuity(&session), 0);
+    EXPECT_EQ(fake.subtitle_resets, 1u);
+    // Reacquire TS sync after a discontinuity before resuming the same PID/counter.
+    ASSERT_EQ(subtitles(tracks, true), 0);
+    ASSERT_EQ(packet(0x120 + 100, 0, true, pes(45000)), 0);
+    ASSERT_EQ(fake.captions.size(), 65u);
+    EXPECT_EQ(fake.captions.back().pts, 500000u);
+}
+
+TEST_F(SubtitleStreamTest, CaptionsShareTheVideoEpochOnBothSidesOfClockWrap)
+{
+    ASSERT_EQ(subtitles({{0x120, 1, 1, "eng", 0x10}, {0x121, 1, 1, "fra", 0x10}}, true), 0);
+    const auto wrap = UINT64_C(1) << 33;
+    const auto usec = [](std::uint64_t pts) { return pts / 90 * 1000 + pts % 90 * 1000 / 90; };
+    auto video = StampedPacket(H264Packet(1, false), wrap - 90000);
+    ASSERT_EQ(iptv_stream_push(&session, video.data(), video.size()), 0);
+    ASSERT_EQ(packet(0x120, 0, true, pes(90000)), 0);
+    ASSERT_EQ(fake.captions.size(), 1u);
+    EXPECT_EQ(fake.captions.back().pts, usec(wrap + 90000));
+    video = StampedPacket(H264Packet(2, false), 45000);
+    ASSERT_EQ(iptv_stream_push(&session, video.data(), video.size()), 0);
+    ASSERT_EQ(packet(0x121, 0, true, pes(wrap - 45000)), 0);
+    EXPECT_EQ(fake.captions.back().pts, usec(wrap - 45000));
+    ASSERT_EQ(packet(0x121, 1, true, pes(90000)), 0);
+    EXPECT_EQ(fake.captions.back().pts, usec(wrap + 90000));
+}
 
 TEST_F(AudioSelectionTest, ChangesOnlyAudioAndRemembersSelectionAcrossProviderReordering)
 {
@@ -415,21 +682,7 @@ TEST_F(AudioSelectionTest, RejectsDuplicateAudioPidsWithoutChangingDecoder)
 
 TEST_F(AudioSelectionTest, AlignsNewAudioWithVideoOnEitherSideOfTransportClockWrap)
 {
-    const auto stamped = [](Packet packet, std::uint64_t pts)
-    {
-        const auto length = static_cast<unsigned>(packet[8]) * 256u + packet[9];
-        std::memmove(packet.data() + 18, packet.data() + 13, length - 3);
-        packet[8] = static_cast<std::uint8_t>((length + 5) >> 8);
-        packet[9] = static_cast<std::uint8_t>(length + 5);
-        packet[11] = 0x80;
-        packet[12] = 5;
-        packet[13] = 0x21 | static_cast<std::uint8_t>((pts >> 29) & 0x0e);
-        packet[14] = static_cast<std::uint8_t>(pts >> 22);
-        packet[15] = 1 | static_cast<std::uint8_t>((pts >> 14) & 0xfe);
-        packet[16] = static_cast<std::uint8_t>(pts >> 7);
-        packet[17] = 1 | static_cast<std::uint8_t>((pts << 1) & 0xfe);
-        return packet;
-    };
+    const auto stamped = StampedPacket;
     const std::uint64_t wrap = UINT64_C(1) << 33;
     ASSERT_EQ(pmt({{0x111, 0x0f, "eng", 0}, {0x112, 0x0f, "spa", 0}}, true), 0);
     for (const auto &packet :
