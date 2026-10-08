@@ -20,7 +20,6 @@
 #include "iptv_native_backend.h"
 #include "iptv_player.h"
 #include "iptv_remote.h"
-#include "iptv_native_backend.h"
 #include "iptv_store.h"
 #include "platform/ps5/audio_out.hpp"
 #include "platform/ps5/display_egl.hpp"
@@ -41,6 +40,7 @@
 
 #include <GL/glcorearb.h>
 
+#include <algorithm>
 #include <cstdarg>
 #include <cstddef>
 #include <cstdint>
@@ -411,6 +411,9 @@ bool run_menu(ptv::Model &model, ptv::Settings *settings, const LastPlayback &la
         std::uint64_t frames = 0;
         std::int64_t previous = sys::monotonic_us();
         std::int64_t last_frame_start = previous;
+        ptv::PortalResolveJob portal_link;
+        bool resolving_portal = false;
+        float portal_age = 0;
         while (!chosen)
         {
             load_wide_faces(); // two flags a frame; a list in another script arrives at any time
@@ -437,7 +440,7 @@ bool run_menu(ptv::Model &model, ptv::Settings *settings, const LastPlayback &la
             }
             InputFrame input = tracker.update(std::span<const PadSample>(samples, count),
                                               static_cast<std::uint64_t>(now));
-            iptv_remote_enable_search(app.accepts_remote_search());
+            iptv_remote_enable_search(!resolving_portal && app.accepts_remote_search());
             iptv_remote_poll();
             if (iptv_remote_take_connected())
                 app.phone_connected();
@@ -460,14 +463,15 @@ bool run_menu(ptv::Model &model, ptv::Settings *settings, const LastPlayback &la
                 input.focus_lost = false;
             }
             char remote_query[IPTV_IME_MAX_TEXT_BYTES];
-            if (iptv_remote_search(remote_query))
+            if (iptv_remote_search(remote_query) && !resolving_portal)
                 app.remote_search(remote_query);
             if (count > 0)
                 g_cross_held = samples[count - 1].connected &&
                                (samples[count - 1].buttons & pad_bits::kCross) != 0;
 
             feedback.clear();
-            app.update(input, dt, feedback);
+            if (!resolving_portal)
+                app.update(input, dt, feedback);
             if (app.take_pair_phone_requested())
                 if (!iptv_remote_begin_pairing())
                     app.remote_notice("Phone pairing is unavailable");
@@ -503,9 +507,53 @@ bool run_menu(ptv::Model &model, ptv::Settings *settings, const LastPlayback &la
                     iptv_remote_set_volume(static_cast<unsigned>(settings->volume));
                 }
             }
-            chosen = model.take_play_request(request);
+            chosen = !resolving_portal && model.take_play_request(request);
+            if (chosen && !request->portal_command.empty())
+            {
+                // Leave the menu's picture and controller alive while the
+                // authenticated portal turns its command into a current URL.
+                model.close();
+                chosen = false;
+                portal_age = 0;
+                resolving_portal = portal_link.start(request->portal, request->portal_command);
+                if (!resolving_portal)
+                {
+                    model.open();
+                    model.report_playback_failure(request->channel_id.c_str(),
+                                                  request->channel_name.c_str(), -1, 0,
+                                                  "The portal connection could not start.");
+                }
+            }
+            if (resolving_portal)
+            {
+                portal_age += dt;
+                const bool cancelled =
+                    input.is_pressed(Action::back) || input.is_pressed(Action::menu);
+                if (cancelled || portal_link.done())
+                {
+                    portal_link.cancel();
+                    resolving_portal = false;
+                    if (!cancelled && portal_link.succeeded())
+                    {
+                        request->urls = {portal_link.url()};
+                        chosen = true;
+                    }
+                    else
+                    {
+                        model.open();
+                        if (!cancelled)
+                            model.report_playback_failure(request->channel_id.c_str(),
+                                                          request->channel_name.c_str(), -1, 1,
+                                                          portal_link.error().c_str());
+                        *request = {};
+                    }
+                }
+            }
 
-            app.draw(frame);
+            if (resolving_portal)
+                app.draw_tuning(frame, request->channel_id, std::min(1.0f, portal_age / 0.3f));
+            else
+                app.draw(frame);
             renderer.begin();
             renderer.backdrop(frame.backdrop);
             renderer.draw(frame.scene);

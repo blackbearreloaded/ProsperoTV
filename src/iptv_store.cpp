@@ -21,7 +21,7 @@ namespace
 {
 
 // The version written, and the oldest one still read.
-constexpr int kSchemaVersion = 3;
+constexpr int kSchemaVersion = 4;
 constexpr int kOldestSchemaVersion = 1;
 constexpr int kPlaybackSchemaVersion = 1;
 
@@ -127,6 +127,7 @@ bool ValidChannel(const ChannelView &channel, const StoreLimits &limits)
         channel.catchup,
         channel.catchup_source,
         channel.catchup_days,
+        channel.portal_command,
     };
     for (const std::string_view field : fields)
     {
@@ -160,13 +161,13 @@ bool CreateSchema(sqlite3 *database)
         "tvg_name TEXT NOT NULL,tvg_logo TEXT NOT NULL,group_title TEXT NOT NULL,"
         "tvg_country TEXT NOT NULL,tvg_language TEXT NOT NULL,user_agent TEXT NOT NULL,"
         "referrer TEXT NOT NULL,catchup TEXT NOT NULL,catchup_source TEXT NOT NULL,catchup_days "
-        "TEXT NOT NULL);"
+        "TEXT NOT NULL,portal_command TEXT NOT NULL);"
         "CREATE TABLE guide_urls(url TEXT NOT NULL);"
         "CREATE TABLE alternate_urls(channel INTEGER NOT NULL,position INTEGER NOT NULL,"
         "url TEXT NOT NULL,PRIMARY KEY(channel,position)) WITHOUT ROWID;"
         "CREATE TABLE alternate_groups(channel INTEGER NOT NULL,position INTEGER NOT NULL,"
         "value TEXT NOT NULL,PRIMARY KEY(channel,position)) WITHOUT ROWID;"
-        "PRAGMA user_version=3;");
+        "PRAGMA user_version=4;");
 }
 
 bool CreatePlaybackSchema(sqlite3 *database)
@@ -211,8 +212,8 @@ bool InsertCatalog(sqlite3 *database, const Catalog &catalog, const StoreLimits 
         Prepare(database,
                 "INSERT INTO channels(position,id,source_line,name,url,tvg_id,tvg_name,"
                 "tvg_logo,group_title,tvg_country,tvg_language,user_agent,referrer,catchup,catchup_"
-                "source,catchup_days)"
-                "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                "source,catchup_days,portal_command)"
+                "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 &channel_statement) &&
         Prepare(database, "INSERT INTO alternate_urls(channel,position,url) VALUES(?,?,?)",
                 &url_statement) &&
@@ -270,6 +271,7 @@ bool InsertCatalog(sqlite3 *database, const Catalog &catalog, const StoreLimits 
              BindCatalogText(channel_statement, 14, channel.catchup) &&
              BindCatalogText(channel_statement, 15, channel.catchup_source) &&
              BindCatalogText(channel_statement, 16, channel.catchup_days) &&
+             BindCatalogText(channel_statement, 17, channel.portal_command) &&
              sqlite3_step(channel_statement) == SQLITE_DONE &&
              InsertAlternates(url_statement, index, channel.alternate_urls,
                               limits.max_alternate_urls, limits.max_url_bytes) &&
@@ -533,7 +535,7 @@ static StoreStatus LoadCatalogFile(const std::string &path, Catalog *catalog,
         "SELECT id,source_line,name,url,tvg_id,tvg_name,tvg_logo,group_title,"
         "tvg_country,tvg_language,user_agent,referrer" +
         std::string(version >= 3 ? ",catchup,catchup_source,catchup_days" : "") +
-        " FROM channels ORDER BY position";
+        std::string(version >= 4 ? ",portal_command" : "") + " FROM channels ORDER BY position";
     ok = ok && Prepare(database, query.c_str(), &statement);
     while (ok && sqlite3_step(statement) == SQLITE_ROW)
     {
@@ -557,6 +559,8 @@ static StoreStatus LoadCatalogFile(const std::string &path, Catalog *catalog,
             channel.catchup_source = ColumnText(statement, 13);
             channel.catchup_days = ColumnText(statement, 14);
         }
+        if (version >= 4)
+            channel.portal_command = ColumnText(statement, 15);
         ok = loaded.size() < count && ValidChannel(channel, limits) && loaded.Add(channel);
     }
     sqlite3_finalize(statement);

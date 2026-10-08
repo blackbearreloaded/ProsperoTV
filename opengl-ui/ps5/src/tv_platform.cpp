@@ -68,16 +68,17 @@ void network_cancel()
 }
 
 iptv::http::FetchResult fetch(const char *url, char *buffer, std::size_t capacity,
-                              std::size_t max_bytes, const iptv::http::RequestControl *control)
+                              std::size_t max_bytes, const iptv::http::RequestControl *control,
+                              const iptv::http::RequestHeaders *headers)
 {
-    return iptv::http::GetM3u(url, buffer, capacity, max_bytes, nullptr, control);
+    return iptv::http::GetM3u(url, buffer, capacity, max_bytes, headers, control);
 }
 
 iptv::http::FetchResult fetch_list(const char *url, const iptv::http::ListSink &sink,
-                                   std::size_t max_bytes,
-                                   const iptv::http::RequestControl *control)
+                                   std::size_t max_bytes, const iptv::http::RequestControl *control,
+                                   const iptv::http::RequestHeaders *headers)
 {
-    return iptv::http::GetList(url, sink, max_bytes, nullptr, control);
+    return iptv::http::GetList(url, sink, max_bytes, headers, control);
 }
 
 } // namespace ptv::platform

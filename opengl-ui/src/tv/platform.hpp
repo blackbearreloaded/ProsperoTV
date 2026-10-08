@@ -35,12 +35,13 @@ iptv::http::Status network_init();
 void network_shutdown();
 void network_cancel();
 iptv::http::FetchResult fetch(const char *url, char *buffer, std::size_t capacity,
-                              std::size_t max_bytes, const iptv::http::RequestControl *control);
+                              std::size_t max_bytes, const iptv::http::RequestControl *control,
+                              const iptv::http::RequestHeaders *headers = nullptr);
 // The same download handed to `sink` piece by piece as it arrives and kept
 // nowhere: how a channel list of any size is read.
 iptv::http::FetchResult fetch_list(const char *url, const iptv::http::ListSink &sink,
-                                   std::size_t max_bytes,
-                                   const iptv::http::RequestControl *control);
+                                   std::size_t max_bytes, const iptv::http::RequestControl *control,
+                                   const iptv::http::RequestHeaders *headers = nullptr);
 // Artwork has an independent connection and cancellation lifetime, so a slow
 // logo cannot interrupt a source refresh or programme guide download.
 bool fetch_image(const char *url, std::vector<std::uint8_t> *bytes,

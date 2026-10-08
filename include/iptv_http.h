@@ -78,7 +78,14 @@ struct RequestHeaders
 {
     const char *user_agent = nullptr;
     const char *referrer = nullptr;
+    const char *cookie = nullptr;
+    const char *authorization = nullptr;
 };
+
+// Portal credentials belong only to the origin that was asked. Redirects
+// may still reach a CDN, but must not forward a MAC cookie or bearer token.
+RequestHeaders HeadersForUrl(const char *original, const char *target,
+                             const RequestHeaders &headers);
 
 struct RequestControl
 {
@@ -126,7 +133,8 @@ inline ListBuffer AllocateListBuffer(std::size_t wanted = kHardMaxPlaylistBytes,
                                      std::size_t least = 1024u * 1024u)
 {
     ListBuffer buffer;
-    for (std::size_t room = wanted < least ? least : wanted;; room = room / 2u < least ? least : room / 2u)
+    for (std::size_t room = wanted < least ? least : wanted;;
+         room = room / 2u < least ? least : room / 2u)
     {
         buffer.bytes.reset(new (std::nothrow) char[room + 1u]);
         if (buffer.bytes)

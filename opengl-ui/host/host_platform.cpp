@@ -39,6 +39,7 @@ struct Network
     bool reachable = false;
     std::string playlist_path;
     std::unordered_map<std::string, std::string> responses;
+    std::vector<host::RequestRecord> requests;
     unsigned delay_ms = 0;
     std::size_t piece_bytes = iptv::http::kListPieceBytes;
     std::atomic<bool> cancelled{false};
@@ -63,6 +64,13 @@ Update g_update;
 // 0: the PC's own clock. The catalog store stamps its files with that clock,
 // so a test moves this one forward from it.
 std::atomic<std::uint64_t> g_unix_time{0};
+
+void record_request(const char *url, const iptv::http::RequestHeaders *headers)
+{
+    const std::lock_guard<std::mutex> lock(g_network.mutex);
+    g_network.requests.push_back({url ? url : "", headers && headers->cookie ? headers->cookie : "",
+                                  headers && headers->authorization ? headers->authorization : ""});
+}
 
 void request(const char *title, iptv_ime_result_fn callback, void *user_data)
 {
@@ -132,6 +140,12 @@ int fetch_count()
     return g_network.fetches.load();
 }
 
+std::vector<RequestRecord> requests()
+{
+    const std::lock_guard<std::mutex> lock(g_network.mutex);
+    return g_network.requests;
+}
+
 std::size_t delivered_bytes()
 {
     return g_network.delivered.load();
@@ -172,6 +186,7 @@ void reset()
     {
         const std::lock_guard<std::mutex> lock(g_network.mutex);
         g_network.responses.clear();
+        g_network.requests.clear();
     }
     set_network_piece(0);
     g_network.fetches.store(0);
@@ -324,8 +339,10 @@ bool fetch_image(const char *url, std::vector<std::uint8_t> *bytes,
 }
 
 iptv::http::FetchResult fetch(const char *url, char *buffer, std::size_t capacity,
-                              std::size_t max_bytes, const iptv::http::RequestControl *control)
+                              std::size_t max_bytes, const iptv::http::RequestControl *control,
+                              const iptv::http::RequestHeaders *headers)
 {
+    record_request(url, headers);
     g_network.fetches.fetch_add(1);
     bool reachable = false;
     std::string playlist_path;
@@ -364,8 +381,10 @@ iptv::http::FetchResult fetch(const char *url, char *buffer, std::size_t capacit
 }
 
 iptv::http::FetchResult fetch_list(const char *url, const iptv::http::ListSink &sink,
-                                   std::size_t max_bytes, const iptv::http::RequestControl *control)
+                                   std::size_t max_bytes, const iptv::http::RequestControl *control,
+                                   const iptv::http::RequestHeaders *headers)
 {
+    record_request(url, headers);
     g_network.fetches.fetch_add(1);
     bool reachable = false;
     std::string playlist_path;

@@ -28,6 +28,29 @@ TEST(IptvHttpTest, DetectsGeoIpBlockCaseInsensitively)
               "unavailable in your region (GeoIP blocked; HTTP 403)");
 }
 
+TEST(IptvHttpTest, RedirectsKeepPortalCredentialsOnlyOnTheOriginalOrigin)
+{
+    const iptv::http::RequestHeaders headers{"ProsperoTV", "https://portal.invalid/c/",
+                                             "mac=00:11:22:33:44:55", "Bearer token"};
+    for (const auto target : {"https://portal.invalid/other", "HTTPS://PORTAL.invalid:443/other"})
+    {
+        const auto kept =
+            iptv::http::HeadersForUrl("https://portal.invalid/server/load.php", target, headers);
+        EXPECT_EQ(kept.cookie, headers.cookie);
+        EXPECT_EQ(kept.authorization, headers.authorization);
+    }
+    for (const auto target :
+         {"http://portal.invalid/other", "https://cdn.invalid/stream",
+          "https://portal.invalid:444/stream", "https://portal.invalid.evil/", "file:///other"})
+    {
+        const auto kept =
+            iptv::http::HeadersForUrl("https://portal.invalid/server/load.php", target, headers);
+        EXPECT_EQ(kept.cookie, nullptr);
+        EXPECT_EQ(kept.authorization, nullptr);
+        EXPECT_EQ(kept.user_agent, headers.user_agent);
+    }
+}
+
 TEST(IptvHttpTest, DoesNotGuessThatEveryForbiddenResponseIsGeographic)
 {
     EXPECT_EQ(Describe(iptv::http::Status::http_status_error, 403, 0, "Forbidden"),

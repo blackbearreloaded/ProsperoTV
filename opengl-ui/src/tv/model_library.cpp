@@ -41,11 +41,11 @@ void Model::load_library()
             notify(Level::warning, "A source could not be imported");
     sources_ = library_.sources();
     const auto saved = library_.selected_source();
-    if (saved != 0 && saved_source(saved) != nullptr && saved_source(saved)->kind <= 2)
+    if (saved != 0 && saved_source(saved) != nullptr && saved_source(saved)->kind <= 3)
         selected_source_id_ = saved;
     const auto last = library_.last_channel();
     if (settings.resume_last && last.first != 0 && saved_source(last.first) != nullptr &&
-        saved_source(last.first)->kind <= 2)
+        saved_source(last.first)->kind <= 3)
         selected_source_id_ = last.first;
     if (const auto *source = saved_source(selected_source_id_))
         select_source_record(*source);
@@ -70,6 +70,8 @@ void Model::select_source_record(const SavedSource &source)
         custom_url_ = source.url;
     if (source.kind == 2)
         xtream_ = {source.url, source.username, source.password};
+    if (source.kind == 3)
+        portal_ = {source.url, source.mac};
 }
 
 bool Model::refresh_needed() const
@@ -88,7 +90,7 @@ void Model::use_saved_source(std::int64_t id)
         return;
     }
     const auto *source = saved_source(id);
-    if (source == nullptr || source->kind > 2)
+    if (source == nullptr || source->kind > 3)
         return;
     if (source->kind != 0 && source->url.empty())
     {
@@ -129,12 +131,14 @@ void Model::add_source(iptv::SourceKind kind)
     editing_source_id_ = 0;
     if (kind == iptv::SourceKind::Xtream)
         account_form_ = {};
+    if (kind == iptv::SourceKind::Portal)
+        portal_form_ = {};
 }
 
 void Model::edit_saved_source(std::int64_t id)
 {
     const auto *source = saved_source(id);
-    if (source == nullptr || source->kind == 0 || source->kind > 2 || refreshing() ||
+    if (source == nullptr || source->kind == 0 || source->kind > 3 || refreshing() ||
         !keyboard_ready_)
         return;
     const auto copy = *source;
@@ -146,6 +150,8 @@ void Model::edit_saved_source(std::int64_t id)
     editing_source_id_ = id;
     if (copy.kind == 2)
         account_form_ = {copy.url, copy.username, copy.password};
+    if (copy.kind == 3)
+        portal_form_ = {copy.url, copy.mac};
 }
 
 bool Model::save_source_form(std::string_view url, const iptv::XtreamCredentials *account)
@@ -164,6 +170,11 @@ bool Model::save_source_form(std::string_view url, const iptv::XtreamCredentials
         source.username = account->username;
         source.password = account->password;
     }
+    return commit_source(std::move(source));
+}
+
+bool Model::commit_source(SavedSource source)
+{
     if (!library_.save_source(&source))
     {
         notify(Level::error, "The source could not be saved");
@@ -178,6 +189,47 @@ bool Model::save_source_form(std::string_view url, const iptv::XtreamCredentials
     }
     use_saved_source(source.id);
     return true;
+}
+
+void Model::on_portal_address(const char *text, void *self)
+{
+    if (!self || !text)
+        return;
+    auto &model = *static_cast<Model *>(self);
+    if (!portal_endpoint(text, &model.portal_form_.url))
+    {
+        model.account_step_ = AccountStep::none;
+        model.notify(Level::error, "That portal address cannot be used",
+                     "Enter the provider's HTTP or HTTPS portal address.");
+        return;
+    }
+    model.account_step_ = AccountStep::portal_mac;
+    model.account_prompt_pending_ = true;
+}
+
+void Model::on_portal_mac(const char *text, void *self)
+{
+    if (!self || !text)
+        return;
+    auto &model = *static_cast<Model *>(self);
+    model.account_step_ = AccountStep::none;
+    if (!portal_mac(text, &model.portal_form_.mac))
+    {
+        model.notify(Level::error, "That MAC code cannot be used",
+                     "Use the six pairs supplied by the provider, such as 00:1A:79:12:34:56.");
+        return;
+    }
+    SavedSource source;
+    if (const auto *previous = model.saved_source(model.editing_source_id_))
+        source = *previous;
+    source.id = model.editing_source_id_;
+    source.kind = 3;
+    source.url = model.portal_form_.url;
+    source.mac = model.portal_form_.mac;
+    if (source.name.empty())
+        source.name = "MAC-code portal " + std::to_string(model.sources_.size() - 2);
+    (void)model.commit_source(std::move(source));
+    model.portal_form_ = {};
 }
 
 bool Model::remove_source(std::int64_t id)

@@ -32,6 +32,11 @@ void set_network_response(const std::string &url, const std::string &file);
 void set_network_piece(std::size_t bytes);
 // How many downloads were asked for.
 int fetch_count();
+struct RequestRecord
+{
+    std::string url, cookie, authorization;
+};
+std::vector<RequestRecord> requests();
 // How many bytes of lists were handed over, all downloads together.
 std::size_t delivered_bytes();
 

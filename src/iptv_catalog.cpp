@@ -606,6 +606,7 @@ ChannelView Catalog::operator[](std::size_t index) const
         view.catchup = archive->second[0];
         view.catchup_source = archive->second[1];
         view.catchup_days = archive->second[2];
+        view.portal_command = archive->second[3];
     }
     view.source_line = record.source_line;
     view.playback_status = static_cast<PlaybackStatus>(record.playback);
@@ -658,6 +659,7 @@ bool Catalog::Add(const ChannelView &channel)
         channel.catchup,
         channel.catchup_source,
         channel.catchup_days,
+        channel.portal_command,
     };
     for (const std::string_view text : texts)
         if (text.size() > kMaxTextBytes)
@@ -811,7 +813,8 @@ std::size_t Catalog::MemoryBytes() const
     return storage.blocks.size() * kBlockBytes +
            storage.chunks.size() * kRecordsPerChunk * sizeof(Record) +
            storage.alternates.capacity() * sizeof(Alternate) + storage.ids.Bytes() +
-           (storage.shared.size() + storage.played.size()) * 64u + storage.archives.size() * 80u;
+           (storage.shared.size() + storage.played.size()) * 64u +
+           storage.archives.size() * (sizeof(std::pair<const std::uint32_t, ArchiveFields>) + 32u);
 }
 
 std::string_view Catalog::AlternateText(std::uint32_t node) const
@@ -907,8 +910,9 @@ ChannelView::ChannelView(const Channel &channel)
       tvg_language(channel.tvg_language), http_user_agent(channel.http_user_agent),
       http_referrer(channel.http_referrer), catchup(channel.catchup),
       catchup_source(channel.catchup_source), catchup_days(channel.catchup_days),
-      source_line(channel.source_line), playback_status(channel.playback_status),
-      playback_result(channel.playback_result), playback_checked_unix(channel.playback_checked_unix)
+      portal_command(channel.portal_command), source_line(channel.source_line),
+      playback_status(channel.playback_status), playback_result(channel.playback_result),
+      playback_checked_unix(channel.playback_checked_unix)
 {
 }
 
@@ -932,6 +936,7 @@ Channel ChannelView::Copy() const
     channel.catchup = catchup;
     channel.catchup_source = catchup_source;
     channel.catchup_days = catchup_days;
+    channel.portal_command = portal_command;
     channel.source_line = source_line;
     channel.playback_status = playback_status;
     channel.playback_result = playback_result;

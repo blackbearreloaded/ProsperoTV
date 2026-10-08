@@ -38,7 +38,7 @@ void SourcesScreen::sync()
     ids_.clear();
     for (const auto &source : model.saved_sources())
     {
-        if (source.kind > 2)
+        if (source.kind > 3)
             continue;
         ui::ListItem row;
         row.title = source.name;
@@ -58,6 +58,11 @@ void SourcesScreen::sync()
     account.subtitle = "Server, user name and password";
     rows.push_back(std::move(account));
     ids_.push_back(-2);
+    ui::ListItem portal;
+    portal.title = "Add another MAC-code portal";
+    portal.subtitle = "Stalker / Ministra address and MAC code";
+    rows.push_back(std::move(portal));
+    ids_.push_back(-3);
     list_.set_items(std::move(rows));
     list_.set_focus(std::clamp(focus, 0, static_cast<int>(ids_.size()) - 1), true);
     seen_revision_ = model.revision();

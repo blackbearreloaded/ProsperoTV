@@ -8,6 +8,8 @@
 #include <cctype>
 #include <cstdio>
 #include <cstring>
+#include <string>
+#include <string_view>
 #include <time.h>
 
 namespace iptv::http
@@ -417,6 +419,33 @@ bool BuildRedirectCandidate(const char *base_url, const char *location, char *ca
 bool IsSupportedPlaylistUrl(const char *url)
 {
     return IsSupportedUrl(url);
+}
+
+RequestHeaders HeadersForUrl(const char *original, const char *target,
+                             const RequestHeaders &headers)
+{
+    const auto origin = [](const char *url) -> std::string
+    {
+        if (!IsSupportedUrl(url))
+            return {};
+        const std::string_view value(url);
+        const auto start = value.find("://") + 3;
+        auto authority = std::string(value.substr(0, value.find_first_of("/?#", start)));
+        for (char &c : authority)
+            c = LowerAscii(c);
+        const std::string_view port = authority.starts_with("https:") ? ":443" : ":80";
+        if (authority.ends_with(port))
+            authority.resize(authority.size() - port.size());
+        return authority;
+    };
+    RequestHeaders result = headers;
+    const auto from = origin(original);
+    if (from.empty() || from != origin(target))
+    {
+        result.cookie = nullptr;
+        result.authorization = nullptr;
+    }
+    return result;
 }
 
 Status ResolveRedirectUrl(const char *base_url, const char *location, char *resolved_url,
@@ -839,6 +868,19 @@ int ConfigureRequest(int request, const char *accept, std::uint32_t receive_time
             return -1;
         result = sceHttpAddRequestHeader(request, "Referer", headers->referrer, kHeaderOverwrite);
     }
+    if (result >= 0 && headers && headers->cookie && *headers->cookie)
+    {
+        if (!SafeHeaderValue(headers->cookie))
+            return -1;
+        result = sceHttpAddRequestHeader(request, "Cookie", headers->cookie, kHeaderOverwrite);
+    }
+    if (result >= 0 && headers && headers->authorization && *headers->authorization)
+    {
+        if (!SafeHeaderValue(headers->authorization))
+            return -1;
+        result = sceHttpAddRequestHeader(request, "Authorization", headers->authorization,
+                                         kHeaderOverwrite);
+    }
     return result;
 }
 
@@ -873,10 +915,12 @@ FetchResult OpenListRequest(RedirectHistory *history, const RequestHeaders *head
             CloseRequest(*connection, *request);
             return Failure(Status::cancelled);
         }
+        const auto scoped = headers ? HeadersForUrl(history->urls[0], history->Current(), *headers)
+                                    : RequestHeaders{};
         int result = ConfigureRequest(*request,
                                       "application/vnd.apple.mpegurl, application/x-mpegURL, "
                                       "audio/mpegurl, text/plain, */*",
-                                      kReceiveTimeoutUsec, headers);
+                                      kReceiveTimeoutUsec, &scoped);
         if (result >= 0)
             result = sceHttpSendRequest(*request, nullptr, 0);
         if (result >= 0)
@@ -1199,8 +1243,10 @@ Status OpenStream(const char *url, const char *accept, StreamRequest *stream,
             CloseStream(stream);
             return Status::request_failed;
         }
+        const auto scoped =
+            headers ? HeadersForUrl(url, history.Current(), *headers) : RequestHeaders{};
         int result =
-            ConfigureRequest(stream->request, accepted, kStreamReceiveTimeoutUsec, headers);
+            ConfigureRequest(stream->request, accepted, kStreamReceiveTimeoutUsec, &scoped);
         if (result >= 0)
             result = sceHttpSendRequest(stream->request, nullptr, 0);
         if (result >= 0)

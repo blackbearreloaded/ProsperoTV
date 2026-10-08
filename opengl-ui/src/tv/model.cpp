@@ -44,6 +44,8 @@ const char *source_name(iptv::SourceKind source)
         return "your playlist";
     case iptv::SourceKind::Xtream:
         return "your Xtream account";
+    case iptv::SourceKind::Portal:
+        return "your MAC-code portal";
     case iptv::SourceKind::BuiltIn:
         break;
     }
@@ -183,6 +185,8 @@ std::string Model::cache_path(iptv::SourceKind source) const
         return cache_dir_ + "/prosperotv-custom-catalog.sqlite3";
     case iptv::SourceKind::Xtream:
         return cache_dir_ + "/prosperotv-xtream-catalog.sqlite3";
+    case iptv::SourceKind::Portal:
+        return cache_dir_ + "/prosperotv-source-4.sqlite3";
     case iptv::SourceKind::BuiltIn:
         break;
     }
@@ -197,6 +201,8 @@ std::uint64_t Model::source_id(iptv::SourceKind source) const
         return iptv::CustomSourceId(custom_url_);
     case iptv::SourceKind::Xtream:
         return iptv::XtreamSourceId(xtream_);
+    case iptv::SourceKind::Portal:
+        return portal_source_id(portal_);
     case iptv::SourceKind::BuiltIn:
         break;
     }
@@ -228,6 +234,8 @@ bool Model::is_set_up(iptv::SourceKind source) const
         return !custom_url_.empty();
     case iptv::SourceKind::Xtream:
         return xtream_ready();
+    case iptv::SourceKind::Portal:
+        return !portal_.url.empty() && !portal_.mac.empty();
     case iptv::SourceKind::BuiltIn:
         break;
     }
@@ -768,6 +776,13 @@ bool Model::play(unsigned catalog_index)
     play_request_.user_agent = channel.http_user_agent;
     play_request_.referrer = channel.http_referrer;
     play_request_.source_id = channel.source_id;
+    if (active_source_ == iptv::SourceKind::Portal)
+    {
+        play_request_.portal = portal_;
+        play_request_.portal_command = channel.portal_command;
+        if (channel.portal_command.empty())
+            return false;
+    }
     play_request_.reconnect_live = active_source_ == iptv::SourceKind::Xtream;
     play_requested_ = !play_request_.urls.empty();
     diag::event("play asked: \"%s\" id=%s addresses=%zu source=%d own user agent=%s referrer=%s",
@@ -897,6 +912,13 @@ void Model::edit_source(iptv::SourceKind source)
         return;
     }
     editing_source_id_ = static_cast<int>(source) + 1;
+    if (source == iptv::SourceKind::Portal)
+    {
+        portal_form_ = portal_;
+        account_step_ = AccountStep::portal_address;
+        account_prompt_pending_ = true;
+        return;
+    }
     if (source == iptv::SourceKind::Custom)
     {
         iptv_ime_request_prompt(custom_url_.c_str(), "Playlist address",
@@ -952,6 +974,15 @@ void Model::continue_account_form()
     case AccountStep::password:
         iptv_ime_request_password("Xtream password (3 of 3)", "Password",
                                   IPTV_IME_BUFFER_CHARACTERS, &Model::on_account_password, this);
+        break;
+    case AccountStep::portal_address:
+        iptv_ime_request_prompt(portal_form_.url.c_str(), "Portal address (1 of 2)",
+                                "http(s)://provider.example/stalker_portal/c/",
+                                IPTV_IME_BUFFER_CHARACTERS, &Model::on_portal_address, this);
+        break;
+    case AccountStep::portal_mac:
+        iptv_ime_request_prompt(portal_form_.mac.c_str(), "Portal MAC code (2 of 2)",
+                                "00:1A:79:12:34:56", 17, &Model::on_portal_mac, this);
         break;
     case AccountStep::none:
         break;
@@ -1041,8 +1072,9 @@ void Model::refresh()
     refresh_queued_ = false;
     if (!is_set_up(active_source_))
     {
-        if (active_source_ == iptv::SourceKind::Xtream)
-            edit_source(iptv::SourceKind::Xtream);
+        if (active_source_ == iptv::SourceKind::Xtream ||
+            active_source_ == iptv::SourceKind::Portal)
+            edit_source(active_source_);
         return;
     }
 
@@ -1053,6 +1085,7 @@ void Model::refresh()
     refresh_cache_path_ = cache_path(active_source_);
     refresh_source_id_ = source_id(active_source_);
     refresh_account_ = account ? xtream_ : iptv::XtreamCredentials{};
+    refresh_portal_ = active_source_ == iptv::SourceKind::Portal ? portal_ : PortalCredentials{};
     const SourceHealth before = health_[static_cast<unsigned>(active_source_)];
     health_[static_cast<unsigned>(active_source_)] = SourceHealth::refreshing;
 
@@ -1125,7 +1158,15 @@ void Model::run_refresh()
                     std::memory_order_acquire);
             },
             this};
-        if (refresh_source_ == iptv::SourceKind::Xtream)
+        if (refresh_source_ == iptv::SourceKind::Portal)
+        {
+            PortalClient client(refresh_portal_, &control);
+            const bool ok = client.load(&pending_catalog_, &pending_report_, &refresh_count_);
+            pending_fetch_.status =
+                ok ? iptv::http::Status::ok : iptv::http::Status::request_failed;
+            pending_account_message_ = client.error();
+        }
+        else if (refresh_source_ == iptv::SourceKind::Xtream)
         {
             // The sign-in and the categories are small and read whole.
             iptv::http::ListBuffer response =
@@ -1365,8 +1406,10 @@ void Model::consume_refresh()
     else
     {
         const std::string problem =
-            fetch_problem(pending_network_, pending_fetch_, account, pending_account_,
-                          pending_account_message_, pending_report_.skipped);
+            refresh_source_ == iptv::SourceKind::Portal && !pending_account_message_.empty()
+                ? pending_account_message_
+                : fetch_problem(pending_network_, pending_fetch_, account, pending_account_,
+                                pending_account_message_, pending_report_.skipped);
         if (catalog_loaded_)
         {
             health_[source] = SourceHealth::stale;

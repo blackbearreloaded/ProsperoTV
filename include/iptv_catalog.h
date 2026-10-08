@@ -100,6 +100,8 @@ struct Channel
     std::string catchup;
     std::string catchup_source;
     std::string catchup_days;
+    // Opaque portal command sent only to the provider's create_link API.
+    std::string portal_command;
     std::uint32_t source_line = 0;
     PlaybackStatus playback_status = PlaybackStatus::unknown;
     int playback_result = 0;
@@ -189,6 +191,7 @@ struct ChannelView
     std::string_view catchup;
     std::string_view catchup_source;
     std::string_view catchup_days;
+    std::string_view portal_command;
     std::uint32_t source_line = 0;
     PlaybackStatus playback_status = PlaybackStatus::unknown;
     int playback_result = 0;
@@ -229,6 +232,7 @@ class Catalog
         catchup,
         catchup_source,
         catchup_days,
+        portal_command,
         count,
     };
 

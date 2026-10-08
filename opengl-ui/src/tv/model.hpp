@@ -17,6 +17,7 @@
 #include "tv/channel_text.hpp"
 #include "tv/library.hpp"
 #include "tv/guide.hpp"
+#include "tv/portal.hpp"
 
 #include <array>
 #include <atomic>
@@ -41,6 +42,8 @@ struct PlayRequest
     std::uint64_t source_id = 0;
     bool reconnect_live = false;
     bool record_channel_result = true;
+    PortalCredentials portal;
+    std::string portal_command;
 };
 
 // The lists a catalog is browsed by.
@@ -108,7 +111,7 @@ class Model
 {
   public:
     static constexpr unsigned kFacetMax = CatalogIndex::kFacetMax;
-    static constexpr unsigned kSourceCount = 3;
+    static constexpr unsigned kSourceCount = 4;
 
     // data_dir is where the app keeps its files: the title's own storage or
     // /data/prosperotv/config on the console, any folder on a PC. cache_dir
@@ -414,6 +417,8 @@ class Model
         server,
         username,
         password,
+        portal_address,
+        portal_mac,
     };
 
     std::string path(const char *name) const;
@@ -440,6 +445,9 @@ class Model
     void save_account_receipt() const;
     void load_library();
     bool save_source_form(std::string_view url, const iptv::XtreamCredentials *account);
+    bool commit_source(SavedSource source);
+    static void on_portal_address(const char *text, void *self);
+    static void on_portal_mac(const char *text, void *self);
     void select_source_record(const SavedSource &source);
     void mark_visibility();
     bool refresh_needed() const;
@@ -506,6 +514,7 @@ class Model
     std::string custom_url_;
     iptv::XtreamCredentials xtream_;
     iptv::XtreamCredentials account_form_;
+    PortalCredentials portal_, portal_form_, refresh_portal_;
     AccountStep account_step_ = AccountStep::none;
     bool account_prompt_pending_ = false;
 
