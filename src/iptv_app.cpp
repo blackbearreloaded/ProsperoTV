@@ -420,6 +420,8 @@ const char *FetchStatusName(iptv::http::Status status)
         return "redirect failed";
     case iptv::http::Status::cancelled:
         return "request cancelled";
+    case iptv::http::Status::stopped:
+        return "request stopped";
     case iptv::http::Status::ok:
         return "ok";
     }

@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "iptv_player.h"
-#if IPTV_PROBE
+#if IPTV_PROBE || IPTV_NETWORK_COMPAT
 #include <curl/curl.h>
 #include <pwd.h>
 #include <errno.h>
@@ -22,7 +22,7 @@ extern "C" int getpwuid_r(uid_t, struct passwd *, char *, size_t, struct passwd 
         *result = nullptr;
     return 0;
 }
-// OpenSSL links its DTLS module, but this probe only allows HTTP/HTTPS over TCP.
+// OpenSSL links its DTLS module, but HTTPS uses TCP.
 // Unsupported datagram batching must fail explicitly, never pretend to succeed.
 extern "C" ssize_t recvmmsg(int, struct mmsghdr *, size_t, int, const struct timespec *)
 {
