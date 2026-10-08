@@ -95,6 +95,7 @@ __asm__(".weak ZSTD_trace_decompress_begin\n"
 #include "iptv_native_backend.h"
 #include "iptv_stream.h"
 #include "iptv_webm.h"
+#include "iptv_media.h"
 
 #include <atomic>
 #include <cstdarg>
@@ -1800,6 +1801,61 @@ int RunHls(const char *source_url, StreamRunner *runner, std::uint8_t *read_buff
     return result;
 }
 
+int RunContainer(const char *url, StreamRunner *runner, const iptv::http::RequestHeaders *headers)
+{
+    struct File
+    {
+        const char *url;
+        StreamRunner *runner;
+        iptv::http::RequestHeaders headers;
+        iptv::http::StreamRequest request{};
+        std::int64_t position = 0, size = -1;
+        ~File()
+        {
+            iptv::http::CloseStream(&request);
+        }
+        int read(std::uint8_t *buffer, int bytes)
+        {
+            if (size >= 0 && position == size)
+                return 0;
+            if (!request.open)
+            {
+                headers.byte_offset = position;
+                if (iptv::http::OpenStream(url, "video/mp4, video/x-matroska, */*", &request,
+                                           &headers) != iptv::http::Status::ok)
+                    return -1;
+                size = request.size;
+            }
+            const int count =
+                iptv::http::ReadStream(&request, buffer, static_cast<std::size_t>(bytes));
+            if (count > 0)
+                position += count;
+            return count;
+        }
+    } file{url, runner, headers ? *headers : iptv::http::RequestHeaders{}};
+    const iptv::MediaInput input{&file, [](void *self, std::uint8_t *buffer, int bytes)
+                                 { return static_cast<File *>(self)->read(buffer, bytes); },
+                                 [](void *self, std::int64_t at)
+                                 {
+                                     auto &f = *static_cast<File *>(self);
+                                     iptv::http::CloseStream(&f.request);
+                                     return f.position = at;
+                                 },
+                                 [](void *self) { return static_cast<File *>(self)->size; },
+                                 [](void *self)
+                                 { return static_cast<File *>(self)->runner->StopRequested(); }};
+    const iptv::MediaOutput output{
+        runner, [](void *self, const std::uint8_t *bytes, std::size_t count)
+        { return static_cast<StreamRunner *>(self)->Push(bytes, count) == IPTV_STREAM_OK; }};
+    std::string error;
+    const int result = iptv::ReadMedia(input, output, &error);
+    if (result < 0)
+        SetLastPlaybackError("%s", error.c_str());
+    if (result != 0)
+        return result;
+    return runner->Finish() == IPTV_STREAM_OK && runner->HasPresentedVideo() ? 0 : -1;
+}
+
 int RunDirect(const char *url, StreamRunner *runner, std::uint8_t *read_buffer, char *playlist_data,
               const iptv::http::RequestHeaders *headers, bool reconnect_live)
 {
@@ -1865,6 +1921,15 @@ int RunDirect(const char *url, StreamRunner *runner, std::uint8_t *read_buffer, 
         {
             iptv::http::CloseStream(&request);
             return RunHls(request.effective_url, runner, read_buffer, playlist_data, headers);
+        }
+        if (!UrlLooksLikeWebm(request.effective_url) &&
+            iptv::LooksLikeMedia(read_buffer, static_cast<std::size_t>(first)))
+        {
+            const std::string media_url = request.effective_url;
+            iptv::http::CloseStream(&request);
+            if (runner->IsWebm() && !runner->Start())
+                return -1;
+            return RunContainer(media_url.c_str(), runner, headers);
         }
         if (UrlLooksLikeWebm(request.effective_url) ||
             BufferLooksLikeWebm(read_buffer, static_cast<std::size_t>(first)))

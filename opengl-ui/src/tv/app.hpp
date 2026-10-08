@@ -11,6 +11,7 @@
 #include "tv/update_sheet.hpp"
 #include "tv/library_sheet.hpp"
 #include "tv/guide_sheet.hpp"
+#include "tv/vod_screen.hpp"
 #include "ui/components/dialog.hpp"
 #include "ui/components/form.hpp"
 #include "ui/components/tabs.hpp"
@@ -140,6 +141,7 @@ class App
         kLive,
         kFavorites,
         kSources,
+        kVod,
         kSettings,
         kAbout,
         kTabCount,
@@ -169,6 +171,7 @@ class App
     Shared shared_;
     BrowseScreen browse_;
     SourcesScreen sources_;
+    VodScreen vod_;
     SearchSheet search_;
     LibrarySheet library_sheet_;
     GuideSheet guide_sheet_;

@@ -18,6 +18,7 @@
 #include "tv/library.hpp"
 #include "tv/guide.hpp"
 #include "tv/portal.hpp"
+#include "tv/vod.hpp"
 
 #include <array>
 #include <atomic>
@@ -105,6 +106,9 @@ struct ViewState
     Group live_group = Group::all;
     std::string focused_channel; // its id
     int focused_source = 0;
+    int vod_kind = -1, vod_focus = 0;
+    bool vod_all = false;
+    std::string vod_category, vod_series, vod_series_name, vod_series_cover, vod_query;
 };
 
 class Model
@@ -174,6 +178,16 @@ class Model
     void edit_saved_source(std::int64_t id);
     bool remove_source(std::int64_t id);
     bool set_schedule(std::int64_t id, RefreshSchedule schedule);
+    VodLibrary &vod()
+    {
+        return vod_;
+    }
+    const VodLibrary &vod() const
+    {
+        return vod_;
+    }
+    bool play_vod(unsigned index);
+    bool ask_vod_query();
 
     // ---- the catalog ----
     bool has_catalog() const
@@ -223,11 +237,11 @@ class Model
     // European ones: the faces for them are large, and loaded only when asked for.
     bool uses_east_asian() const
     {
-        return index_.east_asian;
+        return index_.east_asian || vod_.east_asian();
     }
     bool uses_korean() const
     {
-        return index_.korean;
+        return index_.korean || vod_.korean();
     }
     // Changes whenever the visible list may have changed.
     unsigned revision() const
@@ -458,6 +472,7 @@ class Model
     void run_guide();
 
     static void on_query(const char *text, void *self);
+    static void on_vod_query(const char *text, void *self);
     static void on_custom_url(const char *text, void *self);
     static void on_account_server(const char *text, void *self);
     static void on_account_username(const char *text, void *self);
@@ -480,6 +495,7 @@ class Model
     bool hide_failed_ = false;
     bool resume_attempted_ = false;
     Guide guide_, pending_guide_;
+    VodLibrary vod_;
     void *guide_thread_ = nullptr;
     std::atomic<bool> guide_done_{false}, guide_stop_{false};
     std::vector<std::string> guide_urls_;

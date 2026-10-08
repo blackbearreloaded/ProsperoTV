@@ -21,7 +21,7 @@ APP_DEFINITIONS := GL_GLEXT_PROTOTYPES=1 IPTV_AUTOTEST_ENABLED=$(IPTV_AUTOTEST) 
 APP_DEFINITIONS += IPTV_REMOTE_CAPTURE=$(IPTV_REMOTE_CAPTURE)
 APP_INCLUDE_PATHS := src src/kit include vendor/qrcodegen $(OPENGL_SDK)/include $(FFMPEG)/include $(EXPAT)/include
 # The OpenGL link group brings the C++ runtime (libc++, libc++abi, libunwind).
-APP_STATIC_ARCHIVES := $(EXPAT)/lib/libexpat.a $(FFMPEG)/lib/libavcodec.a $(FFMPEG)/lib/libswresample.a \
+APP_STATIC_ARCHIVES := $(EXPAT)/lib/libexpat.a $(FFMPEG)/lib/libavformat.a $(FFMPEG)/lib/libavcodec.a $(FFMPEG)/lib/libswresample.a \
 	$(FFMPEG)/lib/libavutil.a .deps/ps5-opengl/libps5opengl-group.a
 APP_IMPORT_STUBS := $(OPENGL_SDK)/lib/libSceAgc.so $(OPENGL_SDK)/lib/libSceAgcDriver.so
 APP_RUNTIME_MODULES ?=

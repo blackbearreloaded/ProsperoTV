@@ -360,6 +360,7 @@ bool Model::open()
 
 void Model::close()
 {
+    vod_.stop();
     stop_guide();
     stop_requested_.store(true, std::memory_order_release);
     if (keyboard_ready_)
@@ -393,9 +394,13 @@ void Model::poll()
         iptv_ime_poll();
     continue_account_form();
     consume_refresh();
-    poll_guide();
+    if (vod_.requested() && !refreshing())
+        stop_guide();
+    vod_.poll(!refreshing() && !guide_thread_);
+    if (!vod_.busy() && !vod_.requested())
+        poll_guide();
     const auto now = platform::unix_time();
-    if (catalog_loaded_ && !refreshing() && now >= next_schedule_check_)
+    if (catalog_loaded_ && !refreshing() && !vod_.busy() && now >= next_schedule_check_)
     {
         // A failed scheduled refresh retries in an hour, not on every frame.
         next_schedule_check_ = now + 3600;
@@ -436,7 +441,7 @@ void Model::load_cache()
 // The catalog and its index are new: everything counted from them follows.
 void Model::adopt_catalog()
 {
-    hidden_categories_ = library_.hidden_categories(catalog_.source_id);
+    hidden_categories_ = library_.hidden_categories(source_id(active_source_));
     folder_channels_ = library_.folder_channels(folder_);
     if (!provider_category_.empty() &&
         std::none_of(index_.provider_categories.begin(), index_.provider_categories.end(),
@@ -616,7 +621,12 @@ std::optional<iptv::ChannelView> Model::find(std::string_view channel_id) const
 {
     const std::size_t index = catalog_.Find(channel_id);
     if (index == iptv::Catalog::npos)
-        return std::nullopt;
+    {
+        const auto media = vod_.catalog().Find(channel_id);
+        return media == iptv::Catalog::npos
+                   ? std::nullopt
+                   : std::optional<iptv::ChannelView>(vod_.catalog()[media]);
+    }
     return catalog_[index];
 }
 
@@ -1059,6 +1069,7 @@ void Model::apply_account_password(const char *password)
 
 void Model::refresh()
 {
+    vod_.stop();
     stop_guide();
     next_schedule_check_ = platform::unix_time() + 3600;
     diag::event("channel list update asked: source=%d set up=%d already running=%d",

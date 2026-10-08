@@ -71,9 +71,13 @@ remains the preferred path for AAC-LC mono/stereo.
 
 ## Software audio fallback
 
-AAC Main, multichannel AAC, AAC-LATM, AC-3 and E-AC-3 use the audio-only
-[FFmpeg](https://ffmpeg.org/) 8.0.1 decoder and stereo downmixer (libavcodec,
-libavutil and libswresample), under LGPL-2.1-or-later. The build downloads
+AAC Main, multichannel AAC, AAC-LATM, AC-3 and E-AC-3 use the
+[FFmpeg](https://ffmpeg.org/) 8.0.1 decoder and stereo downmixer. Its libavformat
+reads MP4 and Matroska movies and passes H.264/HEVC and supported audio to the
+existing native player as MPEG-TS, without transcoding. Software H.264/HEVC
+decoders are enabled for stream inspection and timestamp discovery. These
+libraries (libavformat, libavcodec, libavutil and libswresample) are under
+LGPL-2.1-or-later. The build downloads
 the upstream source archive, verifies SHA-256
 `05ee0b03119b45c0bdb4df654b96802e909e0a752f72e4fe3794f487229e5a41`,
 and builds static libraries under ignored `.deps/ffmpeg-audio/`.

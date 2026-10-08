@@ -9,6 +9,7 @@
 #include <new>
 #include <cstddef>
 #include <cstdint>
+#include <string_view>
 
 namespace iptv::http
 {
@@ -70,6 +71,7 @@ struct StreamRequest
     int http_status = 0;
     int native_error = 0;
     bool open = false;
+    std::int64_t size = -1; // complete resource length, when supplied by the server
     char effective_url[kMaxUrlBytes + 1u] = {};
     char error_response[kMaxErrorResponseBytes + 1u] = {};
 };
@@ -80,7 +82,12 @@ struct RequestHeaders
     const char *referrer = nullptr;
     const char *cookie = nullptr;
     const char *authorization = nullptr;
+    std::int64_t byte_offset = -1; // -1: ordinary GET; otherwise request bytes=<offset>-
 };
+
+// Validate a ranged response before the demuxer interprets its first byte.
+bool ParseStreamRange(std::string_view headers, int status, std::int64_t offset,
+                      std::int64_t *size);
 
 // Portal credentials belong only to the origin that was asked. Redirects
 // may still reach a CDN, but must not forward a MAC cookie or bearer token.

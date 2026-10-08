@@ -100,6 +100,8 @@ bool in_named_group(const iptv::ChannelView &channel, std::string_view term)
     return false;
 }
 
+} // namespace
+
 // Every character of these scripts is three bytes of UTF-8.
 void note_scripts(std::string_view text, bool *east_asian, bool *korean)
 {
@@ -122,8 +124,6 @@ void note_scripts(std::string_view text, bool *east_asian, bool *korean)
         index += 2;
     }
 }
-
-} // namespace
 
 void CatalogIndex::clear()
 {

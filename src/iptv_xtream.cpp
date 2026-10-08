@@ -246,6 +246,27 @@ bool BuildXtreamGuideUrl(const XtreamCredentials &credentials, std::string *url)
     return true;
 }
 
+bool BuildXtreamMediaUrl(const XtreamCredentials &credentials, bool episode,
+                         std::string_view stream_id, std::string_view extension, std::string *url)
+{
+    if (!BuildXtreamLiveUrl(credentials, stream_id, extension.empty() ? "mp4" : extension, url))
+        return false;
+    url->replace(credentials.server_url.size() + 1, 4, episode ? "series" : "movie");
+    return url->size() <= kDefaultMaxUrlBytes;
+}
+
+bool BuildXtreamSeriesUrl(const XtreamCredentials &credentials, std::string_view series_id,
+                          std::string *url)
+{
+    if (series_id.empty() || series_id.size() > 64 ||
+        !BuildXtreamApiUrl(credentials, "get_series_info", url))
+        return false;
+    std::string encoded;
+    PercentEncode(series_id, &encoded);
+    *url += "&series_id=" + encoded;
+    return url->size() <= kDefaultMaxUrlBytes;
+}
+
 XtreamStatus SaveXtreamCredentials(const std::string &path, const XtreamCredentials &credentials)
 {
     if (path.empty() || !ValidateXtreamCredentials(credentials))
@@ -385,6 +406,8 @@ XtreamStatus ParseXtreamCategories(std::string_view json, std::vector<XtreamCate
                                     return value->StringOrScalar(&category.id, 64u);
                                 if (key == "category_name")
                                     return value->StringOrScalar(&category.name);
+                                if (key == "parent_id")
+                                    return value->StringOrScalar(&category.parent_id, 64u);
                                 return value->SkipValue();
                             }))
                 return false;
@@ -393,7 +416,33 @@ XtreamStatus ParseXtreamCategories(std::string_view json, std::vector<XtreamCate
             return true;
         },
         &found);
-    return valid && found ? XtreamStatus::ok : XtreamStatus::malformed_json;
+    if (!valid || !found)
+        return XtreamStatus::malformed_json;
+    const auto originals = *categories;
+    std::unordered_map<std::string, std::size_t> by_id;
+    for (std::size_t i = 0; i < originals.size(); ++i)
+        by_id.emplace(originals[i].id, i);
+    for (auto &category : *categories)
+    {
+        auto parent = category.parent_id;
+        std::vector<std::string> visited{category.id};
+        while (!parent.empty() && parent != "0" && visited.size() < 32)
+        {
+            if (std::find(visited.begin(), visited.end(), parent) != visited.end())
+                break;
+            const auto found_parent = by_id.find(parent);
+            if (found_parent == by_id.end())
+                break;
+            const auto &ancestor = originals[found_parent->second];
+            if (category.name.size() + ancestor.name.size() + 3 > kDefaultMaxFieldBytes)
+                break;
+            if (!ancestor.name.empty())
+                category.name = ancestor.name + " / " + category.name;
+            visited.push_back(parent);
+            parent = ancestor.parent_id;
+        }
+    }
+    return XtreamStatus::ok;
 }
 
 struct XtreamStreamsParser::State

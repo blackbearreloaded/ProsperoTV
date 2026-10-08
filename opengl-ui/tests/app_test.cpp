@@ -311,13 +311,15 @@ TEST_F(AppTest, ShouldersTurnTheTabsAndCircleLeadsHome)
     press(Action::page_next);
     EXPECT_EQ(app_->tab(), 3);
     EXPECT_EQ(model_->view.tab, 3);
+    press(Action::page_next); // Settings
+    EXPECT_EQ(app_->tab(), 4);
     press(Action::page_next); // About
-    EXPECT_EQ(app_->tab(), 4);
+    EXPECT_EQ(app_->tab(), 5);
     press(Action::page_next); // the last tab: nothing further
-    EXPECT_EQ(app_->tab(), 4);
+    EXPECT_EQ(app_->tab(), 5);
     // About only reads: nothing on it answers Cross.
     press(Action::confirm);
-    EXPECT_EQ(app_->tab(), 4);
+    EXPECT_EQ(app_->tab(), 5);
     EXPECT_FALSE(frame_.scene.empty());
     press(Action::back);
     EXPECT_EQ(app_->tab(), 0);
@@ -471,7 +473,8 @@ TEST_F(AppTest, SettingsAreChangedAndReported)
     press(Action::page_next);
     press(Action::page_next);
     press(Action::page_next);
-    ASSERT_EQ(app_->tab(), 3);
+    press(Action::page_next);
+    ASSERT_EQ(app_->tab(), 4);
     EXPECT_FALSE(app_->take_settings_changed());
     press(Action::confirm); // Reduce motion
     EXPECT_TRUE(app_->settings().reduced_motion);
@@ -496,6 +499,7 @@ TEST_F(AppTest, PairingIsASettingsModalWithAnExplicitRequest)
     press(Action::page_next);
     press(Action::page_next);
     press(Action::page_next);
+    press(Action::page_next);
     for (int i = 0; i < 4; ++i)
         move(Direction::down);
     EXPECT_FALSE(app_->take_pair_phone_requested());
@@ -504,18 +508,18 @@ TEST_F(AppTest, PairingIsASettingsModalWithAnExplicitRequest)
     EXPECT_TRUE(app_->take_pair_phone_requested());
     EXPECT_FALSE(app_->take_pair_phone_requested());
     press(Action::page_next);
-    EXPECT_EQ(app_->tab(), 3);
+    EXPECT_EQ(app_->tab(), 4);
     app_->set_pairing_info("http://192.0.2.1:8888", "", 0, 1);
     press(Action::confirm);
     EXPECT_TRUE(app_->take_pair_phone_requested());
     press(Action::back);
     EXPECT_FALSE(app_->pairing_open());
-    EXPECT_EQ(app_->tab(), 3);
+    EXPECT_EQ(app_->tab(), 4);
     press(Action::confirm);
     EXPECT_TRUE(app_->pairing_open());
     app_->phone_connected();
     EXPECT_FALSE(app_->pairing_open());
-    EXPECT_EQ(app_->tab(), 3);
+    EXPECT_EQ(app_->tab(), 4);
     move(Direction::down);
     press(Action::confirm);
     EXPECT_TRUE(app_->take_forget_phones_requested());
@@ -543,7 +547,8 @@ TEST_F(AppTest, TheDiagnosticLogIsASwitchInSettingsOffByDefault)
     press(Action::page_next);
     press(Action::page_next);
     press(Action::page_next);
-    EXPECT_EQ(app_->tab(), 3);
+    press(Action::page_next);
+    EXPECT_EQ(app_->tab(), 4);
     EXPECT_TRUE(g_traced.empty());
 
     // The switch is the last row of Settings.
@@ -559,7 +564,8 @@ TEST_F(AppTest, TheDiagnosticLogIsASwitchInSettingsOffByDefault)
     // On: what the viewer does and what the app answers are both there.
     press(Action::page_prev);
     EXPECT_TRUE(traced("input L1 on Settings"));
-    EXPECT_TRUE(traced("tab Sources"));
+    EXPECT_TRUE(traced("tab On demand"));
+    press(Action::page_prev);
     press(Action::page_prev);
     press(Action::page_prev);
     EXPECT_EQ(app_->tab(), 0);
@@ -573,6 +579,7 @@ TEST_F(AppTest, TheDiagnosticLogIsASwitchInSettingsOffByDefault)
 
     // And off again, with its own last line.
     g_traced.clear();
+    press(Action::page_next);
     press(Action::page_next);
     press(Action::page_next);
     press(Action::page_next);
@@ -590,6 +597,7 @@ TEST_F(AppTest, TheDiagnosticLogIsASwitchInSettingsOffByDefault)
 
 TEST_F(AppTest, PhoneVolumeUpdatesTheSliderWithoutOverwritingOtherSettings)
 {
+    press(Action::page_next);
     press(Action::page_next);
     press(Action::page_next);
     press(Action::page_next);

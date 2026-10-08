@@ -88,6 +88,9 @@ jobs:
       - name: Run host integration tests
         run: make test-integration
 
+      - name: Test MP4 and Matroska playback
+        run: HOST_CXX=clang++-18 make test-media
+
       - name: Reproduce clean-room runtime shim
         run: make libc
 

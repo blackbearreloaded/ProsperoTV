@@ -20,6 +20,7 @@
 
 namespace ptv
 {
+void note_scripts(std::string_view text, bool *east_asian, bool *korean);
 
 struct Facet
 {

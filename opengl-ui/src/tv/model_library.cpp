@@ -63,6 +63,7 @@ const SavedSource *Model::saved_source(std::int64_t id) const
 
 void Model::select_source_record(const SavedSource &source)
 {
+    const bool changed = selected_source_id_ != source.id;
     selected_source_id_ = source.id;
     active_source_ = static_cast<iptv::SourceKind>(source.kind);
     schedule_ = source.schedule;
@@ -72,6 +73,19 @@ void Model::select_source_record(const SavedSource &source)
         xtream_ = {source.url, source.username, source.password};
     if (source.kind == 3)
         portal_ = {source.url, source.mac};
+    vod_.configure(source.kind == 2 ? xtream_ : iptv::XtreamCredentials{},
+                   cache_path(active_source_), schedule_);
+    if (changed)
+    {
+        view.vod_kind = -1;
+        view.vod_focus = 0;
+        view.vod_category.clear();
+        view.vod_series.clear();
+        view.vod_series_name.clear();
+        view.vod_series_cover.clear();
+        view.vod_query.clear();
+        view.vod_all = false;
+    }
 }
 
 bool Model::refresh_needed() const
@@ -253,9 +267,47 @@ bool Model::set_schedule(std::int64_t id, RefreshSchedule schedule)
         return false;
     sources_ = library_.sources();
     if (id == selected_source_id_)
+    {
         schedule_ = schedule;
+        vod_.configure(active_source_ == iptv::SourceKind::Xtream ? xtream_
+                                                                  : iptv::XtreamCredentials{},
+                       cache_path(active_source_), schedule_);
+    }
     ++revision_;
     return true;
+}
+
+bool Model::play_vod(unsigned index)
+{
+    if (vod_.kind() == VodKind::series || index >= vod_.catalog().size())
+        return false;
+    const auto item = vod_.catalog()[index];
+    play_request_ = {};
+    play_request_.channel_id = item.id;
+    play_request_.channel_name = item.name;
+    play_request_.urls = {std::string(item.url)};
+    play_request_.source_id = item.source_id;
+    play_request_.record_channel_result = false;
+    play_requested_ = true;
+    return true;
+}
+bool Model::ask_vod_query()
+{
+    if (!keyboard_ready_)
+        return false;
+    iptv_ime_request_prompt(view.vod_query.c_str(), "Search on demand",
+                            "Movie, show or episode title", IPTV_IME_BUFFER_CHARACTERS,
+                            &Model::on_vod_query, this);
+    return true;
+}
+void Model::on_vod_query(const char *text, void *self)
+{
+    if (!self || !text)
+        return;
+    auto &model = *static_cast<Model *>(self);
+    model.view.vod_query = text;
+    model.view.vod_focus = 0;
+    ++model.revision_;
 }
 
 void Model::set_hide_failed(bool hide)
@@ -331,9 +383,9 @@ bool Model::hide_category(std::string_view category, bool hidden)
     category = category_trim(category);
     if (!hidden && category_hidden(category_parent(category)))
         return false;
-    if (!library_.hide_category(catalog_.source_id, category, hidden))
+    if (!library_.hide_category(source_id(active_source_), category, hidden))
         return false;
-    hidden_categories_ = library_.hidden_categories(catalog_.source_id);
+    hidden_categories_ = library_.hidden_categories(source_id(active_source_));
     mark_visibility();
     recount_groups();
     rebuild_visible();

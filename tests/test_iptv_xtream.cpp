@@ -93,6 +93,20 @@ TEST(IptvXtreamTest, ConvertsLiveJsonIntoTheSharedCatalog)
     EXPECT_EQ(report.skipped, 1u);
 }
 
+TEST(IptvXtreamTest, ProviderParentIdsBuildNestedPathsWithoutFollowingCycles)
+{
+    std::vector<iptv::XtreamCategory> categories;
+    ASSERT_EQ(
+        iptv::ParseXtreamCategories(
+            R"([{"category_id":3,"category_name":"Football","parent_id":2},{"category_id":1,"category_name":"US","parent_id":0},{"category_id":2,"category_name":"Sports","parent_id":1},{"category_id":4,"category_name":"Loop","parent_id":4}])",
+            &categories),
+        iptv::XtreamStatus::ok);
+    ASSERT_EQ(categories.size(), 4u);
+    EXPECT_EQ(categories[0].name, "US / Sports / Football");
+    EXPECT_EQ(categories[2].name, "US / Sports");
+    EXPECT_EQ(categories[3].name, "Loop");
+}
+
 // The answer a provider gives for that many live streams, about 600 bytes
 // each: most of it is fields the app has no use for.
 std::string StreamsAnswer(int streams)

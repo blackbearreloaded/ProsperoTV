@@ -212,6 +212,7 @@ const Step kWalk[] = {
     press(Action::menu, 1.0f, "22-sources-updating"),
     look(2.6f, "23-sources-updated"),
     // ---- Settings ----
+    press(Action::page_next, 0.7f, "53-vod-no-account"),
     press(Action::page_next, 1.1f, "24-settings"),
     press(Action::confirm, 0.5f),
     move(Direction::down, 0.25f),
@@ -283,6 +284,29 @@ const Step kWalk[] = {
     move(Direction::left, 0.6f, "51-catch-up-guide"),
     press(Action::back),
     look(2.0f, "52-channel-logos"),
+    change([]() { g_model->edit_saved_source(3); }, 0.2f),
+    change([]() { host::set_keyboard_text("https://provider.example.invalid"); }, 0.2f),
+    change([]() { host::set_keyboard_text("viewer"); }, 0.2f),
+    change([]() { host::set_keyboard_text("demo"); }, 2.0f),
+    press(Action::page_next),
+    press(Action::page_next, 0.7f, "54-sources-with-portals"),
+    press(Action::page_next, 0.7f, "55-vod-home"),
+    press(Action::confirm, 2.0f, "56-vod-categories"),
+    move(Direction::down),
+    press(Action::confirm, 0.5f, "57-vod-child-categories"),
+    press(Action::confirm, 1.2f, "58-vod-movies"),
+    press(Action::back),
+    press(Action::back),
+    press(Action::back),
+    move(Direction::down),
+    press(Action::confirm, 1.2f),
+    press(Action::confirm, 1.2f, "59-vod-shows"),
+    press(Action::confirm, 1.2f, "60-vod-seasons"),
+    move(Direction::down),
+    press(Action::confirm),
+    press(Action::confirm, 0.8f, "61-vod-episodes"),
+    change([]() { g_model->use_saved_source(1); }, 0.7f),
+    press(Action::back, 0.7f),
 };
 
 } // namespace
@@ -393,6 +417,42 @@ int main(int argc, char **argv)
 
     host::reset();
     host::set_network(true, g_playlist, 600);
+    {
+        const iptv::XtreamCredentials account{"https://provider.example.invalid", "viewer", "demo"};
+        int number = 0;
+        const auto reply = [&](const std::string &url, std::string_view body)
+        {
+            const auto file = output + "/vod-fixture-" + std::to_string(number++) + ".json";
+            std::ofstream(file) << body;
+            host::set_network_response(url, file);
+        };
+        const auto response = [&](std::string_view action, std::string_view body)
+        {
+            std::string url;
+            iptv::BuildXtreamApiUrl(account, action, &url);
+            reply(url, body);
+        };
+        response("", R"({"user_info":{"auth":1,"status":"Active"}})");
+        response("get_live_categories", R"([{"category_id":1,"category_name":"US / News"}])");
+        response(
+            "get_live_streams",
+            R"([{"stream_id":1,"name":"Channel 1","category_id":1},{"stream_id":2,"name":"Channel 2","category_id":1},{"stream_id":3,"name":"Channel 3","category_id":1}])");
+        response(
+            "get_vod_categories",
+            R"([{"category_id":1,"category_name":"US"},{"category_id":2,"category_name":"Drama","parent_id":1},{"category_id":3,"category_name":"Family","parent_id":1}])");
+        response(
+            "get_vod_streams",
+            R"([{"stream_id":10,"name":"A journey through the valley","container_extension":"mp4","category_id":2,"stream_icon":"https://logos.example.invalid/demo.png"},{"stream_id":11,"name":"Midnight on the coast","container_extension":"mkv","category_id":2},{"stream_id":12,"name":"The little astronomer","container_extension":"mp4","category_id":3}])");
+        response("get_series_categories", R"([{"category_id":4,"category_name":"Documentaries"}])");
+        response(
+            "get_series",
+            R"([{"series_id":20,"name":"Our changing planet","category_id":4,"cover":"https://logos.example.invalid/demo.png"}])");
+        std::string series;
+        iptv::BuildXtreamSeriesUrl(account, "20", &series);
+        reply(
+            series,
+            R"({"episodes":{"1":[{"id":200,"title":"The world beneath our feet","episode_num":1,"container_extension":"mp4"},{"id":201,"title":"Ocean currents","episode_num":2,"container_extension":"mp4"},{"id":202,"title":"Following the seasons","episode_num":3,"container_extension":"mp4"}],"2":[{"id":210,"title":"A new chapter","episode_num":1,"container_extension":"mp4"}]}})");
+    }
     ptv::Model model(data_dir);
     g_model = &model;
     model.open();

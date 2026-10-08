@@ -57,6 +57,7 @@ struct XtreamCategory
 {
     std::string id;
     std::string name;
+    std::string parent_id{};
 };
 
 bool NormalizeXtreamServerUrl(std::string_view input, std::string *normalized);
@@ -68,6 +69,10 @@ bool BuildXtreamApiUrl(const XtreamCredentials &credentials, std::string_view ac
 bool BuildXtreamGuideUrl(const XtreamCredentials &credentials, std::string *url);
 bool BuildXtreamLiveUrl(const XtreamCredentials &credentials, std::string_view stream_id,
                         std::string_view extension, std::string *url);
+bool BuildXtreamMediaUrl(const XtreamCredentials &credentials, bool episode,
+                         std::string_view stream_id, std::string_view extension, std::string *url);
+bool BuildXtreamSeriesUrl(const XtreamCredentials &credentials, std::string_view series_id,
+                          std::string *url);
 
 XtreamStatus SaveXtreamCredentials(const std::string &path, const XtreamCredentials &credentials);
 XtreamStatus LoadXtreamCredentials(const std::string &path, XtreamCredentials *credentials);

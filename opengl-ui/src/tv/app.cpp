@@ -53,7 +53,8 @@ enum FormRow : int
     kRowResume,
 };
 
-constexpr const char *kTabNames[] = {"Live TV", "Favorites", "Sources", "Settings", "About"};
+constexpr const char *kTabNames[] = {"Live TV",   "Favorites", "Sources",
+                                     "On demand", "Settings",  "About"};
 constexpr const char *kActionNames[] = {"Up",       "Down",     "Left", "Right", "Cross", "Circle",
                                         "Triangle", "Square",   "L1",   "R1",    "L2",    "R2",
                                         "Options",  "Touchpad", "L3",   "R3"};
@@ -95,8 +96,8 @@ const char *source_label(iptv::SourceKind source)
 
 App::App(Model &model, const ui::Fonts &fonts, std::uint32_t glass_texture,
          const Settings &settings, std::string version)
-    : shared_(model, fonts, settings), browse_(shared_), sources_(shared_), search_(shared_),
-      library_sheet_(shared_), guide_sheet_(shared_), update_(shared_),
+    : shared_(model, fonts, settings), browse_(shared_), sources_(shared_), vod_(shared_),
+      search_(shared_), library_sheet_(shared_), guide_sheet_(shared_), update_(shared_),
       glass_texture_(glass_texture), version_(std::move(version))
 {
     const ui::Theme &theme = shared_.theme;
@@ -131,8 +132,9 @@ App::App(Model &model, const ui::Fonts &fonts, std::uint32_t glass_texture,
     tabs_.style.track = false;
     tabs_.style.focus_ring = false;
     tabs_.style.on_page = true;
-    tabs_.set_tabs({{"Live TV"}, {"Favorites"}, {"Sources"}, {"Settings"}, {"About"}});
-    tabs_.set_bounds({486.0f, kHeaderY - 28.0f, 900.0f, 56.0f});
+    tabs_.set_tabs(
+        {{"Live TV"}, {"Favorites"}, {"Sources"}, {"On demand"}, {"Settings"}, {"About"}});
+    tabs_.set_bounds({420.0f, kHeaderY - 28.0f, 1150.0f, 56.0f});
     tabs_.set_focused(false);
     tabs_.set_active(std::clamp(model.view.tab, 0, kTabCount - 1), true);
 
@@ -292,6 +294,9 @@ void App::tab_changed()
     case kSources:
         sources_.enter();
         break;
+    case kVod:
+        vod_.enter();
+        break;
     case kSettings:
         form_.enter();
         break;
@@ -302,6 +307,12 @@ void App::tab_changed()
 
 void App::refresh(ui::Feedback &feedback)
 {
+    if (tabs_.active() == kVod)
+    {
+        vod_.refresh();
+        feedback.play(audio::Cue::select);
+        return;
+    }
     Model &model = shared_.model;
     if (model.refreshing())
     {
@@ -410,6 +421,10 @@ void App::handle_screen(const InputFrame &input, ui::Feedback &feedback)
         else if (browsing() && browse_.back(feedback))
         {
         }
+        else if (tabs_.active() == kVod && vod_.back())
+        {
+            feedback.play(audio::Cue::back);
+        }
         else if (tabs_.active() != kLive)
         {
             feedback.play(audio::Cue::back);
@@ -436,6 +451,9 @@ void App::handle_screen(const InputFrame &input, ui::Feedback &feedback)
         break;
     case kSources:
         sources_.handle(input, feedback);
+        break;
+    case kVod:
+        vod_.handle(input, feedback);
         break;
     case kSettings:
     {
@@ -651,7 +669,11 @@ void App::step(const InputFrame &input, float dt, ui::Feedback &feedback)
 
     tabs_.update(dt);
     browse_.update(dt);
-    shared_.images.update(browsing() ? browse_.image_urls() : std::vector<std::string>{});
+    if (tabs_.active() == kVod)
+        vod_.update();
+    shared_.images.update(browsing()               ? browse_.image_urls()
+                          : tabs_.active() == kVod ? vod_.image_urls()
+                                                   : std::vector<std::string>{});
     sources_.update(dt);
     search_.update(dt);
     library_sheet_.update(dt);
@@ -978,6 +1000,9 @@ void App::draw_hints(ui::Canvas &canvas) const
     case kSources:
         count = sources_.hints(hints, 6);
         break;
+    case kVod:
+        count = vod_.hints(hints, 6);
+        break;
     case kSettings:
         if (form_.uses_horizontal())
             hints[count++] = {ui::Button::dpad, "Change"};
@@ -987,9 +1012,10 @@ void App::draw_hints(ui::Canvas &canvas) const
     default:
         break;
     }
-    if (tabs_.active() < kSettings)
+    if (tabs_.active() < kSettings && tabs_.active() != kVod)
         hints[count++] = {ui::Button::options, "Update"};
-    if (tabs_.active() != kLive && !(browsing() && shared_.model.filtering()))
+    if (tabs_.active() != kLive && tabs_.active() != kVod &&
+        !(browsing() && shared_.model.filtering()))
         hints[count++] = {ui::Button::circle, "Live TV"};
     ui::HintLayout layout;
     layout.size = 36.0f;
@@ -1031,6 +1057,9 @@ void App::draw(Frame &frame) const
         break;
     case kSources:
         sources_.draw(canvas);
+        break;
+    case kVod:
+        vod_.draw(canvas);
         break;
     case kSettings:
         draw_settings(canvas);
