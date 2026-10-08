@@ -32,18 +32,36 @@ HOST_SANITIZE=1 tools/host-snapshots.sh build/snapshots-sanitize
 ps5/assemble.sh                    # make the console build tree beside the repository
 make -C ../../prosperotv-ui-build  # dist/PPSA99003 (folder and zip)
 TV_TEST_TITLE=PPSA88021 ps5/assemble.sh   # the same as a disposable title beside the released app
-TV_DEBUG_TRACE=1 ps5/assemble.sh          # the app with a debug trace, for someone whose streams fail
+TV_DEBUG_TRACE=1 ps5/assemble.sh          # the app with its diagnostic log always on
 ```
 
-The debug trace build is the released app plus a record of every channel
-opened, appended to `/data/prosperotv/logs/debug-trace.txt` (the title's
-`/download0/prosperotv/` without filesystem access): the channel's name, where
-its addresses point with the user name, password, path and query taken out,
-how it went and why, the player's whole receipt (container, codec, profile,
-picture size, decoder results), and, when it did not play, what the first
-bytes of each address look like. `app.log` beside it also gets every call the
-decoders make to the system. Its About page says "debug trace" after the
-version.
+## The diagnostic log
+
+Settings has a switch, **Diagnostic log**, off by default. While it is on the
+app appends what it does to `/data/prosperotv/logs/debug-trace.txt` (the
+title's `/download0/prosperotv/` without filesystem access), each line with
+the seconds since the app started:
+
+- what the viewer pressed and where the interface was, every tab, list and
+  search, every notice and failure dialog, settings as they change;
+- each update of the channel list with its network result, and each update
+  offer;
+- for every channel opened: its name, where its addresses point with the user
+  name, password, path and query taken out, how it went and why, the player's
+  whole receipt (container, codec, profile, picture size, decoder results,
+  transport packets lost), and, when it did not play, what the first bytes of
+  each address look like;
+- every call the decoders make to the system with its result, and the
+  player's own messages.
+
+The file is made to be sent to someone else: no address is written whole.
+Lines wait in memory and a thread of their own writes them
+(`ps5/src/tv_diag.cpp`), so the menu does not stall on the drive; a file past
+four megabytes becomes `debug-trace.prev.txt` at the next launch. `tv/diag.hpp`
+is the one call the code makes (`diag::event`), and costs a branch while the
+switch is off. `TV_DEBUG_TRACE=1` builds the app with the log on whatever the
+switch says (its About page says "debug trace"); the test title turns it on
+with a `dev/diagnostics.txt` beside the app.
 
 The test title also reads scripted runs (`ps5/src/tv_dev.hpp`), which
 `tools/console-run.py <console address> <app folder> <results> <script>`

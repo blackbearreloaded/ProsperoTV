@@ -4,6 +4,7 @@
 
 #include "tv/app.hpp"
 
+#include "tv/diag.hpp"
 #include "tv/draw.hpp"
 #include "iptv_ime.h"
 #include "ui/components/overlay.hpp"
@@ -47,7 +48,14 @@ enum FormRow : int
     kRowPair,
     kRowForgetPhones,
     kRowPhones,
+    kRowDiagnostics,
 };
+
+constexpr const char *kTabNames[] = {"Live TV", "Favorites", "Sources", "Settings", "About"};
+constexpr const char *kActionNames[] = {"Up",       "Down", "Left", "Right", "Cross", "Circle",
+                                        "Triangle", "Square", "L1",  "R1",    "L2",    "R2",
+                                        "Options",  "Touchpad", "L3", "R3"};
+constexpr const char *kDirectionNames[] = {"none", "up", "down", "left", "right"};
 
 ui::StatusKind toast_kind(Level level)
 {
@@ -143,7 +151,12 @@ App::App(Model &model, const ui::Fonts &fonts, std::uint32_t glass_texture,
     form_.add_header("Channel list");
     form_.add_value(kRowChannels, "Channels", "");
     form_.add_action(kRowUpdate, "Download it again now");
+    form_.add_header("Troubleshooting");
+    form_.add_toggle(kRowDiagnostics, "Diagnostic log", settings.diagnostics).description =
+        "Records what the app does in logs/debug-trace.txt, to send with a report.";
     form_.set_bounds(kSettingsPanel.inset(22.0f));
+    // The viewer's switch; a debug build or a scripted run keeps its own.
+    diag::set_enabled(settings.diagnostics);
     form_.focus_row(kRowMotion);
 
     failure_.style.theme = theme;
@@ -169,11 +182,13 @@ void App::set_volume(int volume)
 
 void App::remote_notice(const char *message)
 {
+    diag::event("notice \"%s\"", message != nullptr ? message : "");
     shared_.toasts.push(ui::StatusKind::info, message);
 }
 
 void App::phone_connected()
 {
+    diag::event("phone connected (pairing screen %s)", pairing_open_ ? "open" : "closed");
     if (std::exchange(pairing_open_, false))
         remote_notice("Phone connected");
 }
@@ -254,6 +269,7 @@ void App::show_tab(int index, bool glide)
 void App::tab_changed()
 {
     shared_.model.view.tab = tabs_.active();
+    diag::event("tab %s", kTabNames[std::clamp(tabs_.active(), 0, kTabCount - 1)]);
     page_age_ = 0.0f;
     switch (tabs_.active())
     {
@@ -301,6 +317,9 @@ void App::open_failure(ui::Feedback &feedback)
     content.icon = ui::StatusKind::danger;
     content.title = "Couldn't open " + shown_name(shared_.fonts, named);
     content.body = failure->reason;
+    diag::event("failure dialog: \"%s\" attempts=%u retry=%d reason=\"%s\"",
+                failure->channel_name.c_str(), failure->attempts, failure->can_retry ? 1 : 0,
+                failure->reason.c_str());
     if (failure->attempts > 1)
         content.body +=
             "\nAll " + group_digits(failure->attempts) + " of its addresses were tried.";
@@ -319,10 +338,20 @@ void App::apply_settings()
     next.volume = static_cast<int>(form_.slider_value(kRowVolume));
     next.resolution = form_.choice_index(kRowResolution) == Settings::kFullHd ? Settings::kFullHd
                                                                               : Settings::kBest;
+    next.diagnostics = form_.toggle_value(kRowDiagnostics);
     if (next == shared_.settings)
         return;
+    // Said before it goes quiet and after it starts, so both ends are in the log.
+    if (shared_.settings.diagnostics && !next.diagnostics)
+        diag::event("diagnostic log turned off in Settings");
+    diag::set_enabled(next.diagnostics);
+    if (!shared_.settings.diagnostics && next.diagnostics)
+        diag::event("diagnostic log turned on in Settings");
     shared_.settings = next;
     settings_changed_ = true;
+    diag::event("settings: reduce motion=%d sounds=%d volume=%d menu sharpness=%d diagnostics=%d",
+                next.reduced_motion ? 1 : 0, next.sounds ? 1 : 0, next.volume, next.resolution,
+                next.diagnostics ? 1 : 0);
 }
 
 void App::handle_screen(const InputFrame &input, ui::Feedback &feedback)
@@ -392,6 +421,7 @@ void App::handle_screen(const InputFrame &input, ui::Feedback &feedback)
         else if (event == ui::Event::activated && form_.changed_id() == kRowPair)
         {
             pairing_open_ = pair_requested_ = true;
+            diag::event("pairing screen opened");
         }
         else if (event == ui::Event::activated && form_.changed_id() == kRowForgetPhones)
             forget_requested_ = true;
@@ -462,6 +492,24 @@ void App::update(const InputFrame &input, float dt, ui::Feedback &feedback)
 void App::step(const InputFrame &input, float dt, ui::Feedback &feedback)
 {
     Model &model = shared_.model;
+    if (diag::enabled() && (input.pressed != 0 || (input.nav != Direction::none && !input.nav_repeat)))
+    {
+        // What the viewer did, and where the interface was when they did it.
+        std::string buttons;
+        for (unsigned bit = 0; bit < std::size(kActionNames); ++bit)
+            if ((input.pressed & (1u << bit)) != 0)
+                buttons += std::string(buttons.empty() ? "" : "+") + kActionNames[bit];
+        const unsigned direction = static_cast<unsigned>(input.nav);
+        diag::event("input %s%s%s on %s%s%s%s%s", buttons.c_str(),
+                    !buttons.empty() && input.nav != Direction::none ? " " : "",
+                    input.nav != Direction::none && direction < std::size(kDirectionNames)
+                        ? kDirectionNames[direction]
+                        : "",
+                    kTabNames[std::clamp(tabs_.active(), 0, kTabCount - 1)],
+                    search_.is_open() ? " (search open)" : "", failure_.is_open() ? " (failure dialog)" : "",
+                    update_.stage() != UpdateSheet::Stage::closed ? " (update dialog)" : "",
+                    pairing_open_ ? " (pairing screen)" : "");
+    }
     const bool reduced = shared_.settings.reduced_motion;
     shared_.clock += dt;
     page_age_ += dt;
@@ -472,6 +520,8 @@ void App::step(const InputFrame &input, float dt, ui::Feedback &feedback)
     model.poll();
     for (Notice &notice : model.take_notices())
     {
+        diag::event("notice level=%d \"%s\" | %s", static_cast<int>(notice.level),
+                    notice.title.c_str(), notice.body.c_str());
         // A notice with a time of its own is an announcement.
         ui::ToastStack &stack = notice.seconds > 0.0f ? announcements_ : shared_.toasts;
         stack.push(toast_kind(notice.level), std::move(notice.title), std::move(notice.body),
@@ -483,6 +533,11 @@ void App::step(const InputFrame &input, float dt, ui::Feedback &feedback)
     platform::UpdateOffer offer;
     if (platform::update_take(&offer))
     {
+        diag::event("update offered: %s (installed %s, available %s, %llu bytes, installable=%d, "
+                    "notes %zu bytes)",
+                    offer.version.c_str(), offer.installed.c_str(), offer.available.c_str(),
+                    static_cast<unsigned long long>(offer.size), offer.installable ? 1 : 0,
+                    offer.notes.size());
         if (offer.installable)
         {
             search_.dismiss();

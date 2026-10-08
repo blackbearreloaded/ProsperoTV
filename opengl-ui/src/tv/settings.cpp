@@ -36,6 +36,8 @@ Settings load_settings(const std::string &data_dir)
             settings.volume = std::clamp(value, 0, 100);
         else if (std::sscanf(line, "resolution=%d", &value) == 1)
             settings.resolution = value == Settings::kFullHd ? Settings::kFullHd : Settings::kBest;
+        else if (std::sscanf(line, "diagnostics=%d", &value) == 1)
+            settings.diagnostics = value != 0;
     }
     std::fclose(file);
     return settings;
@@ -48,9 +50,9 @@ bool save_settings(const std::string &data_dir, const Settings &settings)
     std::FILE *file = std::fopen(temporary.c_str(), "wb");
     if (file == nullptr)
         return false;
-    std::fprintf(file, "reduced_motion=%d\nsounds=%d\nresolution=%d\nvolume=%d\n",
+    std::fprintf(file, "reduced_motion=%d\nsounds=%d\nresolution=%d\nvolume=%d\ndiagnostics=%d\n",
                  settings.reduced_motion ? 1 : 0, settings.sounds ? 1 : 0, settings.resolution,
-                 std::clamp(settings.volume, 0, 100));
+                 std::clamp(settings.volume, 0, 100), settings.diagnostics ? 1 : 0);
     const bool written = std::ferror(file) == 0 && std::fflush(file) == 0;
     const bool closed = std::fclose(file) == 0;
     if (!written || !closed)

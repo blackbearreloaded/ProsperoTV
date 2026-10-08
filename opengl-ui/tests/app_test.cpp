@@ -7,6 +7,7 @@
 #include "large_list.hpp"
 #include "tv/app.hpp"
 #include "tv/draw.hpp"
+#include "tv/diag.hpp"
 #include "tv/remote_input.hpp"
 
 #include <gtest/gtest.h>
@@ -518,6 +519,73 @@ TEST_F(AppTest, PairingIsASettingsModalWithAnExplicitRequest)
     move(Direction::down);
     press(Action::confirm);
     EXPECT_TRUE(app_->take_forget_phones_requested());
+}
+
+std::vector<std::string> g_traced;
+
+bool traced(const std::string &part)
+{
+    for (const std::string &line : g_traced)
+        if (line.find(part) != std::string::npos)
+            return true;
+    return false;
+}
+
+TEST_F(AppTest, TheDiagnosticLogIsASwitchInSettingsOffByDefault)
+{
+    g_traced.clear();
+    ptv::diag::set_forced(false);
+    ptv::diag::set_sink([](const char *line) { g_traced.emplace_back(line); });
+    EXPECT_FALSE(app_->settings().diagnostics);
+    EXPECT_FALSE(ptv::diag::enabled());
+
+    // Off: the viewer moves about and nothing is written.
+    press(Action::page_next);
+    press(Action::page_next);
+    press(Action::page_next);
+    EXPECT_EQ(app_->tab(), 3);
+    EXPECT_TRUE(g_traced.empty());
+
+    // The switch is the last row of Settings.
+    for (int i = 0; i < 12; ++i)
+        move(Direction::down);
+    press(Action::confirm);
+    EXPECT_TRUE(app_->settings().diagnostics);
+    EXPECT_TRUE(app_->take_settings_changed());
+    EXPECT_TRUE(ptv::diag::enabled());
+    EXPECT_TRUE(traced("diagnostic log turned on in Settings"));
+    EXPECT_TRUE(traced("diagnostics=1"));
+
+    // On: what the viewer does and what the app answers are both there.
+    press(Action::page_prev);
+    EXPECT_TRUE(traced("input L1 on Settings"));
+    EXPECT_TRUE(traced("tab Sources"));
+    press(Action::page_prev);
+    press(Action::page_prev);
+    EXPECT_EQ(app_->tab(), 0);
+    move(Direction::right);
+    EXPECT_TRUE(traced("input right on Live TV"));
+    press(Action::confirm);
+    EXPECT_TRUE(traced("play asked: "));
+    EXPECT_TRUE(traced("  address: https://"));
+    // No address is written whole: the path of the stream stays out of the log.
+    EXPECT_FALSE(traced("index.m3u8"));
+
+    // And off again, with its own last line.
+    g_traced.clear();
+    press(Action::page_next);
+    press(Action::page_next);
+    press(Action::page_next);
+    for (int i = 0; i < 12; ++i)
+        move(Direction::down);
+    press(Action::confirm);
+    EXPECT_FALSE(app_->settings().diagnostics);
+    EXPECT_FALSE(ptv::diag::enabled());
+    EXPECT_TRUE(traced("diagnostic log turned off in Settings"));
+    g_traced.clear();
+    press(Action::page_prev);
+    EXPECT_TRUE(g_traced.empty());
+    ptv::diag::set_sink(nullptr);
 }
 
 TEST_F(AppTest, PhoneVolumeUpdatesTheSliderWithoutOverwritingOtherSettings)

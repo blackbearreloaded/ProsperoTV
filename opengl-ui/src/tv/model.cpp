@@ -6,7 +6,9 @@
 
 #include "iptv_ime.h"
 #include "iptv_store.h"
+#include "tv/diag.hpp"
 #include "tv/platform.hpp"
+#include "tv/stream_sniff.hpp"
 
 #include <algorithm>
 #include <cstdio>
@@ -572,6 +574,8 @@ void Model::set_group(Group group)
         return;
     group_ = group;
     rebuild_visible();
+    diag::event("list %d chosen: %u of %u channels shown", static_cast<int>(group), visible_count(),
+                channel_count());
 }
 
 void Model::set_query(std::string_view query)
@@ -581,6 +585,8 @@ void Model::set_query(std::string_view query)
         return;
     query_ = next;
     rebuild_visible();
+    diag::event("search \"%s\": %u of %u channels shown", query_.c_str(), visible_count(),
+                channel_count());
 }
 
 void Model::set_country(std::string_view value)
@@ -682,6 +688,8 @@ Model::Starred Model::toggle_favorite(unsigned catalog_index)
     // stays where it is and only wears a star.
     if (group_ == Group::favorites)
         rebuild_visible();
+    diag::event("favorite %s: \"%s\"", favorite ? "added" : "removed",
+                std::string(catalog_[catalog_index].name).c_str());
     return favorite ? Starred::added : Starred::removed;
 }
 
@@ -705,6 +713,13 @@ bool Model::play(unsigned catalog_index)
     play_request_.source_id = channel.source_id;
     play_request_.reconnect_live = active_source_ == iptv::SourceKind::Xtream;
     play_requested_ = !play_request_.urls.empty();
+    diag::event("play asked: \"%s\" id=%s addresses=%zu source=%d own user agent=%s referrer=%s",
+                play_request_.channel_name.c_str(), play_request_.channel_id.c_str(),
+                play_request_.urls.size(), static_cast<int>(active_source_),
+                play_request_.user_agent.empty() ? "no" : "yes",
+                play_request_.referrer.empty() ? "no" : "yes");
+    for (const std::string &address : play_request_.urls)
+        diag::event("  address: %s", redact_address(address).c_str());
     if (!play_requested_)
         return false;
     const std::vector<std::string> previous = user_.recent_channel_ids;
@@ -728,6 +743,8 @@ bool Model::take_play_request(PlayRequest *request)
 void Model::report_playback_failure(const char *channel_id, const char *channel_name, int result,
                                     unsigned attempts, const char *detail)
 {
+    diag::event("playback failed: \"%s\" id=%s result=%d", channel_name != nullptr ? channel_name : "",
+                channel_id != nullptr ? channel_id : "", result);
     if (result >= 0)
         return;
     failure_ = {};
@@ -763,6 +780,8 @@ bool Model::retry_failure()
 
 void Model::use_source(iptv::SourceKind source)
 {
+    diag::event("source chosen: %d (set up=%d, an update running=%d)", static_cast<int>(source),
+                is_set_up(source) ? 1 : 0, refresh_thread_ != nullptr ? 1 : 0);
     if (refresh_thread_ != nullptr)
     {
         notify(Level::warning, "An update is running",
@@ -968,6 +987,9 @@ void Model::apply_account_password(const char *password)
 
 void Model::refresh()
 {
+    diag::event("channel list update asked: source=%d set up=%d already running=%d",
+                static_cast<int>(active_source_), is_set_up(active_source_) ? 1 : 0,
+                refresh_thread_ != nullptr ? 1 : 0);
     if (refresh_thread_ != nullptr)
     {
         refresh_queued_ = true;
@@ -1261,6 +1283,14 @@ void Model::consume_refresh()
                          !pending_catalog_.empty() &&
                          pending_index_.size() == pending_catalog_.size();
     const unsigned source = static_cast<unsigned>(refresh_source_);
+    diag::event("channel list update ended: source=%u success=%d network=%d fetch status=%d http=%d "
+                "native=0x%08x bytes=%zu account=%d channels=%zu skipped=%zu more than held=%d saved=%d",
+                source, success ? 1 : 0, static_cast<int>(pending_network_),
+                static_cast<int>(pending_fetch_.status), pending_fetch_.http_status,
+                static_cast<unsigned>(pending_fetch_.native_error), pending_fetch_.bytes,
+                account ? static_cast<int>(pending_account_) : -1, pending_catalog_.size(),
+                static_cast<std::size_t>(pending_report_.skipped), pending_report_.catalog_full ? 1 : 0,
+                pending_saved_ ? 1 : 0);
     if (success)
     {
         catalog_ = std::move(pending_catalog_);

@@ -95,12 +95,23 @@ swap("src/iptv_player.cpp",
      "    }\n"
      "    sceKernelSendNotificationRequest(0, &request, sizeof(request), 0);\n"
      "}\n",
+     "extern \"C\" int tv_diag_enabled(void);\n"
+     "extern \"C\" void tv_diag_line(const char *line);\n"
+     "\n"
      "void Notify(const char *message)\n"
      "{\n"
      "    // Into the log, not onto the screen: the menu tells the viewer what\n"
      "    // went wrong when it comes back.\n"
      "    if (message)\n"
+     "    {\n"
      "        std::fprintf(stdout, \"[ProsperoTV][player] %s\\n\", message);\n"
+     "        if (tv_diag_enabled())\n"
+     "        {\n"
+     "            char line[256];\n"
+     "            std::snprintf(line, sizeof(line), \"player: %s\", message);\n"
+     "            tv_diag_line(line);\n"
+     "        }\n"
+     "    }\n"
      "}\n")
 
 # ---- the tuning screen (src/tv_tuning.cpp): the player's loading thread
@@ -417,8 +428,9 @@ param_path.write_text(json.dumps(param, indent=2, sort_keys=True) + "\n", encodi
 # TV_DEBUG_TRACE=1 builds the app someone is sent to find out why their
 # streams do not play: it writes logs/debug-trace.txt (see main.cpp).
 debug_trace = os.environ.get("TV_DEBUG_TRACE", "") not in ("", "0")
-# The test title and the debug build also write down what the video decoder asks of the system.
-if test_title or debug_trace:
+# What the decoders ask of the system is wrapped in every build; the wrappers
+# write only while the diagnostic log is on (ps5/diag/decoder_trace.c).
+if True:
     import shutil
 
     shutil.copy(Path(__file__).resolve().parent / "diag/decoder_trace.c",

@@ -99,6 +99,10 @@
   categories and channels locally.
 - Return to the same screen, group, page, and channel after playback closes.
 - Show a tuning screen from Cross until the channel's first picture.
+- Keep a diagnostic log on request: a switch in Settings, off by default,
+  that records what the app does and how each channel decodes in
+  `/data/prosperotv/logs/debug-trace.txt`, without account details, for
+  sending with a problem report.
 - Offer a newer version at launch with **Update now**, **What's new** (the
   release notes), and **Later**; the update downloads, replaces the app's
   files after it closes, and keeps everything you saved.
