@@ -4,6 +4,7 @@
 
 #ifndef IPTV_PLAYER_H
 #define IPTV_PLAYER_H
+#include <stdint.h>
 
 #ifdef __cplusplus
 extern "C"
@@ -22,6 +23,8 @@ extern "C"
                                       const char *authorization, const char *credential_origin,
                                       unsigned stop_after_ms, int reconnect_live);
     const char *iptv_player_last_error(void);
+    /* Monotonic deadline shared across channel switches and URL retries; 0 disables it. */
+    void iptv_player_set_sleep_deadline(uint64_t deadline_usec);
     /* Runs the same foreground path with a bounded automatic stop. A zero timeout
  * disables the
      * deadline. This is used by controlled hardware acceptance. */

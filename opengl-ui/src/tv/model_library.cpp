@@ -370,6 +370,7 @@ bool Model::play_vod(unsigned index)
     if (vod_.kind() == VodKind::series || pin_prompt() || !vod_allowed(index))
         return false;
     const auto item = vod_.catalog()[index];
+    sleep_timer.wake();
     play_request_ = {};
     play_request_.channel_id = item.id;
     play_request_.channel_name = item.name;
@@ -408,8 +409,20 @@ void Model::set_hide_failed(bool hide)
     rebuild_visible();
 }
 
+bool Model::check_sleep_timer()
+{
+    if (!sleep_timer.expire(platform::monotonic_us()))
+        return false;
+    play_requested_ = false;
+    play_request_ = {};
+    notify(Level::ready, "Sleep timer finished", "Choose a channel to watch again.");
+    return true;
+}
+
 void Model::resume_last(bool enabled)
 {
+    if (sleep_timer.sleeping())
+        return;
     if (resume_attempted_)
         return;
     if (!enabled)

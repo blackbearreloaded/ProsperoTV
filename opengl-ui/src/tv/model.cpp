@@ -415,6 +415,7 @@ bool Model::close_for_storage()
 
 void Model::poll()
 {
+    check_sleep_timer();
     if (keyboard_ready_)
         iptv_ime_poll();
     poll_pin();
@@ -799,6 +800,8 @@ Model::Starred Model::toggle_favorite(unsigned catalog_index)
 
 std::optional<PlayRequest> Model::preview_request(std::string_view channel_id) const
 {
+    if (sleep_timer.sleeping())
+        return {};
     const auto index = catalog_.Find(channel_id);
     if (index >= catalog_.size() || pin_prompt() || !content_allowed(catalog_[index]))
         return {};
@@ -835,6 +838,7 @@ bool Model::play(unsigned catalog_index)
         !content_allowed(catalog_[catalog_index]))
         return false;
     const iptv::ChannelView channel = catalog_[catalog_index];
+    sleep_timer.wake();
     play_request_ = {};
     play_request_.channel_id = channel.id;
     play_request_.channel_name = channel.name;

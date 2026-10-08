@@ -64,6 +64,7 @@ Update g_update;
 // 0: the PC's own clock. The catalog store stamps its files with that clock,
 // so a test moves this one forward from it.
 std::atomic<std::uint64_t> g_unix_time{0};
+std::atomic<std::uint64_t> g_monotonic_us{0};
 
 void record_request(const char *url, const iptv::http::RequestHeaders *headers)
 {
@@ -156,6 +157,11 @@ void set_unix_time(std::uint64_t seconds)
     g_unix_time.store(seconds);
 }
 
+void set_monotonic_us(std::uint64_t microseconds)
+{
+    g_monotonic_us.store(microseconds);
+}
+
 void offer_update(const ptv::platform::UpdateOffer &offer)
 {
     g_update.offer = offer;
@@ -193,6 +199,7 @@ void reset()
     g_network.delivered.store(0);
     g_network.cancelled.store(false);
     g_unix_time.store(0);
+    g_monotonic_us.store(0);
 }
 
 } // namespace host
@@ -297,6 +304,15 @@ std::uint64_t unix_time()
 {
     const std::uint64_t set = g_unix_time.load();
     return set != 0 ? set : static_cast<std::uint64_t>(std::time(nullptr));
+}
+
+std::uint64_t monotonic_us()
+{
+    const auto set = g_monotonic_us.load();
+    if (set != 0) return set;
+    return static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::microseconds>(
+                                          std::chrono::steady_clock::now().time_since_epoch())
+                                          .count());
 }
 
 iptv::http::Status network_init()

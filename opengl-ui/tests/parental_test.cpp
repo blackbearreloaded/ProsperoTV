@@ -134,6 +134,11 @@ TEST_F(ParentalTest, PinAndKidsPolicyCoverListsFavoritesDirectPlayPreviewGuideRe
     ASSERT_TRUE(model.take_play_request(&request));
     model.parental_action(ptv::Model::ParentalAction::set_pin);
     answer(model, "836295");
+    answer(model, "123456");
+    EXPECT_FALSE(model.parental().enabled());
+    EXPECT_FALSE(model.pin_prompt());
+    model.parental_action(ptv::Model::ParentalAction::set_pin);
+    answer(model, "836295");
     EXPECT_EQ(host::keyboard_title(), "Confirm parent PIN");
     answer(model, "836295");
     ASSERT_TRUE(model.parental().enabled());

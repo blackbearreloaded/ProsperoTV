@@ -62,6 +62,8 @@ enum FormRow : int
     kRowKids,
     kRowRemovePin,
     kRowParentState,
+    kRowSleep,
+    kRowSleepRemaining,
 };
 
 constexpr const char *kTabNames[] = {"Live TV",   "Favorites", "Sources",
@@ -178,6 +180,13 @@ App::App(Model &model, const ui::Fonts &fonts, std::uint32_t glass_texture,
     form_.add_toggle(kRowPreview, "Live previews", settings.live_preview).description =
         "Play the focused channel in the large television, muted, after a moment.";
     model.set_hide_failed(settings.hide_failed);
+    form_
+        .add_choice(kRowSleep, "Sleep timer",
+                    {"Off", "15 minutes", "30 minutes", "60 minutes", "90 minutes", "120 minutes"},
+                    static_cast<int>(model.sleep_timer.choice()))
+        .description =
+        "Stops video after this time, including channel changes. Resets when the app closes.";
+    form_.add_value(kRowSleepRemaining, "Time remaining", "Off");
     form_.add_header("Troubleshooting");
     form_.add_toggle(kRowDiagnostics, "Diagnostic log", settings.diagnostics).description =
         "Records what the app does in logs/debug-trace.txt, to send with a report.";
@@ -541,7 +550,10 @@ void App::handle_screen(const InputFrame &input, ui::Feedback &feedback)
     case kSettings:
     {
         const ui::Event event = form_.handle(input, feedback);
-        if (event == ui::Event::changed)
+        if (event == ui::Event::changed && form_.changed_id() == kRowSleep)
+            shared_.model.sleep_timer.arm(static_cast<unsigned>(form_.choice_index(kRowSleep)),
+                                          platform::monotonic_us());
+        else if (event == ui::Event::changed)
             apply_settings();
         else if (event == ui::Event::activated && form_.changed_id() == kRowUpdate)
             refresh(feedback);
@@ -795,6 +807,10 @@ void App::step(const InputFrame &input, float dt, ui::Feedback &feedback)
     announcements_.style.reduced_motion = reduced;
 
     const auto &parental = model.parental();
+    form_.set_choice(kRowSleep, static_cast<int>(model.sleep_timer.choice()));
+    const auto remaining = model.sleep_timer.remaining_minutes(platform::monotonic_us());
+    form_.set_value_text(kRowSleepRemaining,
+                         remaining ? std::to_string(remaining) + " min" : "Off");
     form_.set_value_text(kRowParentState, !parental.valid()      ? "Settings unreadable - locked"
                                           : !parental.enabled()  ? "No PIN"
                                           : parental.kids_only() ? "Kids only"

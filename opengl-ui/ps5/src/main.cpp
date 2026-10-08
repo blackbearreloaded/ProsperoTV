@@ -321,7 +321,8 @@ struct StorageJob
         {
             std::string exported;
             if (save::read_file(job.request.drive + "/ProsperoTV-failure.txt", &exported, 8192))
-                (void)save::write_atomic(tv::storage::logs_dir() + "/dev/exported-failure.txt", exported);
+                (void)save::write_atomic(tv::storage::logs_dir() + "/dev/exported-failure.txt",
+                                         exported);
         }
         job.done.store(true, std::memory_order_release);
         return nullptr;
@@ -446,7 +447,8 @@ bool run_menu(ptv::Model &model, ptv::Settings *settings, const LastPlayback &la
                 (void)mkdir(mounts.c_str(), 0700);
                 (void)mkdir((mounts + "/usb0").c_str(), 0700);
                 app.set_usb_root(mounts);
-                say("[TV] sandbox USB fixture path=%s drives=%zu", mounts.c_str(), ptv::usb_drives(mounts).size());
+                say("[TV] sandbox USB fixture path=%s drives=%zu", mounts.c_str(),
+                    ptv::usb_drives(mounts).size());
             }
         }
         app.configure_images(
@@ -732,7 +734,8 @@ bool run_menu(ptv::Model &model, ptv::Settings *settings, const LastPlayback &la
                 if (storage.thread && ptv::platform::thread_join(storage.thread) != 0)
                     continue;
                 storage.thread = nullptr;
-                say("[TV] storage operation=%d completed=%d", static_cast<int>(storage.request.action), storage.ok ? 1 : 0);
+                say("[TV] storage operation=%d completed=%d",
+                    static_cast<int>(storage.request.action), storage.ok ? 1 : 0);
                 *storage_result = storage.ok
                                       ? storage.request.action == ptv::StorageAction::restore
                                             ? "Backup restored."
@@ -1251,6 +1254,7 @@ int main()
         menu_notice.clear();
         if (!storage_result.empty())
         {
+            const auto sleep_timer = model.sleep_timer;
             owned_model.reset();
             if (!ptv::recover_settings(tv::storage::config_dir(), storage_error))
             {
@@ -1260,6 +1264,7 @@ int main()
             owned_model =
                 std::make_unique<ptv::Model>(tv::storage::config_dir(), tv::storage::cache_dir());
             owned_model->view.tab = 4; // Return to Settings after reloading the saved state.
+            owned_model->sleep_timer = sleep_timer;
             owned_model->resume_last(false);
             settings = ptv::load_settings(tv::storage::config_dir());
             ptv::diag::set_enabled(settings.diagnostics);
@@ -1299,7 +1304,9 @@ int main()
             &favorite);
         // A scripted run plays each channel for a set time; the player stops it.
         tv::diag::flush();
+        iptv_player_set_sleep_deadline(model.sleep_timer.deadline());
         const PlaybackOutcome outcome = play_candidates(request, script.watch_ms(), nullptr);
+        (void)model.check_sleep_timer();
         iptv_remote_set_playback_favorite(nullptr, nullptr);
         const long long seconds = (sys::monotonic_us() - started) / 1000000;
         // 1: the viewer stopped it; 0: it ended; below 0: it did not play, and why.

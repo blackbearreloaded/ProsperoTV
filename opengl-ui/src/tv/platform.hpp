@@ -28,6 +28,7 @@ int thread_detach(void *thread);
 void sleep_ms(unsigned milliseconds);
 // Seconds since 1970, or 0 when the clock is not set.
 std::uint64_t unix_time();
+std::uint64_t monotonic_us();
 
 // The network, as the catalog worker uses it. Always called from that thread,
 // except network_cancel(), which interrupts it from the frame loop.

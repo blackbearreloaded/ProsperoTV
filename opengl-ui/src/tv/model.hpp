@@ -20,6 +20,7 @@
 #include "tv/portal.hpp"
 #include "tv/vod.hpp"
 #include "tv/parental.hpp"
+#include "tv/sleep_timer.hpp"
 
 #include <array>
 #include <atomic>
@@ -456,6 +457,8 @@ class Model
     void announce(Level level, std::string title, std::string body, float seconds);
 
     ViewState view;
+    SleepTimer sleep_timer;
+    bool check_sleep_timer();
 
   private:
     enum class PinStep

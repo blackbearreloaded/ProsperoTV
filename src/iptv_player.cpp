@@ -197,6 +197,7 @@ const char *DirectEndName(DirectEnd end)
 }
 
 char gLastPlaybackError[192]{};
+std::atomic<std::uint64_t> gSleepDeadlineUsec{0};
 
 void SetLastPlaybackError(const char *format, ...)
 {
@@ -953,10 +954,12 @@ class StreamRunner
 
     bool StopRequested()
     {
-        if (stop_deadline_usec_)
+        const auto sleep_deadline = gSleepDeadlineUsec.load(std::memory_order_relaxed);
+        if (stop_deadline_usec_ || sleep_deadline)
         {
             const std::uint64_t now = MonotonicUsec();
-            if (now >= stop_deadline_usec_)
+            if ((stop_deadline_usec_ && now >= stop_deadline_usec_) ||
+                (sleep_deadline && now >= sleep_deadline))
             {
                 playback_stop_requested_ = true;
                 if (adapter_.initialized)
@@ -2093,6 +2096,9 @@ static int RunPlayer(const char *url, const char *channel_name, const char *user
 {
     const std::uint64_t playback_started_us = MonotonicUsec();
     SetLastPlaybackError(nullptr);
+    const auto sleep_deadline = gSleepDeadlineUsec.load(std::memory_order_relaxed);
+    if (sleep_deadline && playback_started_us >= sleep_deadline)
+        return 1;
     gDirectDiagnostics = {};
 #if IPTV_PROBE
     std::remove("/download0/iptv-attempt-receipt.txt");
@@ -2255,6 +2261,11 @@ int iptv_player_run_authenticated(const char *url, const char *channel_name, con
 const char *iptv_player_last_error(void)
 {
     return gLastPlaybackError;
+}
+
+void iptv_player_set_sleep_deadline(uint64_t deadline_usec)
+{
+    gSleepDeadlineUsec.store(deadline_usec, std::memory_order_relaxed);
 }
 
 int iptv_player_run(const char *url, const char *channel_name)

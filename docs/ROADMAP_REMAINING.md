@@ -14,7 +14,7 @@ and relevant checks work.
 | Playback channel list | Select a channel from a list over the playing video | Pending |
 | Channel banner | Brief channel/guide banner on tune and on request | Pending |
 | Audio/subtitles | Select available language tracks and render subtitles | Pending |
-| Sleep timer | Stop playback at a selected deadline | Pending |
+| Sleep timer | Stop playback at a selected deadline | Implemented; 134 UI sanitizer tests and PS5 build pass; console case pending |
 | Live pause/rewind | Pause and replay several minutes of the current live channel | Pending |
 | Deinterlacing | Preserve field-rate motion on interlaced broadcast video | Pending |
 | HDR | Preserve HDR metadata and output HDR on compatible displays | Pending |
@@ -160,3 +160,16 @@ Core readers retain backward compatibility. Host validation covers persistent
 retry delay, corrupt files, cancelled/mismatched PIN prompts, locked storage and
 phone management, provider inheritance and playback policy; native menu/IME and
 filesystem validation remains part of the remaining console regression.
+
+## Sleep timer
+
+Settings offers Off, 15, 30, 60, 90 and 120 minutes, with a remaining-time display.
+The monotonic deadline belongs to this app session. It survives menu reopening,
+stream URL retries and settings restore, and is passed unchanged to the foreground
+player. It is not included in saved settings or rearmed on app launch.
+
+Expiry stops foreground playback and muted previews, cancels queued playback and
+prevents automatic last-channel resume. Choosing a channel explicitly wakes
+playback without rearming the timer. Host checks exercise the exact deadline,
+cancellation, menu reconstruction, invalid clocks and the preview/resume behavior;
+native timed playback remains in the console regression.

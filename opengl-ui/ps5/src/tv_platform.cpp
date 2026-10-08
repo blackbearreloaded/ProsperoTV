@@ -52,6 +52,16 @@ std::uint64_t unix_time()
     return now > 0 ? static_cast<std::uint64_t>(now) : 0u;
 }
 
+std::uint64_t monotonic_us()
+{
+    struct timespec now
+    {
+    };
+    if (clock_gettime(CLOCK_MONOTONIC, &now) != 0)
+        return 0;
+    return static_cast<std::uint64_t>(now.tv_sec) * 1000000u + now.tv_nsec / 1000u;
+}
+
 iptv::http::Status network_init()
 {
     return iptv::http::NetworkInit();

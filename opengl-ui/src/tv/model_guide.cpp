@@ -170,6 +170,7 @@ bool Model::play_programme(unsigned index, const Programme &programme)
         return false;
     }
     play_request_ = {};
+    sleep_timer.wake();
     play_request_.channel_id = channel.id;
     play_request_.channel_name = std::string(channel.name) + " - " + programme.title;
     play_request_.source_id = channel.source_id;
