@@ -192,11 +192,11 @@ void Script::closing(const char *why)
 
 void Script::menu_opened(std::uint64_t session)
 {
-    // A press that chose a channel closed the menu in its first frame: it is
-    // over, and must not press again in the menu that opens now.
+    // A channel or storage operation ended this press. It must not be
+    // repeated in the menu that opens now.
     if (active_ && at_ < steps_.size() && steps_[at_].kind == Kind::press && frame_ > 0)
     {
-        note("press %s: a channel started", steps_[at_].text.c_str());
+        note("press %s: menu reopened", steps_[at_].text.c_str());
         next();
     }
     session_ = session;

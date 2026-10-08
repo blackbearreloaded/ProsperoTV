@@ -51,6 +51,7 @@
 #include <memory>
 #include <span>
 #include <string>
+#include <sys/stat.h>
 #include <vector>
 
 #ifndef IPTV_AUTOTEST_ENABLED
@@ -427,7 +428,12 @@ bool run_menu(ptv::Model &model, ptv::Settings *settings, const LastPlayback &la
         {
             std::string unused;
             if (save::read_file(tv::storage::app_file("dev/usb-fixture.txt"), &unused, 64))
-                app.set_usb_root(tv::storage::config_dir() + "/test-mounts");
+            {
+                const auto mounts = tv::storage::config_dir() + "/test-mounts";
+                (void)mkdir(mounts.c_str(), 0700);
+                (void)mkdir((mounts + "/usb0").c_str(), 0700);
+                app.set_usb_root(mounts);
+            }
         }
         app.configure_images(
             [&renderer](const ptv::ImagePixels &pixels) {
