@@ -9,7 +9,7 @@
 //   until catalog <seconds>     the channel list is loaded and not updating
 //   until menu <seconds>        the menu has opened again after a channel
 //   press <button> [times]      up down left right cross circle square triangle
-//                               l1 r1 l2 r2 options touchpad
+//                               l1 r1 l2 r2 r3 options touchpad
 //   hold <button> <seconds>     the button stays down
 //   query <text>                the search text, as the keyboard would set it ("-" clears)
 //   watch <seconds>             how long the next channel plays before it stops

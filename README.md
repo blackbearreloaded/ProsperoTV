@@ -81,6 +81,19 @@
 
 ## Features
 
+- Save multiple M3U playlists, Xtream accounts and MAC-code portals, each with
+  its own cache, category visibility and daily, weekly or manual refresh schedule.
+- Browse provider categories and subcategories; hiding a parent hides all of
+  its children. Keep up to 65,536 favorites and organize them in named folders.
+- Show channel logos, now/next programmes, a two-hour programme grid and
+  programme-title search. Play archived programmes when the source advertises
+  a supported catch-up service.
+- Browse Xtream movies, shows, seasons and episodes in **On demand**. Play
+  H.264/HEVC in MP4 or Matroska, as well as the existing live-stream formats.
+- Preview the focused live channel in the large television, muted after
+  1.2 seconds. Settings also offers hiding failed channels and starting on the
+  last channel. See [the roadmap implementation guide](docs/ROADMAP_IMPLEMENTATION.md)
+  for controls, provider requirements and validation status.
 - Open the last verified channel catalog immediately from a local SQLite cache
   while a refresh runs in the background.
 - Browse Live TV, Favorites, Recent, News, Sports, Kids, and other channel
@@ -127,8 +140,8 @@
 
 | Codec | Supported path | Output classes |
 | --- | --- | --- |
-| H.264 / AVC | MPEG-TS and HLS; Baseline, Main, and High profiles within the configured level limits | 720p, 1080p, 1440p, 2160p |
-| HEVC | MPEG-TS and HLS; Main / Main10, 8-bit or 10-bit 4:2:0, SDR output | 720p, 1080p, 1440p, 2160p |
+| H.264 / AVC | MPEG-TS, HLS, MP4 and Matroska; Baseline, Main, and High profiles within the configured level limits | 720p, 1080p, 1440p, 2160p |
+| HEVC | MPEG-TS, HLS, MP4 and Matroska; Main / Main10, 8-bit or 10-bit 4:2:0, SDR output | 720p, 1080p, 1440p, 2160p |
 | VP9 | Direct WebM; Profile 0, 8-bit 4:2:0 | 1080p, 1440p, 2160p |
 
 Sources up to 1080p use a 1920×1080 presentation surface. Native 1440p video
@@ -145,9 +158,12 @@ at 3840×2160. Codec and renderer details are documented in
 | Circle | Back, dismiss, or clear active filters |
 | Square | Add or remove a favorite |
 | Triangle | Open advanced search and filters |
-| L1 / R1 | Switch between Live TV, Favorites, Sources, Settings, and About |
+| L1 / R1 | Switch between Live TV, Favorites, Sources, On demand, Settings, and About |
 | L2 / R2 | Previous or next page; hold to keep turning |
 | Triangle on a configurable source | Edit the custom M3U URL or Xtream account |
+| Square in Sources | Cycle daily, weekly and manual refresh |
+| Touchpad in Live TV / Favorites | Provider categories / favorite folders |
+| R3 in the channel browser | Open the programme guide |
 | Options | Refresh the selected catalog source |
 | Circle / Options during playback | Stop playback and return to the browser |
 | Touchpad + R1 during playback | Toggle codec and performance statistics |
@@ -390,59 +406,61 @@ console is unavailable.
 
 ## Roadmap
 
-Ideas asked for by the community, and some of our own. None of them is
-scheduled or promised yet; they are listed so they are not lost.
+Ideas asked for by the community, and some of our own. Checked items are
+implemented in this branch; their provider requirements and validation are
+documented in [the implementation guide](docs/ROADMAP_IMPLEMENTATION.md).
+The remaining ideas are not scheduled or promised.
 
 ### Sources
 
-- **The provider's own categories.** Browsing a source by the groups it
+- [x] **The provider's own categories.** Browsing a source by the groups it
   defines ("US / Movies", "US / Sports", ...), beside the app's own lists.
-- **Subcategories.** Opening a parent such as "US" to browse its "Sports"
+- [x] **Subcategories.** Opening a parent such as "US" to browse its "Sports"
   and "Movies" groups, including deeper groups such as "Sports / Football".
   Browse or hide a whole parent, or choose its children individually.
-- **Showing and hiding categories.** Choosing which of a provider's categories
+- [x] **Showing and hiding categories.** Choosing which of a provider's categories
   appear at all, so an account with tens of thousands of channels shows only
   the ones wanted.
-- **Several sources at once.** More than one playlist and more than one
+- [x] **Several sources at once.** More than one playlist and more than one
   account, shown together or switched between, instead of one source in use
   at a time.
 - **Local TV sources.** Tuners and servers on the home network, such as
   HDHomeRun and Tvheadend, as channel sources beside the playlists.
-- **MAC-code portals.** Signing in to a provider with a portal address and a
+- [x] **MAC-code portals.** Signing in to a provider with a portal address and a
   MAC code (Stalker/Ministra style), offered in Sources just below the Xtream
   Codes account.
-- **Video on demand.** The movies and TV shows an IPTV service offers beside
+- [x] **Video on demand.** The movies and TV shows an IPTV service offers beside
   its live channels, browsable and playable from the app.
 - **Managing lists from a phone.** Adding and editing playlists and accounts
   from the phone remote's page, in a phone's or a computer's browser, instead
   of the on-screen keyboard.
-- **A refresh schedule.** Choosing how often a source is downloaded again
+- [x] **A refresh schedule.** Choosing how often a source is downloaded again
   (daily, weekly, or only when asked) instead of every twelve hours: a very
   large list is a long download.
 
 ### Browsing
 
-- **Channel logos.** The picture a playlist gives for each channel, on its
+- [x] **Channel logos.** The picture a playlist gives for each channel, on its
   tile and on the large television, in place of the two letters.
-- **More favorites, in folders.** Room for more than 256 favorites, and named
+- [x] **More favorites, in folders.** Room for more than 256 favorites, and named
   folders to keep them in ("Football", "Kids").
-- **Hiding channels that did not open.** The app already remembers whether a
+- [x] **Hiding channels that did not open.** The app already remembers whether a
   channel opened the last time; a switch would leave the dead ones out of the
   lists.
-- **Starting on the last channel.** A setting that opens the channel watched
+- [x] **Starting on the last channel.** A setting that opens the channel watched
   last as soon as the app starts.
-- **A live preview.** After a moment on a channel, the large television
+- [x] **A live preview.** After a moment on a channel, the large television
   plays it, muted, before anything is pressed.
 
 ### Programme guide
 
-- **Now and next.** What each channel is showing and what follows, beside its
+- [x] **Now and next.** What each channel is showing and what follows, beside its
   name, from the guide an Xtream account or a playlist points to.
-- **The full guide.** The grid of channels and hours, to see the evening at a
+- [x] **The full guide.** The grid of channels and hours, to see the evening at a
   glance and open a channel from it.
-- **Catch-up.** Playing a programme that has already been shown, on the
+- [x] **Catch-up.** Playing a programme that has already been shown, on the
   channels whose provider keeps an archive.
-- **Searching what is on.** Finding a programme by its title ("football"
+- [x] **Searching what is on.** Finding a programme by its title ("football"
   finds the matches being shown now), not only a channel by its name.
 
 ### While watching

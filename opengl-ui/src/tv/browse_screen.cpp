@@ -712,8 +712,21 @@ void BrowseScreen::draw_hero_art(ui::Canvas &canvas, const iptv::ChannelView &ch
     list.shadow({set.x, set.y + 26.0f, set.w, set.h}, kHeroRadius, 56.0f,
                 Color::rgb(0x000000, 0.5f));
     list.glow(set.inset(-4.0f), kHeroRadius + 4.0f, 80.0f, accent.with_alpha(0.24f));
-    draw_channel_art(list, canvas.fonts, kHeroArt, kHeroRadius, channel,
-                     shared_.images.find(channel.tvg_logo));
+    const auto preview = shared_.preview.find(channel.id);
+    if (preview.id)
+    {
+        const auto screen = draw_tv_shell(list, kHeroArt, kHeroRadius, art_colors(channel.id));
+        list.rounded_rect(screen, screen.h * 0.13f, Color::rgb(0x080808));
+        // Keep the complete picture inside the curved screen, without cropping.
+        const float scale =
+            std::min(screen.w * 0.91f / preview.width, screen.h * 0.91f / preview.height);
+        const float w = preview.width * scale, h = preview.height * scale;
+        list.image(preview.id, {screen.cx() - w / 2, screen.cy() - h / 2, w, h}, {0, 0, 1, 1},
+                   Color::rgb(0xffffff));
+    }
+    else
+        draw_channel_art(list, canvas.fonts, kHeroArt, kHeroRadius, channel,
+                         shared_.images.find(channel.tvg_logo));
     list.pop_opacity();
 }
 

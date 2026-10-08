@@ -44,6 +44,14 @@ class App
     {
         shared_.images.clear();
     }
+    void configure_preview(LivePreview::Upload upload, ImageCache::Release release)
+    {
+        shared_.preview.configure(std::move(upload), std::move(release));
+    }
+    void stop_preview()
+    {
+        shared_.preview.clear();
+    }
     bool accepts_remote_search() const;
     bool remote_search(const char *query);
     void set_volume(int volume);

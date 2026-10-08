@@ -36,6 +36,8 @@ Settings load_settings(const std::string &data_dir)
             settings.hide_failed = value != 0;
         else if (std::sscanf(line, "resume_last=%d", &value) == 1)
             settings.resume_last = value != 0;
+        else if (std::sscanf(line, "live_preview=%d", &value) == 1)
+            settings.live_preview = value != 0;
         else if (std::sscanf(line, "volume=%d", &value) == 1)
             settings.volume = std::clamp(value, 0, 100);
         else if (std::sscanf(line, "resolution=%d", &value) == 1)
@@ -59,6 +61,7 @@ bool save_settings(const std::string &data_dir, const Settings &settings)
                  std::clamp(settings.volume, 0, 100), settings.diagnostics ? 1 : 0);
     std::fprintf(file, "hide_failed=%d\nresume_last=%d\n", settings.hide_failed ? 1 : 0,
                  settings.resume_last ? 1 : 0);
+    std::fprintf(file, "live_preview=%d\n", settings.live_preview ? 1 : 0);
     const bool written = std::ferror(file) == 0 && std::fflush(file) == 0;
     const bool closed = std::fclose(file) == 0;
     if (!written || !closed)

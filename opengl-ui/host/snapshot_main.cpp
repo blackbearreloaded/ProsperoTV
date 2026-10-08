@@ -14,6 +14,7 @@
 #include "gfx/gl_program.hpp"
 #include "gfx/renderer.hpp"
 #include "host_platform.hpp"
+#include "host_preview.hpp"
 #include "tv/app.hpp"
 
 #include <EGL/egl.h>
@@ -232,6 +233,7 @@ const Step kWalk[] = {
     move(Direction::down, 0.7f, "25a-settings-diagnostic-log"),
     move(Direction::down, 0.15f),
     move(Direction::down, 0.7f, "45-settings-playback"),
+    move(Direction::down, 0.7f, "62-settings-live-preview"),
     // Turned on: the page says so at the bottom, and so does every other one.
     press(Action::confirm, 0.7f, "25b-settings-diagnostic-log-on"),
     press(Action::confirm, 0.4f),
@@ -463,6 +465,18 @@ int main(int argc, char **argv)
             return renderer.batch().create_texture(pixels.width, pixels.height, pixels.rgba.data());
         },
         [](std::uint32_t texture) { glDeleteTextures(1, &texture); });
+    app.configure_preview(
+        [&renderer](std::uint32_t texture, const ptv::ImagePixels &pixels)
+        {
+            if (!texture)
+                return renderer.batch().create_texture(pixels.width, pixels.height,
+                                                       pixels.rgba.data());
+            glBindTexture(GL_TEXTURE_2D, texture);
+            glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, pixels.width, pixels.height, GL_RGBA,
+                            GL_UNSIGNED_BYTE, pixels.rgba.data());
+            return texture;
+        },
+        [](std::uint32_t texture) { glDeleteTextures(1, &texture); });
 
     ptv::Frame frame;
     std::vector<unsigned char> pixels(static_cast<std::size_t>(width * height * 4));
@@ -527,6 +541,18 @@ int main(int argc, char **argv)
         if (step.capture != nullptr)
             render(step.capture);
     }
+    // A synthetic moving picture exercises the same preview texture path.
+    host::set_preview(true);
+    app.stop_preview();
+    for (int i = 0; i < 120; ++i)
+    {
+        hui::InputFrame input;
+        app.update(input, kDt, feedback);
+        std::this_thread::sleep_for(std::chrono::milliseconds(16));
+    }
+    render("63-live-preview");
+    app.stop_preview();
+    host::set_preview(false);
     {
         // The opening, at six of its moments.
         const std::pair<float, const char *> moments[] = {

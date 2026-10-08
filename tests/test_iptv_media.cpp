@@ -20,7 +20,7 @@ struct Memory
     unsigned seeks = 0;
     explicit Memory(const char *name)
     {
-        std::ifstream file(std::string("tests/fixtures/media/") + name, std::ios::binary);
+        std::ifstream file(std::string("build/media-tests/fixtures/") + name, std::ios::binary);
         bytes.assign(std::istreambuf_iterator<char>(file), {});
     }
     int run(std::string *error)

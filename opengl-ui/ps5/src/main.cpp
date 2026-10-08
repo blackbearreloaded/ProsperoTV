@@ -400,6 +400,18 @@ bool run_menu(ptv::Model &model, ptv::Settings *settings, const LastPlayback &la
             },
             [](std::uint32_t texture) { glDeleteTextures(1, &texture); });
         app.set_remote_hint(iptv_remote_hint());
+        app.configure_preview(
+            [&renderer](std::uint32_t texture, const ptv::ImagePixels &pixels)
+            {
+                if (!texture)
+                    return renderer.batch().create_texture(pixels.width, pixels.height,
+                                                           pixels.rgba.data());
+                glBindTexture(GL_TEXTURE_2D, texture);
+                glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, pixels.width, pixels.height, GL_RGBA,
+                                GL_UNSIGNED_BYTE, pixels.rgba.data());
+                return texture;
+            },
+            [](std::uint32_t texture) { glDeleteTextures(1, &texture); });
         if (g_menu_sessions == 1)
             app.play_intro();
         InputTracker tracker;
@@ -508,6 +520,8 @@ bool run_menu(ptv::Model &model, ptv::Settings *settings, const LastPlayback &la
                 }
             }
             chosen = !resolving_portal && model.take_play_request(request);
+            if (chosen)
+                app.stop_preview();
             if (chosen && !request->portal_command.empty())
             {
                 // Leave the menu's picture and controller alive while the
@@ -627,6 +641,7 @@ bool run_menu(ptv::Model &model, ptv::Settings *settings, const LastPlayback &la
                 // close it, and its files are replaced behind it.
                 say("[TV] closing: the update is staged");
                 script.closing("the update is staged");
+                app.stop_preview();
                 model.close();
                 audio_out.stop();
                 pad.close();
@@ -637,6 +652,7 @@ bool run_menu(ptv::Model &model, ptv::Settings *settings, const LastPlayback &la
                 // A scripted run ends the app itself, the way the system
                 // would close it: nothing is killed.
                 say("[TV] closing: the test script ended");
+                app.stop_preview();
                 model.close();
                 audio_out.stop();
                 pad.close();
@@ -1029,6 +1045,17 @@ int main()
     if (IPTV_AUTOTEST_ENABLED != 0)
         (void)run_autotest_if_present();
 
+    // A disposable, sandboxed test title can start with a fixture library.
+    // Seed only once, so later launches exercise its real persisted state.
+    if (TV_DEV_SCRIPTS != 0 && !tv::storage::elevated())
+    {
+        const auto library = tv::storage::config_dir() + "/prosperotv-library.sqlite3";
+        std::string bytes;
+        if (!save::read_file(library, &bytes, 4u * 1024u * 1024u) &&
+            save::read_file(tv::storage::app_file("dev/library.sqlite3"), &bytes,
+                            4u * 1024u * 1024u))
+            (void)save::write_atomic(library, bytes);
+    }
     static ptv::Model model(tv::storage::config_dir(), tv::storage::cache_dir());
     ptv::Settings settings = ptv::load_settings(tv::storage::config_dir());
     // The diagnostic log: the viewer's switch in Settings, a debug build, or

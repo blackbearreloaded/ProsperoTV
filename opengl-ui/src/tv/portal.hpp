@@ -5,6 +5,7 @@
 #include "iptv_catalog.h"
 #include "iptv_http.h"
 #include <atomic>
+#include <functional>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -27,7 +28,11 @@ std::string portal_channel_id(std::uint64_t source, std::string_view id);
 class PortalClient
 {
   public:
-    PortalClient(PortalCredentials credentials, const iptv::http::RequestControl *control);
+    using Fetch = std::function<iptv::http::FetchResult(
+        const char *, char *, std::size_t, std::size_t, const iptv::http::RequestControl *,
+        const iptv::http::RequestHeaders *)>;
+    PortalClient(PortalCredentials credentials, const iptv::http::RequestControl *control,
+                 Fetch fetch = {});
     bool sign_in();
     bool load(iptv::Catalog *catalog, iptv::ParseReport *report,
               std::atomic<unsigned> *progress = nullptr);
@@ -45,6 +50,7 @@ class PortalClient
     bool request(std::string_view type, std::string_view action, std::string *reply,
                  const Parameters &parameters = {});
     PortalCredentials credentials_;
+    Fetch fetch_;
     const iptv::http::RequestControl *control_;
     std::string cookie_, authorization_, referrer_, error_;
 };

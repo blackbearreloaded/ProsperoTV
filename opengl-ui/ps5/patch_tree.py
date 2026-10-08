@@ -177,7 +177,8 @@ swap("src/iptv_native_backend.c",
      "    started = monotonic_us();\n"
      "    state->telemetry.last_present_source = (uintptr_t)output->buffer;\n",
      "    /* The tuning screen leaves before the first picture is shown. */\n"
-     "    iptv_native_agc_loading_finish();\n"
+     "    if (!state->config.picture)\n"
+     "        iptv_native_agc_loading_finish();\n"
      "    started = monotonic_us();\n"
      "    state->telemetry.last_present_source = (uintptr_t)output->buffer;\n")
 swap("src/iptv_player.cpp",

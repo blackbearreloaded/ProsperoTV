@@ -335,6 +335,8 @@ class Model
     }
     void refresh_guide();
     bool take_play_request(PlayRequest *request);
+    // The focused live channel without changing history or playback health.
+    std::optional<PlayRequest> preview_request(std::string_view channel_id) const;
     // Called when the menu reopens after a channel that would not play.
     void report_playback_failure(const char *channel_id, const char *channel_name, int result,
                                  unsigned attempts, const char *detail);

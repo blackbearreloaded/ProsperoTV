@@ -57,6 +57,16 @@ extern "C"
         IPTV_NATIVE_STATE_ERROR
     } iptv_native_state_t;
 
+    /* A borrowed, linear NV12/P010 picture. Only valid during the callback.
+     * A consumer must copy it before returning; it owns no display resources. */
+    typedef struct iptv_native_picture
+    {
+        const void *data;
+        size_t bytes;
+        uint32_t pitch, surface_height, width, height, bit_depth;
+        uint64_t pts_us;
+    } iptv_native_picture_t;
+
     typedef struct iptv_native_open_config
     {
         iptv_native_codec_t codec;
@@ -71,6 +81,10 @@ extern "C"
         uint32_t hdr;
         uint32_t enable_audio;
         uint32_t audio_stream_type; /* TS 0x03/0x04: MP2; zero/0x0f: AAC ADTS. */
+        /* Optional menu preview: disables audio and the full-screen presenter. */
+        void (*picture)(void *context, const iptv_native_picture_t *picture);
+        void *picture_context;
+        int (*picture_cancelled)(void *context);
     } iptv_native_open_config_t;
 
     typedef struct iptv_native_telemetry

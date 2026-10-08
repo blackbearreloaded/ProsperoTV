@@ -4,6 +4,7 @@
 
 #include "core/save_file.hpp"
 #include "host_platform.hpp"
+#include "host_preview.hpp"
 #include "large_list.hpp"
 #include "tv/app.hpp"
 #include "tv/draw.hpp"
@@ -618,12 +619,49 @@ TEST_F(AppTest, VolumeSettingsPersistAndClamp)
     EXPECT_EQ(ptv::load_settings(dir_).volume, 100);
     ptv::Settings settings;
     settings.volume = 35;
+    settings.live_preview = false;
     ASSERT_TRUE(ptv::save_settings(dir_, settings));
     EXPECT_EQ(ptv::load_settings(dir_).volume, 35);
+    EXPECT_FALSE(ptv::load_settings(dir_).live_preview);
     std::ofstream(dir_ + "/prosperotv-interface-v1.txt") << "volume=-20\n";
     EXPECT_EQ(ptv::load_settings(dir_).volume, 0);
     std::ofstream(dir_ + "/prosperotv-interface-v1.txt") << "volume=200\n";
     EXPECT_EQ(ptv::load_settings(dir_).volume, 100);
+}
+
+TEST_F(AppTest, PreviewStopsForSheetsAndCanBeTurnedOff)
+{
+    host::set_preview(true);
+    app_->configure_preview([](std::uint32_t, const ptv::ImagePixels &) { return 20u; },
+                            [](std::uint32_t) {});
+    idle(90);
+    for (int i = 0; i < 100 && host::preview_starts() == 0; ++i)
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    EXPECT_EQ(host::preview_starts(), 1u);
+    EXPECT_EQ(model_->group_size(ptv::Group::recent), 0u);
+    press(Action::north);
+    ASSERT_TRUE(app_->searching());
+    for (int i = 0; i < 100 && host::preview_stops() == 0; ++i)
+    {
+        idle(1);
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+    EXPECT_EQ(host::preview_stops(), 1u);
+    press(Action::back);
+    for (int i = 0; i < 4; ++i)
+        press(Action::page_next);
+    for (int i = 0; i < 14; ++i)
+        move(Direction::down);
+    move(Direction::up); // Live previews, above Diagnostic log.
+    press(Action::confirm);
+    EXPECT_FALSE(app_->settings().live_preview);
+    const auto started = host::preview_starts();
+    for (int i = 0; i < 4; ++i)
+        press(Action::page_prev);
+    idle(180);
+    EXPECT_EQ(host::preview_starts(), started);
+    app_->stop_preview();
+    host::set_preview(false);
 }
 
 TEST_F(AppTest, ProviderCategoriesAreBrowsableAndCanBeHiddenFromTheController)

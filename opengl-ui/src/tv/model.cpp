@@ -770,6 +770,33 @@ Model::Starred Model::toggle_favorite(unsigned catalog_index)
 
 // ---- playback -----------------------------------------------------------------------
 
+std::optional<PlayRequest> Model::preview_request(std::string_view channel_id) const
+{
+    const auto index = catalog_.Find(channel_id);
+    if (index >= catalog_.size())
+        return {};
+    const auto channel = catalog_[index];
+    PlayRequest request;
+    request.channel_id = channel.id;
+    request.channel_name = channel.name;
+    request.source_id = channel.source_id;
+    if (!channel.url.empty())
+        request.urls.emplace_back(channel.url);
+    for (const auto url : channel.alternate_urls)
+        if (!url.empty())
+            request.urls.emplace_back(url);
+    request.user_agent = channel.http_user_agent;
+    request.referrer = channel.http_referrer;
+    request.record_channel_result = false;
+    if (active_source_ == iptv::SourceKind::Portal)
+    {
+        request.portal = portal_;
+        request.portal_command = channel.portal_command;
+    }
+    return request.urls.empty() && request.portal_command.empty() ? std::nullopt
+                                                                  : std::optional{request};
+}
+
 bool Model::play(unsigned catalog_index)
 {
     if (catalog_index >= channel_count())

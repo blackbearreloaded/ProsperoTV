@@ -51,6 +51,7 @@ enum FormRow : int
     kRowDiagnostics,
     kRowHideFailed,
     kRowResume,
+    kRowPreview,
 };
 
 constexpr const char *kTabNames[] = {"Live TV",   "Favorites", "Sources",
@@ -160,6 +161,8 @@ App::App(Model &model, const ui::Fonts &fonts, std::uint32_t glass_texture,
     form_.add_action(kRowUpdate, "Download it again now");
     form_.add_toggle(kRowHideFailed, "Hide channels that failed", settings.hide_failed);
     form_.add_toggle(kRowResume, "Start on the last channel", settings.resume_last);
+    form_.add_toggle(kRowPreview, "Live previews", settings.live_preview).description =
+        "Play the focused channel in the large television, muted, after a moment.";
     model.set_hide_failed(settings.hide_failed);
     form_.add_header("Troubleshooting");
     form_.add_toggle(kRowDiagnostics, "Diagnostic log", settings.diagnostics).description =
@@ -362,6 +365,7 @@ void App::apply_settings()
     next.diagnostics = form_.toggle_value(kRowDiagnostics);
     next.hide_failed = form_.toggle_value(kRowHideFailed);
     next.resume_last = form_.toggle_value(kRowResume);
+    next.live_preview = form_.toggle_value(kRowPreview);
     shared_.model.set_hide_failed(next.hide_failed);
     if (next == shared_.settings)
         return;
@@ -669,6 +673,12 @@ void App::step(const InputFrame &input, float dt, ui::Feedback &feedback)
 
     tabs_.update(dt);
     browse_.update(dt);
+    const bool preview_allowed = browsing() && shared_.settings.live_preview && intro_ < 0 &&
+                                 !update_.is_open() && !failure_.is_open() && !search_.is_open() &&
+                                 !library_sheet_.is_open() && !guide_sheet_.is_open() &&
+                                 !pairing_open_;
+    const auto focused = preview_allowed ? browse_.focused() : std::nullopt;
+    shared_.preview.update(focused ? model.preview_request(focused->id) : std::nullopt, dt);
     if (tabs_.active() == kVod)
         vod_.update();
     shared_.images.update(browsing()               ? browse_.image_urls()

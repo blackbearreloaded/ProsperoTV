@@ -7,6 +7,7 @@ root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 cd "$root"
 build="$root/build/media-tests"
 mkdir -p "$build"
+bash tools/make-media-fixtures.sh
 if ! bash tools/setup-audio-dependencies.sh host > "$build/dependencies.log" 2>&1; then
     tail -60 "$build/dependencies.log" >&2
     exit 1

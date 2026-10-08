@@ -1108,7 +1108,9 @@ static int32_t pace_before_present(backend_state_t *state, uint64_t pts_us, int 
             remaining > PACE_SLEEP_SLICE_US ? PACE_SLEEP_SLICE_US : (uint32_t)remaining;
         int32_t result;
 
-        if (atomic_load_explicit(&state->stop_requested, memory_order_relaxed))
+        if (atomic_load_explicit(&state->stop_requested, memory_order_relaxed) ||
+            (state->config.picture_cancelled &&
+             state->config.picture_cancelled(state->config.picture_context)))
             return IPTV_NATIVE_E_CANCELLED;
         result = sceKernelUsleep(slice);
         if (result < 0)
@@ -1305,6 +1307,8 @@ int32_t iptv_native_backend_open(iptv_native_backend_t *backend,
 
     state->mode = mode;
     state->config = *config;
+    if (config->picture)
+        state->config.enable_audio = 0;
     state->open_started_us = monotonic_us();
     state->telemetry.codec = config->codec;
     state->telemetry.profile = config->profile;
@@ -1315,12 +1319,13 @@ int32_t iptv_native_backend_open(iptv_native_backend_t *backend,
     state->telemetry.visible_height = config->visible_height;
     state->telemetry.output_pitch = 0;
     state->telemetry.output_surface_height = 0;
-    iptv_native_agc_present_set_cancelled(0);
+    if (!config->picture)
+        iptv_native_agc_present_set_cancelled(0);
 
     result = initialize_video(state);
     if (result == 0)
         result = start_video_worker(state);
-    if (result == 0 && config->enable_audio)
+    if (result == 0 && state->config.enable_audio)
     {
         int32_t audio_result = initialize_audio(state);
         if (audio_result == 0)
@@ -1362,7 +1367,7 @@ static int32_t complete_pending_presentation(backend_state_t *state)
     if (!state->presentation_pending)
         return 0;
     started = monotonic_us();
-    result = iptv_native_agc_present_finish_frame();
+    result = state->config.picture ? 0 : iptv_native_agc_present_finish_frame();
     elapsed = monotonic_us() - started;
     state->telemetry.present_total_us += elapsed;
     if (elapsed > state->telemetry.present_max_us)
@@ -1567,6 +1572,7 @@ static int32_t present_video_output(backend_state_t *state, const videodec2_fram
     started = monotonic_us();
     state->telemetry.last_present_source = (uintptr_t)output->buffer;
     state->telemetry.zero_copy_pointer_match =
+        !state->config.picture &&
         state->telemetry.last_decoder_output == state->telemetry.last_present_source;
     rate_now = monotonic_us();
     if (state->controls_started_us == 0)
@@ -1576,10 +1582,20 @@ static int32_t present_video_output(backend_state_t *state, const videodec2_fram
         state->config.visible_height,  state->frame_rate_x100,
         state->bitrate_kbps,           rate_now - state->controls_started_us < CONTROLS_OVERLAY_US,
     };
-    result = iptv_native_agc_present_yuv_deferred(
-        output->buffer, (size_t)output->buffer_size, output->pitch, output->height,
-        state->config.visible_width, state->config.visible_height, state->config.bit_depth,
-        &overlay);
+    if (state->config.picture)
+    {
+        const iptv_native_picture_t picture = {
+            output->buffer,          (size_t)output->buffer_size, output->pitch,
+            output->height,          state->config.visible_width, state->config.visible_height,
+            state->config.bit_depth, presentation_pts_us};
+        state->config.picture(state->config.picture_context, &picture);
+        result = 0;
+    }
+    else
+        result = iptv_native_agc_present_yuv_deferred(
+            output->buffer, (size_t)output->buffer_size, output->pitch, output->height,
+            state->config.visible_width, state->config.visible_height, state->config.bit_depth,
+            &overlay);
     elapsed = monotonic_us() - started;
     state->telemetry.present_total_us += elapsed;
     if (elapsed > state->telemetry.present_max_us)
@@ -1962,6 +1978,9 @@ static int32_t queue_coded_frame(backend_state_t *state, const void *coded_frame
             atomic_load_explicit(&state->video_worker_result, memory_order_acquire);
         if (worker_result != 0)
             return worker_result;
+        if (state->config.picture_cancelled &&
+            state->config.picture_cancelled(state->config.picture_context))
+            return IPTV_NATIVE_E_CANCELLED;
         if (atomic_load_explicit(&state->stop_requested, memory_order_relaxed))
             return 0;
         read = atomic_load_explicit(&state->video_queue_read, memory_order_acquire);
@@ -2423,7 +2442,8 @@ void iptv_native_backend_request_stop(iptv_native_backend_t *backend)
     atomic_store_explicit(&state->audio_worker_stop, 1, memory_order_release);
     atomic_store_explicit(&state->video_worker_stop, 1, memory_order_release);
     state->telemetry.stop_requested = 1;
-    iptv_native_agc_present_set_cancelled(1);
+    if (!state->config.picture)
+        iptv_native_agc_present_set_cancelled(1);
 }
 
 int iptv_native_backend_stop_requested(const iptv_native_backend_t *backend)
@@ -2551,7 +2571,7 @@ int32_t iptv_native_backend_drain(iptv_native_backend_t *backend)
     result = audio_drain(state);
     if (first_result == 0 && result != 0)
         first_result = result;
-    result = iptv_native_agc_present_drain();
+    result = state->config.picture ? 0 : iptv_native_agc_present_drain();
     if (first_result == 0 && result != 0)
         first_result = result;
     if (first_result == 0 && state->telemetry.hardware_validated &&
@@ -2605,7 +2625,7 @@ int32_t iptv_native_backend_close(iptv_native_backend_t *backend)
     state->state = IPTV_NATIVE_STATE_STOPPING;
     state->telemetry.state = state->state;
     iptv_native_backend_request_stop(backend);
-    result = iptv_native_agc_present_shutdown();
+    result = state->config.picture ? 0 : iptv_native_agc_present_shutdown();
     if (first_result == 0 && result != 0)
         first_result = result;
 

@@ -47,6 +47,7 @@ includes="-I$root/src -I$root/ps5/src -I$root/host -I$kit/src -I$kit/third_party
         edge "$source" "$strict -fno-exceptions -fno-rtti"
     done
     edge "$root/host/host_platform.cpp" "$strict"
+    edge "$root/host/host_preview.cpp" "$strict"
     # The tuning screen the player shows is plain CPU work: tested here too.
     for source in "$root"/ps5/src/tv_plate.cpp "$root"/ps5/src/tv_tuning.cpp; do
         edge "$source" "$strict"

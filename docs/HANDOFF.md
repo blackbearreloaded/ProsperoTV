@@ -1,5 +1,11 @@
 # ProsperoTV handoff
 
+Current roadmap work is described in [ROADMAP_IMPLEMENTATION.md](ROADMAP_IMPLEMENTATION.md).
+The historical validation below predates these changes. The new feature branch
+has host sanitizer tests, container fixtures, UI renders and a PS5 cross-build;
+the G6 hardware gate remains pending. Test titles must use `dev/no-elevation.txt`
+and their own sandbox storage.
+
 Updated: 2026-08-29 America/New_York
 
 ## Current accepted candidate

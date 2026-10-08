@@ -143,8 +143,10 @@ std::string portal_channel_id(std::uint64_t source, std::string_view id)
                   "portal:%016llx:", static_cast<unsigned long long>(source));
     return prefix + std::string(id);
 }
-PortalClient::PortalClient(PortalCredentials credentials, const iptv::http::RequestControl *control)
-    : credentials_(std::move(credentials)), control_(control)
+PortalClient::PortalClient(PortalCredentials credentials, const iptv::http::RequestControl *control,
+                           Fetch fetch)
+    : credentials_(std::move(credentials)), fetch_(fetch ? std::move(fetch) : platform::fetch),
+      control_(control)
 {
     cookie_ = "mac=" + encode(credentials_.mac) + "; stb_lang=en; timezone=UTC";
     const auto server = credentials_.url.rfind("/server/load.php");
@@ -178,8 +180,8 @@ bool PortalClient::request(std::string_view type, std::string_view action, std::
     constexpr std::size_t limit = 4u * 1024u * 1024u;
     reply->resize(limit + 1);
     const auto request_headers = headers();
-    const auto response = platform::fetch(url.c_str(), reply->data(), reply->size(), limit,
-                                          control_, &request_headers);
+    const auto response =
+        fetch_(url.c_str(), reply->data(), reply->size(), limit, control_, &request_headers);
     reply->resize(response.bytes);
     if (response.status == iptv::http::Status::ok)
         return true;
