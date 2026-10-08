@@ -502,7 +502,10 @@ int ReadMedia(const MediaInput &input, const MediaOutput &output, std::string *e
     r.demux->interrupt_callback = {Reader::interrupt, &r};
     r.demux->probesize = 4 * 1024 * 1024;
     r.demux->max_analyze_duration = 5 * AV_TIME_BASE;
-    r.demux->max_streams = 32;
+    // Provider movies commonly carry dozens of subtitle languages. Keep the
+    // demux bound separate from the smaller number of tracks exposed by the UI.
+    constexpr unsigned kMaxContainerStreams = 128;
+    r.demux->max_streams = kMaxContainerStreams;
     r.demux->max_index_size = 8 * 1024 * 1024;
     AVDictionary *options = nullptr;
     av_dict_set(&options, "format_whitelist",
@@ -524,7 +527,7 @@ int ReadMedia(const MediaInput &input, const MediaOutput &output, std::string *e
     av_dict_free(&options);
     if (r.cancelled())
         return 1;
-    if (opened < 0 || r.demux->nb_streams > 32)
+    if (opened < 0 || r.demux->nb_streams > kMaxContainerStreams)
         return r.cancelled() ? 1
                              : fail(hls ? "This HLS video could not be read."
                                         : "This MP4 or Matroska video could not be read.");

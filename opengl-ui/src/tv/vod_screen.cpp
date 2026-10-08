@@ -239,14 +239,15 @@ void VodScreen::draw(ui::Canvas &canvas) const
     ui::text(draw, fonts.semibold, "YOUR PROVIDER'S LIBRARY", kMargin, 162, 18, tone::accent,
              gfx::Align::left, 4);
     const auto &face = title_face(fonts, heading);
-    ui::text(draw, face, face.font->fit(heading, 54, kWidth - 2 * kMargin), kMargin, 224, 54,
-             theme.text);
+    ui::text(draw, face, face.font->fit(readable(face, heading), 54, kWidth - 2 * kMargin), kMargin,
+             224, 54, theme.text);
     const std::string location = view.vod_category.empty() ? "All categories" : view.vod_category;
-    ui::text(
-        draw, fonts.regular,
-        fonts.regular.font->fit(
-            location + (view.vod_query.empty() ? "" : " / Search: " + view.vod_query), 23, 1100),
-        kMargin, 274, 23, theme.text_muted);
+    const std::string breadcrumb =
+        location + (view.vod_query.empty() ? "" : " / Search: " + view.vod_query);
+    const auto &breadcrumb_face = face_for(fonts, fonts.regular, breadcrumb);
+    ui::text(draw, breadcrumb_face,
+             breadcrumb_face.font->fit(readable(breadcrumb_face, breadcrumb), 23, 1100), kMargin,
+             274, 23, theme.text_muted);
     for (int i = top_; i < static_cast<int>(rows_.size()) && i < top_ + kRows; ++i)
     {
         const auto &row = rows_[i];
@@ -266,7 +267,9 @@ void VodScreen::draw(ui::Canvas &canvas) const
                 label += " (Approved for kids)";
         }
         const auto &font = face_for(fonts, fonts.semibold, label);
-        ui::text(draw, font, font.font->fit(label, 27, 960), kMargin + 24, y + 47, 27, theme.text);
+        const auto shown = readable(font, label);
+        ui::text(draw, font, font.font->fit(shown.empty() ? "Untitled" : shown, 27, 960),
+                 kMargin + 24, y + 47, 27, theme.text);
         if (row.kind != Kind::item || view.vod_kind == 1)
             ui::text(draw, fonts.regular, ">", kMargin + 1020, y + 47, 27, tone::accent);
     }
@@ -295,11 +298,14 @@ void VodScreen::draw(ui::Canvas &canvas) const
             named.name = view.vod_kind == static_cast<int>(VodKind::episodes)
                              ? view.vod_series_name
                              : std::string(item.name);
-            ui::text(draw, fonts.display, monogram(named), cover.cx(), cover.cy() + 25, 76,
-                     tone::accent, gfx::Align::center);
+            const auto letters = monogram(named);
+            const auto &letter_face = face_for(fonts, fonts.display, letters);
+            ui::text(draw, letter_face, readable(letter_face, letters), cover.cx(), cover.cy() + 25,
+                     76, tone::accent, gfx::Align::center);
         }
-        ui::paragraph(draw, fonts.regular, item.group_title, 1180, 840, 24, 600, 34,
-                      theme.text_muted, 3);
+        const auto &category_face = face_for(fonts, fonts.regular, item.group_title);
+        ui::paragraph(draw, category_face, readable(category_face, item.group_title), 1180, 840, 24,
+                      600, 34, theme.text_muted, 3);
     }
     else
         ui::paragraph(draw, fonts.regular,

@@ -66,8 +66,8 @@ enum FormRow : int
     kRowSleepRemaining,
 };
 
-constexpr const char *kTabNames[] = {"Live TV",   "Favorites", "Sources",
-                                     "On demand", "Settings",  "About"};
+constexpr const char *kTabNames[] = {"Live TV", "On demand", "Favorites",
+                                     "Sources", "Settings",  "About"};
 constexpr const char *kActionNames[] = {"Up",       "Down",     "Left", "Right", "Cross", "Circle",
                                         "Triangle", "Square",   "L1",   "R1",    "L2",    "R2",
                                         "Options",  "Touchpad", "L3",   "R3"};
@@ -150,7 +150,7 @@ App::App(Model &model, const ui::Fonts &fonts, std::uint32_t glass_texture,
     tabs_.style.focus_ring = false;
     tabs_.style.on_page = true;
     tabs_.set_tabs(
-        {{"Live TV"}, {"Favorites"}, {"Sources"}, {"On demand"}, {"Settings"}, {"About"}});
+        {{"Live TV"}, {"On demand"}, {"Favorites"}, {"Sources"}, {"Settings"}, {"About"}});
     tabs_.set_bounds({420.0f, kHeaderY - 28.0f, 1150.0f, 56.0f});
     tabs_.set_focused(false);
     tabs_.set_active(std::clamp(model.view.tab, 0, kTabCount - 1), true);

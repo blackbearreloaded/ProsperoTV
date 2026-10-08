@@ -209,6 +209,22 @@ TEST(Media, ConvertsHevcLengthPrefixedPacketsForTheNativeDecoder)
     ASSERT_EQ(memory.run(&error), 0) << error;
     check_transport(memory, true);
 }
+TEST(Media, ReadsMoviesWithManySubtitleLanguagesButRetainsAStreamLimit)
+{
+    std::string error;
+    for (const auto *name : {"many-subtitles-40.mkv", "many-subtitles-40.mp4"})
+    {
+        SCOPED_TRACE(name);
+        Memory movie(name);
+        ASSERT_FALSE(movie.bytes.empty());
+        ASSERT_EQ(movie.run(&error), 0) << error;
+        check_transport(movie, false);
+    }
+    Memory excessive("many-subtitles-128.mkv");
+    ASSERT_FALSE(excessive.bytes.empty());
+    EXPECT_EQ(excessive.run(&error), -1);
+    EXPECT_FALSE(error.empty());
+}
 TEST(Media, PreservesBothLanguagesAndSwitchesRealAudioWithoutReopeningVideo)
 {
     for (const auto *name : {"two-audio.mp4", "two-audio.mkv", "hls-mpegts/master.m3u8",

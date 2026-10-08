@@ -53,7 +53,7 @@ std::uint32_t button(const std::string &name)
     return 0;
 }
 
-const char *kTabNames[] = {"live", "favorites", "sources", "vod", "settings", "about"};
+const char *kTabNames[] = {"live", "vod", "favorites", "sources", "settings", "about"};
 
 } // namespace
 
