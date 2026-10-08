@@ -95,6 +95,24 @@ TEST(IptvHttpTest, ValidatesTheByteRangeBeforeSeekingInAMovie)
     EXPECT_EQ(size, -1);
 }
 
+TEST(IptvHttpTest, AcceptsARedundantFullFileRangeButNeverAnIgnoredSeek)
+{
+    std::int64_t size = -1;
+    constexpr auto full =
+        "Content-Length: 9000000000\r\nContent-Range: bytes 0-8999999999/9000000000\r\n";
+    for (const auto offset : {-1, 0})
+    {
+        EXPECT_TRUE(iptv::http::ParseStreamRange(full, 200, offset, &size));
+        EXPECT_EQ(size, 9000000000);
+    }
+    EXPECT_FALSE(iptv::http::ParseStreamRange(full, 200, 200, &size));
+    for (const auto headers :
+         {"Content-Range: bytes 0-499/1000\r\n", "Content-Range: bytes 200-999/1000\r\n",
+          "Content-Range: bytes 0-999/*\r\n",
+          "Content-Length: 999\r\nContent-Range: bytes 0-999/1000\r\n"})
+        EXPECT_FALSE(iptv::http::ParseStreamRange(headers, 200, -1, &size));
+}
+
 TEST(IptvHttpTest, ExplainsStandardHttpFailures)
 {
     EXPECT_EQ(Describe(iptv::http::Status::http_status_error, 404),

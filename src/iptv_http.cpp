@@ -68,7 +68,7 @@ bool ParseStreamRange(std::string_view headers, int status, std::int64_t offset,
         *size = length;
         return true;
     }
-    if (status != 206 || !range.starts_with("bytes "))
+    if ((status != 206 && status != 200) || !range.starts_with("bytes "))
         return false;
     range.remove_prefix(6);
     const auto dash = range.find('-'), slash = range.find('/');
@@ -82,6 +82,10 @@ bool ParseStreamRange(std::string_view headers, int status, std::int64_t offset,
         return false;
     if (range.substr(slash + 1) != "*" &&
         (!number(range.substr(slash + 1), &total) || last >= total))
+        return false;
+    // Some providers redundantly describe the entire file in a 200 response.
+    // This is usable at the start, but cannot satisfy a seek into the file.
+    if (status == 200 && (offset > 0 || first != 0 || total <= 0 || last != total - 1))
         return false;
     *size = total;
     return true;
