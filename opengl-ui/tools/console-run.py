@@ -296,10 +296,17 @@ def main():
         time.sleep(3)
         console = connect()
         profile_places = []
-        for root in ("/data/prosperotv/profiles", f"{storage}/profiles"):
-            for name, facts in (console.entries(root) or {}).items():
-                if re.fullmatch(r"[0-9a-f]{8}", name) and facts.get("type") == "dir":
+        sandboxes = [name for name in (console.entries("/mnt/sandbox") or {})
+                     if name.startswith(title + "_")]
+        roots = ["/data/prosperotv/profiles", *(f"/mnt/sandbox/{name}/download0/profiles" for name in sandboxes)]
+        discovery = {"sandboxes": sandboxes, "roots": {}}
+        for root in roots:
+            entries = console.entries(root)
+            discovery["roots"][root] = entries
+            for name, facts in (entries or {}).items():
+                if re.fullmatch(r"[0-9a-f]{8}", name) and facts.get("type", "").lower() == "dir":
                     profile_places.append(f"{root}/{name}/logs/dev")
+        (results / "discovery.json").write_text(json.dumps(discovery, indent=2))
         for place in places + profile_places:
             if (console.read(f"{place}/handled.txt") or b"").decode().strip() == token:
                 dev = place

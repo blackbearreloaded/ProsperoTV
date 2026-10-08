@@ -253,8 +253,9 @@ std::vector<std::string> usb_drives(const std::string &mount_root)
         struct stat status
         {
         };
-        if (lstat(path.c_str(), &status) == 0 && S_ISDIR(status.st_mode) &&
-            access(path.c_str(), R_OK | X_OK) == 0)
+        // The actual operation checks read/write access and reports failures.
+        // access() is not a reliable availability probe in the console sandbox.
+        if (lstat(path.c_str(), &status) == 0 && S_ISDIR(status.st_mode))
             result.push_back(path);
     }
     return result;
