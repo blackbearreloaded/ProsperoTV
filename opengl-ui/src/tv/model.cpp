@@ -832,6 +832,20 @@ std::optional<PlayRequest> Model::preview_request(std::string_view channel_id) c
                                                                   : std::optional{request};
 }
 
+std::optional<unsigned> Model::previous_channel(std::string_view current) const
+{
+    for (const auto &id : user_.recent_channel_ids)
+    {
+        if (id == current)
+            continue;
+        const auto index = catalog_.Find(id);
+        if (index != iptv::Catalog::npos && (marks_[index] & 4u) == 0 &&
+            content_allowed(catalog_[index]))
+            return static_cast<unsigned>(index);
+    }
+    return std::nullopt;
+}
+
 bool Model::play(unsigned catalog_index)
 {
     if (catalog_index >= channel_count() || pin_prompt() ||

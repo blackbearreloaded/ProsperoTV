@@ -3,6 +3,10 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "tv/guide.hpp"
 #include "tv/model.hpp"
+#include "tv/playback_osd.hpp"
+#include "core/save_file.hpp"
+#include "iptv_input.h"
+#include <png.h>
 #include "host_platform.hpp"
 #include "iptv_store.h"
 #include "iptv_xtream.h"
@@ -80,6 +84,76 @@ class GuideTest : public ::testing::Test
     std::string dir;
     std::int64_t now = 0;
 };
+
+TEST_F(GuideTest, PlaybackBannerUsesMappedGuideIdsAndUpdatesOnProgrammeChange)
+{
+    const auto playlist = dir + "/list.m3u", xml = dir + "/guide.xml";
+    std::ofstream(playlist) << kPlaylist;
+    std::ofstream(xml) << kXml;
+    host::set_network(true, playlist);
+    host::set_network_response("https://guide.invalid/guide.xml.gz", xml);
+    ptv::Model model(dir);
+    ASSERT_TRUE(model.open());
+    settle(model);
+    model.set_query("Sports One");
+    ASSERT_EQ(model.visible_count(), 1u);
+    ASSERT_TRUE(model.play(model.visible(0)));
+    ptv::PlayRequest request;
+    ASSERT_TRUE(model.take_play_request(&request));
+    model.clear_filters();
+    model.close();
+    ptv::PlaybackOsd osd(model, request);
+    ASSERT_NE(std::getenv("KIT_FONTS"), nullptr);
+    ASSERT_TRUE(osd.load_fonts(std::getenv("KIT_FONTS")));
+    hui::gfx::Font font;
+    std::string font_data;
+    ASSERT_TRUE(hui::save::read_file(
+        std::string(std::getenv("KIT_FONTS")) + "/inter-regular.huifont", &font_data));
+    ASSERT_TRUE(font.load(font_data));
+    std::vector<std::uint8_t> video(1920 * 1088 * 3 / 2, 100);
+    const auto capture = [&](const char *suffix)
+    {
+        if (const char *prefix = std::getenv("PTV_OSD_CAPTURE"))
+        {
+            png_image image{};
+            image.version = PNG_IMAGE_VERSION;
+            image.width = 1920;
+            image.height = 1080;
+            image.format = PNG_FORMAT_GRAY;
+            EXPECT_TRUE(png_image_write_to_file(&image, (std::string(prefix) + suffix).c_str(), 0,
+                                                video.data(), 1920, nullptr));
+            png_image_free(&image);
+        }
+    };
+    const auto expect_guide = [&](const std::string &current, const std::string &next)
+    {
+        ptv::VideoPanel expected;
+        expected.reset(80, 770, 1760, 230);
+        expected.text(font, current, 30, 101, 28, 1700);
+        expected.text(font, next, 30, 143, 28, 1700);
+        std::vector<std::uint8_t> actual, wanted;
+        for (unsigned y = 70; y < 160; ++y)
+        {
+            const auto begin = video.begin() + (770 + y) * 1920 + 80;
+            actual.insert(actual.end(), begin, begin + 1760);
+            wanted.insert(wanted.end(), expected.pixels.begin() + y * 1760,
+                          expected.pixels.begin() + (y + 1) * 1760);
+        }
+        EXPECT_EQ(actual, wanted);
+    };
+    ASSERT_TRUE(osd.draw(video.data(), video.size(), 1920, 1088, 1920, 1080, 8, 1));
+    expect_guide("Now " + ptv::programme_time(now - 1800) + " Football & friends",
+                 "Next " + ptv::programme_time(now + 1800) + " Post-match <analysis>");
+    capture("-banner.png");
+    host::set_unix_time(now + 1800);
+    osd.input(-1, 2);
+    ASSERT_TRUE(osd.draw(video.data(), video.size(), 1920, 1088, 1920, 1080, 8, 2));
+    expect_guide("Now " + ptv::programme_time(now + 1800) + " Post-match <analysis>", "");
+    osd.input(IPTV_INPUT_CROSS, 3);
+    std::fill(video.begin(), video.end(), 100);
+    ASSERT_TRUE(osd.draw(video.data(), video.size(), 1920, 1088, 1920, 1080, 8, 3));
+    capture("-list.png");
+}
 
 TEST_F(GuideTest, TimezonesGapsAndInvalidDates)
 {

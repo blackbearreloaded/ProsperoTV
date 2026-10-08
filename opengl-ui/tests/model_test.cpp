@@ -5,6 +5,8 @@
 #include "host_platform.hpp"
 #include "large_list.hpp"
 #include "tv/model.hpp"
+#include "tv/playback_osd.hpp"
+#include "iptv_input.h"
 
 #include <gtest/gtest.h>
 
@@ -773,6 +775,90 @@ TEST_F(ModelTest, TheListsAreInTheOrderOfTheAlphabet)
     ASSERT_EQ(model.visible_count(), 2u);
     EXPECT_EQ(model.letter_start(5), 0);
     EXPECT_EQ(model.letter_start(1), -1);
+    model.close();
+}
+
+TEST_F(ModelTest, PlaybackControlsSwitchWithinTheFilteredListAndRecallAllowedHistory)
+{
+    ptv::Model model(dir_);
+    load(model);
+    ptv::PlayRequest request;
+    const unsigned alder = model.visible(0), bramble = model.visible(1), fern = model.visible(5);
+    ASSERT_TRUE(model.play(bramble));
+    ASSERT_TRUE(model.take_play_request(&request));
+    ASSERT_TRUE(model.play(alder));
+    ASSERT_TRUE(model.take_play_request(&request));
+    model.set_group(ptv::Group::news);
+    ASSERT_EQ(model.visible_count(), 2u);
+    model.close(); // Exactly the state the foreground player gets.
+    ptv::PlaybackOsd next(model, request), previous(model, request), recent(model, request);
+    EXPECT_EQ(next.input(IPTV_INPUT_R1, 1), 2);
+    EXPECT_EQ(next.selected_channel(), fern);
+    EXPECT_EQ(previous.input(IPTV_INPUT_L1, 1), 2); // wrap at the first channel
+    EXPECT_EQ(previous.selected_channel(), fern);
+    ptv::PlaybackOsd up(model, request), down(model, request);
+    EXPECT_EQ(up.input(IPTV_INPUT_UP, 1), 2);
+    EXPECT_EQ(up.selected_channel(), fern);
+    EXPECT_EQ(down.input(IPTV_INPUT_DOWN, 1), 2);
+    EXPECT_EQ(down.selected_channel(), fern);
+    EXPECT_EQ(recent.input(IPTV_INPUT_SQUARE, 1), 2); // previous is outside News
+    EXPECT_EQ(recent.selected_channel(), bramble);
+    ASSERT_TRUE(model.hide_category("Sports", true));
+    ptv::PlaybackOsd hidden(model, request);
+    EXPECT_EQ(hidden.input(IPTV_INPUT_SQUARE, 1), 1);
+    EXPECT_FALSE(hidden.selected_channel());
+    EXPECT_FALSE(model.previous_channel(request.channel_id));
+    ASSERT_TRUE(model.hide_category("Sports", false));
+    ASSERT_TRUE(model.play(bramble));
+    ASSERT_TRUE(model.take_play_request(&request));
+    ptv::PlaybackOsd outside(model, request);
+    EXPECT_EQ(outside.input(IPTV_INPUT_R1, 1), 2);
+    EXPECT_EQ(outside.selected_channel(), alder);
+}
+
+TEST_F(ModelTest, PlaybackListBrowsesWithoutTuningAndBackClosesItFirst)
+{
+    ptv::Model model(dir_);
+    load(model);
+    ptv::PlayRequest request;
+    ASSERT_TRUE(model.play(model.visible(0)));
+    ASSERT_TRUE(model.take_play_request(&request));
+    ptv::PlaybackOsd controls(model, request);
+    EXPECT_EQ(controls.input(IPTV_INPUT_CROSS, 1), 1);
+    EXPECT_EQ(controls.input(IPTV_INPUT_RIGHT, 1), 1); // next page, nine rows
+    EXPECT_FALSE(controls.selected_channel());
+    EXPECT_EQ(controls.input(IPTV_INPUT_CIRCLE, 1), 1);
+    EXPECT_EQ(controls.input(IPTV_INPUT_CIRCLE, 1), 0); // player handles Back
+    EXPECT_EQ(controls.input(IPTV_INPUT_CROSS, 1), 1);
+    EXPECT_EQ(controls.input(IPTV_INPUT_CROSS, 1), 2);
+    EXPECT_EQ(controls.selected_channel(), model.visible(9));
+    request.record_channel_result = false; // VOD/catch-up must not zap to live.
+    ptv::PlaybackOsd vod(model, request);
+    EXPECT_EQ(vod.input(IPTV_INPUT_R1, 1), 0);
+    EXPECT_EQ(vod.input(IPTV_INPUT_SQUARE, 1), 0);
+    EXPECT_EQ(vod.input(IPTV_INPUT_CROSS, 1), 0);
+    EXPECT_FALSE(vod.selected_channel());
+    model.close();
+}
+
+TEST_F(ModelTest, PlaybackBannerExpiresFromFirstPictureAndCanBeRequestedAgain)
+{
+    ptv::Model model(dir_);
+    load(model);
+    ptv::PlayRequest request;
+    ASSERT_TRUE(model.play(model.visible(0)));
+    ASSERT_TRUE(model.take_play_request(&request));
+    ptv::PlaybackOsd controls(model, request);
+    ASSERT_NE(std::getenv("KIT_FONTS"), nullptr);
+    ASSERT_TRUE(controls.load_fonts(std::getenv("KIT_FONTS")));
+    EXPECT_TRUE(controls.draw(nullptr, 0, 1920, 1088, 1920, 1080, 8, 10000000));
+    EXPECT_TRUE(controls.draw(nullptr, 0, 1920, 1088, 1920, 1080, 8, 14999999));
+    EXPECT_FALSE(controls.draw(nullptr, 0, 1920, 1088, 1920, 1080, 8, 15000000));
+    EXPECT_EQ(controls.input(IPTV_INPUT_TRIANGLE, 20000000), 1);
+    EXPECT_TRUE(controls.draw(nullptr, 0, 1920, 1088, 1920, 1080, 8, 24999999));
+    EXPECT_FALSE(controls.draw(nullptr, 0, 1920, 1088, 1920, 1080, 8, 25000000));
+    EXPECT_EQ(controls.input(IPTV_INPUT_CROSS, 26000000), 1);
+    EXPECT_TRUE(controls.draw(nullptr, 0, 1920, 1088, 1920, 1080, 8, 99000000));
     model.close();
 }
 

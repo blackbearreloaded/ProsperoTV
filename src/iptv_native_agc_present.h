@@ -23,6 +23,14 @@ extern "C"
         uint32_t show_controls;
     } iptv_native_video_overlay_t;
 
+    /* Register only between foreground sessions; the player joins its workers
+     * before it returns. A NULL surface queries visibility. A real surface is a
+     * presenter-owned copy, valid only during this call. Return 1 if drawn. */
+    typedef int (*iptv_native_osd_t)(void *context, void *surface, size_t bytes, uint32_t pitch,
+                                     uint32_t surface_height, uint32_t width, uint32_t height,
+                                     uint32_t depth);
+    void iptv_native_agc_set_osd(iptv_native_osd_t draw, void *context);
+
     int32_t iptv_native_agc_present_nv12(const void *source, size_t source_bytes, uint32_t pitch,
                                          uint32_t surface_height, uint32_t visible_width,
                                          uint32_t visible_height,

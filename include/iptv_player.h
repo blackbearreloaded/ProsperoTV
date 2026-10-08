@@ -25,6 +25,13 @@ extern "C"
     const char *iptv_player_last_error(void);
     /* Monotonic deadline shared across channel switches and URL retries; 0 disables it. */
     void iptv_player_set_sleep_deadline(uint64_t deadline_usec);
+    /* Set only between sessions. Called on the player's control thread with
+     * -1 for a tick,
+     * otherwise a pressed iptv_input_action_t. Return 0 to leave
+     * an event to the player, 1
+     * to consume it, or 2 to stop for a channel switch. */
+    typedef int (*iptv_player_controls_t)(void *context, int action);
+    void iptv_player_set_controls(iptv_player_controls_t controls, void *context);
     /* Runs the same foreground path with a bounded automatic stop. A zero timeout
  * disables the
      * deadline. This is used by controlled hardware acceptance. */

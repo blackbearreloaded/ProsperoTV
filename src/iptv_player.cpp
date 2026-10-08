@@ -198,6 +198,8 @@ const char *DirectEndName(DirectEnd end)
 
 char gLastPlaybackError[192]{};
 std::atomic<std::uint64_t> gSleepDeadlineUsec{0};
+iptv_player_controls_t gControls = nullptr;
+void *gControlsContext = nullptr;
 
 void SetLastPlaybackError(const char *format, ...)
 {
@@ -954,6 +956,8 @@ class StreamRunner
 
     bool StopRequested()
     {
+        if (playback_stop_requested_)
+            return true;
         const auto sleep_deadline = gSleepDeadlineUsec.load(std::memory_order_relaxed);
         if (stop_deadline_usec_ || sleep_deadline)
         {
@@ -968,6 +972,8 @@ class StreamRunner
             }
         }
         iptv_input_poll();
+        if (gControls)
+            (void)gControls(gControlsContext, -1);
         const bool overlay_chord =
             iptv_input_pressed(IPTV_INPUT_TOUCHPAD) && iptv_input_pressed(IPTV_INPUT_R1);
         if (overlay_chord && !overlay_chord_down_)
@@ -976,8 +982,16 @@ class StreamRunner
         iptv_input_event_t event{};
         while (iptv_input_next(&event))
         {
-            if (event.pressed &&
-                (event.action == IPTV_INPUT_CIRCLE || event.action == IPTV_INPUT_OPTIONS))
+            if (!event.pressed)
+                continue;
+            if (overlay_chord &&
+                (event.action == IPTV_INPUT_TOUCHPAD || event.action == IPTV_INPUT_R1))
+                continue;
+            const int handled = gControls ? gControls(gControlsContext, event.action) : 0;
+            if (handled == 1)
+                continue;
+            if (handled == 2 || event.action == IPTV_INPUT_CIRCLE ||
+                event.action == IPTV_INPUT_OPTIONS)
             {
                 playback_stop_requested_ = true;
                 if (adapter_.initialized)
@@ -2266,6 +2280,12 @@ const char *iptv_player_last_error(void)
 void iptv_player_set_sleep_deadline(uint64_t deadline_usec)
 {
     gSleepDeadlineUsec.store(deadline_usec, std::memory_order_relaxed);
+}
+
+void iptv_player_set_controls(iptv_player_controls_t controls, void *context)
+{
+    gControls = controls;
+    gControlsContext = context;
 }
 
 int iptv_player_run(const char *url, const char *channel_name)

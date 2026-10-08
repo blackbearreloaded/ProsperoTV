@@ -158,11 +158,15 @@ typedef struct iptv_native_agc_presenter
     size_t framebuffer_pool_bytes;
     uint8_t ready;
     uint8_t main10;
+    void *overlay_surface;
+    int64_t overlay_start;
+    size_t overlay_bytes;
 } iptv_native_agc_presenter_t;
 
 static iptv_native_agc_presenter_t presenter = {
     .shader_start = -1,
     .framebuffer_start = -1,
+    .overlay_start = -1,
     .video = -1,
 };
 static uint64_t agc_state;
@@ -170,6 +174,14 @@ static uint8_t agc_initialized;
 static uint64_t render_sequence;
 static _Atomic int present_cancelled;
 static _Atomic int overlay_enabled = 1;
+static iptv_native_osd_t draw_osd;
+static void *osd_context;
+
+void iptv_native_agc_set_osd(iptv_native_osd_t draw, void *context)
+{
+    draw_osd = draw;
+    osd_context = context;
+}
 
 typedef struct loading_animation
 {
@@ -506,8 +518,10 @@ static void draw_video_overlay(void *source, size_t source_bytes, uint32_t pitch
                 fill_luma(luma, (size_t)row * pitch + x, width, 32, component_bytes);
             draw_text(luma, pitch, visible_width, visible_height, text, x + 6u, y + 6u, scale, 235,
                       component_bytes);
-            flush_gpu_data(luma + ((size_t)y * pitch + x) * component_bytes,
-                           (size_t)height * pitch * component_bytes);
+            flush_gpu_data(
+                luma + ((size_t)y * pitch + x) * component_bytes,
+                ((size_t)(height < visible_height - y ? height : visible_height - y) * pitch - x) *
+                    component_bytes);
         }
     }
 
@@ -840,6 +854,18 @@ static int32_t teardown_presenter(int drain)
         if (first_result == 0 && result != 0)
             first_result = result;
     }
+    if (presenter.overlay_surface)
+    {
+        result = sceKernelMunmap(presenter.overlay_surface, presenter.overlay_bytes);
+        if (first_result == 0 && result != 0)
+            first_result = result;
+    }
+    if (presenter.overlay_start >= 0)
+    {
+        result = sceKernelReleaseDirectMemory(presenter.overlay_start, presenter.overlay_bytes);
+        if (first_result == 0 && result != 0)
+            first_result = result;
+    }
     if (presenter.shader_start >= 0)
     {
         result = sceKernelReleaseDirectMemory(presenter.shader_start, SHADER_MEMORY_BYTES);
@@ -850,6 +876,7 @@ static int32_t teardown_presenter(int drain)
     memset(&presenter, 0, sizeof(presenter));
     presenter.shader_start = -1;
     presenter.framebuffer_start = -1;
+    presenter.overlay_start = -1;
     presenter.video = -1;
     return first_result;
 }
@@ -1126,6 +1153,27 @@ int32_t iptv_native_agc_present_finish_frame(void)
     return -5;
 }
 
+static int32_t prepare_overlay_surface(size_t bytes)
+{
+    int32_t result;
+    if (presenter.overlay_surface && presenter.overlay_bytes >= bytes)
+        return 0;
+    if (presenter.overlay_surface)
+        (void)sceKernelMunmap(presenter.overlay_surface, presenter.overlay_bytes);
+    if (presenter.overlay_start >= 0)
+        (void)sceKernelReleaseDirectMemory(presenter.overlay_start, presenter.overlay_bytes);
+    presenter.overlay_surface = NULL;
+    presenter.overlay_start = -1;
+    presenter.overlay_bytes = (bytes + 0x3fffu) & ~(size_t)0x3fffu;
+    result =
+        sceKernelAllocateDirectMemory(0, sceKernelGetDirectMemorySize(), presenter.overlay_bytes,
+                                      0x4000, DIRECT_MEMORY_TYPE, &presenter.overlay_start);
+    if (result == 0)
+        result = sceKernelMapDirectMemory(&presenter.overlay_surface, presenter.overlay_bytes,
+                                          MAP_PROTECTION, 0, presenter.overlay_start, 0x4000);
+    return result != 0 ? result : presenter.overlay_surface ? 0 : -12;
+}
+
 static int32_t present_nv12(const void *source, size_t source_bytes, uint32_t pitch,
                             uint32_t surface_height, uint32_t visible_width,
                             uint32_t visible_height, const iptv_native_video_overlay_t *overlay,
@@ -1136,8 +1184,16 @@ static int32_t present_nv12(const void *source, size_t source_bytes, uint32_t pi
     int64_t render_marker = INT64_C(0x49505456) + ((int64_t)++render_sequence << 8);
     void *target;
     int32_t result;
+    size_t yuv_bytes;
 
     if (bit_depth != 8u && bit_depth != 10u)
+        return -1;
+    if (!source || !visible_width || !visible_height || pitch > 8192u || surface_height > 8192u ||
+        visible_width > pitch || visible_height > surface_height || (pitch & 1u))
+        return -1;
+    yuv_bytes = (size_t)pitch * (surface_height + (surface_height + 1u) / 2u) *
+                (bit_depth == 10u ? 2u : 1u);
+    if (yuv_bytes > source_bytes)
         return -1;
     /* The reused Main10 texture descriptor has an implicit row pitch.
      * Reject padded/cropped
@@ -1166,9 +1222,32 @@ static int32_t present_nv12(const void *source, size_t source_bytes, uint32_t pi
     }
 
     target = (uint8_t *)presenter.framebuffer + buffer_index * presenter.framebuffer_bytes;
-    if (overlay && (iptv_native_agc_overlay_enabled() || overlay->show_controls))
-        draw_video_overlay((void *)source, source_bytes, pitch, surface_height, visible_width,
-                           visible_height, overlay, bit_depth == 10u ? 2u : 1u);
+    if (overlay)
+    {
+        const int osd_visible = draw_osd && draw_osd(osd_context, NULL, 0, pitch, surface_height,
+                                                     visible_width, visible_height, bit_depth);
+        if (osd_visible || iptv_native_agc_overlay_enabled() ||
+            (!draw_osd && overlay->show_controls))
+        {
+            /* Keep decoder reference pictures intact. Reuse this separate
+             * surface only after the previous GPU submission has finished. */
+            result = prepare_overlay_surface(yuv_bytes);
+            if (result != 0)
+                return result;
+            memcpy(presenter.overlay_surface, source, yuv_bytes);
+            source = presenter.overlay_surface;
+            source_bytes = presenter.overlay_bytes;
+            iptv_native_video_overlay_t info = *overlay;
+            if (draw_osd)
+                info.show_controls = 0;
+            draw_video_overlay(presenter.overlay_surface, source_bytes, pitch, surface_height,
+                               visible_width, visible_height, &info, bit_depth == 10u ? 2u : 1u);
+            if (osd_visible)
+                (void)draw_osd(osd_context, presenter.overlay_surface, source_bytes, pitch,
+                               surface_height, visible_width, visible_height, bit_depth);
+            flush_gpu_data(source, yuv_bytes);
+        }
+    }
     result = render_frame(presenter.video, (int)buffer_index, target, presenter.shader_memory,
                           presenter.vertex_shader, presenter.pixel_shader, source, source_bytes,
                           pitch, surface_height, visible_width, visible_height,
