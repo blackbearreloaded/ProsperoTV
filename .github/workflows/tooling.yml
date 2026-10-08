@@ -141,6 +141,11 @@ jobs:
   app:
     name: Build the app (opengl-ui)
     runs-on: ubuntu-24.04
+    # The attest step signs with this run's identity and stores the attestation.
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
     timeout-minutes: 45
     outputs:
       artifact: ${{ steps.label.outputs.artifact }}
@@ -229,6 +234,15 @@ jobs:
               print(f"{len(entries)} entries, all stored as 0777; {title} {version}")
           PY
           (cd dist-app && sha256sum "$TITLE_ID.zip" > SHA256SUMS && cat SHA256SUMS)
+
+      # Signed provenance: this ZIP was built by this workflow from this commit. Anyone can check a
+      # downloaded copy with `gh attestation verify <file> -R <owner>/<repo>`. Not for pull requests
+      # (a fork's run cannot sign), and not in a private repository (the plan does not include it).
+      - name: Attest the release ZIP
+        if: github.event_name != 'pull_request' && !github.event.repository.private
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-path: dist-app/${{ env.TITLE_ID }}.zip
 
       - name: Upload the app
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1

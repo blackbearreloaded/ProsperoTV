@@ -405,6 +405,24 @@ int main() {
         self.assertIn("run: make app", workflow)
         self.assertIn('sha256sum "$TITLE_ID.zip" > SHA256SUMS', workflow)
         self.assertIn('assets=("release/$TITLE_ID.zip" "release/SHA256SUMS")', workflow)
+        # The ZIP is attested (signed provenance) once final, before the upload.
+        attest = (
+            "uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6"
+            " # v4.2.2"
+        )
+        self.assertEqual(workflow.count(attest), 1)
+        checked = workflow.index("(cd dist-app && sha256sum")
+        upload = workflow.index("- name: Upload the app\n")
+        self.assertLess(checked, workflow.index(attest))
+        self.assertLess(workflow.index(attest), upload)
+        self.assertIn("subject-path: dist-app/${{ env.TITLE_ID }}.zip\n", workflow)
+        self.assertIn(
+            "if: github.event_name != 'pull_request' && !github.event.repository.private\n",
+            workflow,
+        )
+        needed = ("contents: read", "id-token: write", "attestations: write")
+        for permission in needed:
+            self.assertIn(f"      {permission}\n", workflow)
         # The image stays a local option.
         makefile = (ROOT / "Makefile").read_text(encoding="utf-8")
         self.assertIn("bash tools/build.sh Ffpfsc", makefile)

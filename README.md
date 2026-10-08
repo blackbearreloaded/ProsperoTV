@@ -257,7 +257,10 @@ Release outputs are written beside the repository:
 GitHub Releases provide `PPSA99003.zip`, which contains the complete
 `PPSA99003` title folder, and `SHA256SUMS`. See
 [`opengl-ui/README.md`](opengl-ui/README.md) for how that build is put
-together.
+together. A release ZIP built by GitHub Actions can
+be checked with the GitHub CLI:
+`gh attestation verify PPSA99003.zip -R blackbearreloaded/ProsperoTV`
+(releases built from now on, not earlier ones).
 
 The repository root still builds the interface of 01.000.015 and earlier
 (`make check`, `make app`); it shares the catalog, stores, and player with
