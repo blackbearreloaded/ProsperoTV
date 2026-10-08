@@ -172,4 +172,17 @@ Expiry stops foreground playback and muted previews, cancels queued playback and
 prevents automatic last-channel resume. Choosing a channel explicitly wakes
 playback without rearming the timer. Host checks exercise the exact deadline,
 cancellation, menu reconstruction, invalid clocks and the preview/resume behavior;
-native timed playback remains in the console regression.
+the real fifteen-minute deadline is also verified on the console.
+
+- 2026-10-08 | PR12 | dbfec0d | .30/PPSA88264 | inconclusive: 45-second fixture ended before sleep deadline | results/roadmap/console-11 | use longer stream
+- 2026-10-08 | PR12 | dbfec0d | .30/PPSA88264 | pass: real sleep deadline, menu return and clean teardown | results/roadmap/console-12 | parental IME acceptance
+
+The corrected case used a verified twenty-minute stream and disabled the test
+driver's playback timeout. The fifteen-minute timer was armed before playback;
+playback stopped after 837 seconds with 20,882 presented frames and 39,254 decoded
+audio frames. The final captures show the timer Off and an idle preview after
+returning to Live TV. Installed hashes matched, cleanup succeeded, the title
+closed, and all development services remained healthy. The generic runner's two
+flags were `hide_failed` setting labels; the case validator checks the receipt
+and teardown separately. All 135 UI sanitizer tests also pass. Native parental
+PIN/IME and filesystem acceptance remain pending.
