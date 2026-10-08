@@ -311,3 +311,11 @@ cost remain console acceptance work. No newer console installation is claimed.
 Validation: 83 core tests, 13 media/subtitle tests and 144 UI tests pass under
 ASan/UBSan, and the PS5 production cross-build passes. Separate HLS renditions
 remain the next part of this feature; these checks do not close that requirement.
+
+HLS master parsing now retains each variant's audio/subtitle group references
+and up to 32 advertised renditions, including resolved HTTP(S) URLs, BCP 47
+languages, default/forced flags and accessibility labels. It checks duplicate
+names/defaults, missing groups, required subtitle URLs and bounded labels against
+[RFC 8216](https://www.rfc-editor.org/rfc/rfc8216.html#section-4.3.4.1).
+The 86-test core sanitizer suite, 42 tooling checks and PS5 build pass. This is discovery only: rendition
+downloading, timestamp alignment and playback selection are still pending.
