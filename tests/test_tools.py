@@ -20,6 +20,53 @@ TITLE_ID = json.loads((ROOT / "sce_sys/param.json").read_text(encoding="utf-8"))
 
 
 class ToolTests(unittest.TestCase):
+    def test_direct_stop_during_drain_does_not_reopen(self):
+        # Execute the production EOF/reconnect branch with a deterministic drain
+        # that receives Stop, without requiring the console networking backend.
+        player = (ROOT / "src/iptv_player.cpp").read_text()
+        direct = player.split("int RunDirect(", 1)[1].split("\n} // namespace", 1)[0]
+        completion = direct[direct.index("        bool finished_ok = true;"):]
+        harness = r'''
+#include <cassert>
+constexpr int IPTV_STREAM_OK = 0;
+enum class FeedResult { ok, failed };
+enum class DirectEnd { finish_error };
+struct { DirectEnd end; unsigned reconnects = 0; } gDirectDiagnostics;
+char gLastPlaybackError[1]{};
+void SetLastPlaybackError(const char *) {}
+void sceKernelUsleep(unsigned) {}
+struct Runner {
+    bool stop_on_drain, stopped = false, presented = true;
+    unsigned starts = 0;
+    int Finish() { stopped = stop_on_drain; return 0; }
+    bool StopRequested() { return stopped; }
+    bool HasPresentedVideo() { return presented; }
+    bool Start() { ++starts; presented = false; return false; }
+};
+bool ShouldReconnectLive(bool live, bool presented, FeedResult) { return live && presented; }
+bool WaitForRefresh(Runner *, unsigned) { return true; }
+int complete(Runner *runner, bool reconnect_live) {
+    unsigned attempt = 0;
+    auto fed = FeedResult::ok;
+    while (attempt < 3u) {
+''' + completion + r'''
+int main() {
+    Runner stopped{true};
+    assert(complete(&stopped, true) == 1);
+    assert(stopped.starts == 0 && stopped.presented);
+    Runner finite{false};
+    assert(complete(&finite, false) == 0 && finite.starts == 0);
+    Runner live{false};
+    assert(complete(&live, true) == -1 && live.starts == 1);
+}
+'''
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / "direct-stop.cpp"
+            source.write_text(harness)
+            executable = str(Path(directory) / "direct-stop")
+            subprocess.run(["clang++", "-std=c++20", "-Wall", "-Werror", str(source), "-o", executable], check=True)
+            subprocess.run([executable], check=True, timeout=5)
+
     def test_audio_fallback_downmix_and_reset(self):
         flags = shlex.split(subprocess.check_output(
             ["pkg-config", "--cflags", "--libs", "libavcodec", "libswresample", "libavutil"], text=True))

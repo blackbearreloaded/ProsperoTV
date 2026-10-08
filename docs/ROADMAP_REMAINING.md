@@ -52,3 +52,10 @@ Validation so far: 115 UI tests under ASan/UBSan, 73 core tests, 13 paired-remot
 HTTP tests, the PS5 cross-build, and a headless Edge check of source editing,
 password preservation and the phone layout. The latter image is retained locally
 at `results/roadmap/phone-sources.png`. These do not claim real tuner testing.
+
+- 2026-10-08 | PR10 | 9ea8ee1 | .30/PPSA88262 | failed: stopped buffered playback reopened and lost its counters | results/roadmap/console-09 | validate stop-before-reconnect fix
+
+The direct-stream path now honors Stop after draining buffered input, before
+opening another live session. All 30 tooling/lifecycle checks pass, including
+the production EOF branch exercised with a stop during drain. Console acceptance
+of this correction and the complete paired-phone source workflow remains pending.

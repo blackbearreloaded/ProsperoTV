@@ -2052,6 +2052,10 @@ int RunDirect(const char *url, StreamRunner *runner, std::uint8_t *read_buffer, 
         if (fed == FeedResult::ok)
         {
             const int finished = runner->Finish();
+            // Draining buffered input also polls controls. Preserve that session's
+            // playback counters when stopped instead of reopening an empty one.
+            if (runner->StopRequested())
+                return 1;
             finished_ok = finished == IPTV_STREAM_OK;
             if (finished_ok && runner->HasPresentedVideo() && !reconnect_live)
                 return 0;
