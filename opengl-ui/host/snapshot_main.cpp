@@ -214,6 +214,9 @@ const Step kWalk[] = {
     move(Direction::down, 0.15f),
     move(Direction::down, 0.15f),
     move(Direction::down, 0.7f, "25a-settings-diagnostic-log"),
+    // Turned on: the page says so at the bottom, and so does every other one.
+    press(Action::confirm, 0.7f, "25b-settings-diagnostic-log-on"),
+    press(Action::confirm, 0.4f),
     move(Direction::up, 0.15f),
     move(Direction::up, 0.15f),
     move(Direction::up, 0.15f),

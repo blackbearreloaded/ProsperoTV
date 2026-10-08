@@ -954,6 +954,17 @@ void App::draw_hints(ui::Canvas &canvas) const
     if (!remote_hint_.empty())
         ui::text(canvas.list, canvas.fonts.regular, remote_hint_, kMargin, 1062.0f, 20.0f,
                  shared_.theme.text_muted);
+    // While the diagnostic log is on, every screen says so: it is easy to
+    // forget, and whoever looks at a picture of the screen should know too.
+    if (diag::enabled())
+    {
+        constexpr char kSign[] = "Diagnostic log on";
+        const float width = canvas.fonts.semibold.measure(kSign, 20.0f);
+        const float right = kWidth - kMargin;
+        canvas.list.circle(right - width - 16.0f, 1055.0f, 5.0f, tone::ember);
+        ui::text(canvas.list, canvas.fonts.semibold, kSign, right, 1062.0f, 20.0f, tone::accent,
+                 gfx::Align::right);
+    }
 }
 
 void App::draw(Frame &frame) const
