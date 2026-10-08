@@ -20,7 +20,7 @@ and relevant checks work.
 | Channel banner | Brief channel/guide banner on tune and on request | Implemented; mapped guide, timing and rendered image checks pass; console case pending |
 | Audio/subtitles | Select available language tracks and render subtitles | Embedded/HLS audio and container/DVB/WebVTT subtitles implemented with host checks; live-provider and native acceptance pending |
 | Sleep timer | Stop playback at a selected deadline | Implemented; 134 UI sanitizer tests and PS5 build pass; console case pending |
-| Live pause/rewind | Pause and replay several minutes of the current live channel | Pending |
+| Live pause/rewind | Pause and replay several minutes of the current live channel | In progress: bounded transport history and native pause/seek primitives; player and UI integration pending |
 | Deinterlacing | Preserve field-rate motion on interlaced broadcast video | Pending |
 | HDR | Preserve HDR metadata and output HDR on compatible displays | Pending |
 | Multiview | Two or four simultaneous channels, within measured decoder limits | Pending |
@@ -33,6 +33,34 @@ and relevant checks work.
 Completion also requires host checks, a PS5 build, bounded testing on an idle
 192.168.4.30 or 192.168.4.40, an updated deliverable, and a pull request. Console
 tests retain the workspace lock and sandbox-only test-title protocol.
+
+## Live pause and rewind foundations
+
+The transport history retains up to five minutes or 512 MiB, whichever limit is
+reached first. It indexes one selected video clock, handles timestamp wrap and
+provider timeline resets, and seeks to random-access packets when available.
+When those flags are absent, it starts earlier so the stream parser can find a
+decodable picture. Reads copy bytes while holding the history lock, preventing
+network writes from replacing data still being parsed. Expired positions are
+reported explicitly.
+
+Native control primitives pause both workers, redraw the frozen picture for the
+overlay, and adjust video pacing on resume. Repositioning releases submissions
+blocked by full queues and discards packets from the previous playback
+generation. Audio waits for a picture from the new generation before aligning
+its timestamps. These primitives are not yet connected to foreground playback
+or controller/phone controls, so pause and rewind are not available in the app.
+
+The 93-test core sanitizer suite includes six history tests covering fragmented
+input, time/byte limits, overwrite detection, clock wrap, multiple programme
+clocks, unflagged seeking and concurrent download/playback. All 29 tooling tests
+pass, including native full-queue cancellation and audio alignment checks.
+The final application-only PS5 cross-build also passes; its local executable
+SHA-256 is `4e769dcb7ba6cf7fb65accaf5e10d2e62174ccb4bd4c4260699048bb01fc0de0`.
+This checkpoint has not been packaged or installed on a console.
+Stream timestamp restoration, decoder parameter replay, subtitle history,
+controls, watchdog handling and console acceptance remain to be implemented or
+validated before this roadmap item is complete.
 
 ## Source additions
 
