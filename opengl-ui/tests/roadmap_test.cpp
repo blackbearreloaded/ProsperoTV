@@ -6,6 +6,7 @@
 #include "tv/library.hpp"
 #include "tv/model.hpp"
 #include "tv/settings.hpp"
+#include "tv/local_tv.hpp"
 #include "iptv_store.h"
 
 #include <gtest/gtest.h>
@@ -72,6 +73,156 @@ TEST(RefreshSchedule, BoundariesManualAndClockChanges)
     EXPECT_TRUE(ptv::refresh_due(RefreshSchedule::weekly, 100, 100 + 7 * 86400));
     EXPECT_FALSE(ptv::refresh_due(RefreshSchedule::daily, 100, 0));
     EXPECT_FALSE(ptv::refresh_due(RefreshSchedule::daily, 100, 99));
+}
+
+TEST_F(RoadmapTest, PhoneSourceEditingPersistsCredentialsWithoutReturningPasswords)
+{
+    std::int64_t account_id = 0;
+    {
+        ptv::Model model(dir);
+        load(model);
+        std::string output;
+        ASSERT_EQ(
+            model.remote_sources(
+                R"({"operation":"save","id":0,"kind":1,"name":"Phone playlist","url":"https://example.invalid/list.m3u","schedule":2})",
+                output),
+            200);
+        ASSERT_TRUE(settle(model));
+        const auto playlist_id = model.selected_source_id();
+        EXPECT_EQ(model.saved_source(playlist_id)->url, "https://example.invalid/list.m3u");
+        ASSERT_EQ(
+            model.remote_sources(
+                R"({"operation":"save","id":0,"kind":2,"name":"Phone account","url":"https://provider.invalid/player_api.php","username":"alice","password":"private-password","schedule":1})",
+                output),
+            200);
+        ASSERT_TRUE(settle(model));
+        account_id = model.selected_source_id();
+        EXPECT_EQ(model.saved_source(account_id)->url, "https://provider.invalid");
+        ASSERT_EQ(model.remote_sources({}, output), 200);
+        EXPECT_EQ(output.find("private-password"), std::string::npos);
+        EXPECT_NE(output.find("\"passwordSet\":true"), std::string::npos);
+        const auto edit =
+            "{\"operation\":\"save\",\"id\":" + std::to_string(account_id) +
+            R"(,"kind":2,"name":"Renamed account","url":"https://provider.invalid","username":"alice","schedule":2})";
+        ASSERT_EQ(model.remote_sources(edit, output), 200);
+        ASSERT_TRUE(settle(model));
+        EXPECT_EQ(model.saved_source(account_id)->password, "private-password");
+        EXPECT_EQ(model.saved_source(account_id)->name, "Renamed account");
+        ASSERT_EQ(
+            model.remote_sources(
+                "{\"operation\":\"remove\",\"id\":" + std::to_string(playlist_id) + "}", output),
+            200);
+        EXPECT_EQ(model.saved_source(playlist_id), nullptr);
+        for (
+            const char *invalid :
+            {R"({"operation":"save","id":0,"id":0})", R"({"operation":"remove","id":1})",
+             R"({"operation":"select","id":1.0})",
+             R"({"operation":"save","id":0,"kind":1,"name":"Bad","url":"file:///tmp/list","schedule":0})",
+             R"({"operation":"save","id":0,"kind":1,"name":"Bad","url":"https://host/list","schedule":7})"})
+            EXPECT_EQ(model.remote_sources(invalid, output), 400);
+        model.close();
+    }
+    ptv::Library saved;
+    ASSERT_TRUE(saved.open(dir + "/prosperotv-library.sqlite3"));
+    const auto sources = saved.sources();
+    const auto found = std::find_if(sources.begin(), sources.end(),
+                                    [&](const auto &s) { return s.id == account_id; });
+    ASSERT_NE(found, sources.end());
+    EXPECT_EQ(found->password, "private-password");
+    EXPECT_EQ(found->schedule, ptv::RefreshSchedule::manual);
+}
+
+TEST(LocalTv, ParsesLineupAndKeepsAValidCatalogOnMalformedInput)
+{
+    iptv::Catalog catalog;
+    iptv::ParseReport report;
+    ASSERT_TRUE(ptv::parse_hdhomerun(R"([
+        {"GuideNumber":"7.1","GuideName":"Local news","URL":"http://tuner.invalid:5004/auto/v7.1"},
+        {"GuideNumber":"7.1","GuideName":"Duplicate","URL":"http://tuner.invalid:5004/auto/v7.1"},
+        {"GuideNumber":"8.1","GuideName":"Protected","URL":"http://tuner.invalid:5004/auto/v8.1","DRM":1},
+        {"GuideNumber":"8.2","GuideName":"Protected tag","URL":"http://tuner.invalid:5004/auto/v8.2","Tags":"favorite,drm"},
+        {"GuideNumber":"9.1","GuideName":"Invalid","URL":"file:///private"}
+    ])",
+                                     12, &catalog, &report));
+    ASSERT_EQ(catalog.size(), 1u);
+    EXPECT_EQ(catalog[0].name, "Local news");
+    EXPECT_EQ(catalog[0].tvg_id, "7.1");
+    EXPECT_EQ(report.skipped, 3u);
+    EXPECT_EQ(report.duplicates, 1u);
+    EXPECT_FALSE(ptv::parse_hdhomerun("[{", 12, &catalog, &report));
+    ASSERT_EQ(catalog.size(), 1u);
+    EXPECT_EQ(catalog[0].name, "Local news");
+    std::string address;
+    EXPECT_TRUE(ptv::local_tv_address("http://tuner.invalid/lineup.json", &address));
+    EXPECT_EQ(address, "http://tuner.invalid");
+    EXPECT_TRUE(ptv::local_tv_address("http://tv.invalid:9981/sub/playlist/channels", &address));
+    EXPECT_EQ(address, "http://tv.invalid:9981/sub");
+    EXPECT_FALSE(ptv::local_tv_address("file:///local", &address));
+}
+
+TEST_F(RoadmapTest, LocalServersLoadThroughSavedSourcesAndPassCredentialsToPlaybackAndGuide)
+{
+    const std::string lineup = dir + "/lineup.json";
+    std::ofstream(lineup)
+        << R"([{"GuideNumber":"7.1","GuideName":"Local station","URL":"http://tuner.invalid:5004/auto/v7.1"}])";
+    const std::string xml = dir + "/guide.xml";
+    std::ofstream(xml) << "<tv/>";
+    host::set_network_response("http://tuner.invalid/lineup.json", lineup);
+    host::set_network_response("http://tv.invalid:9981/xmltv/channels", xml);
+    ptv::Model model(dir);
+    load(model);
+    std::string output;
+    ASSERT_EQ(
+        model.remote_sources(
+            R"({"operation":"save","id":0,"kind":4,"name":"Home tuner","url":"http://tuner.invalid","schedule":2})",
+            output),
+        200);
+    ASSERT_TRUE(settle(model));
+    ASSERT_EQ(model.channel_count(), 1u);
+    EXPECT_EQ(model.channel(0).name, "Local station");
+    ASSERT_TRUE(model.play(0));
+    ptv::PlayRequest tuner;
+    ASSERT_TRUE(model.take_play_request(&tuner));
+    EXPECT_EQ(tuner.urls[0], "http://tuner.invalid:5004/auto/v7.1");
+    const auto tuner_id = model.selected_source_id();
+    ASSERT_EQ(
+        model.remote_sources(
+            R"({"operation":"save","id":0,"kind":5,"name":"Home TV","url":"http://tv.invalid:9981","username":"a","password":"b","schedule":2})",
+            output),
+        200);
+    ASSERT_TRUE(settle(model));
+    ASSERT_EQ(model.channel_count(), 320u);
+    ASSERT_TRUE(model.play(0));
+    ptv::PlayRequest tv;
+    ASSERT_TRUE(model.take_play_request(&tv));
+    EXPECT_EQ(tv.authorization, "Basic YTpi");
+    EXPECT_EQ(tv.credential_origin, "http://tv.invalid:9981");
+    const auto preview = model.preview_request(model.channel(0).id);
+    ASSERT_TRUE(preview.has_value());
+    EXPECT_EQ(preview->authorization, tv.authorization);
+    for (int i = 0; i < 100; ++i)
+    {
+        model.poll();
+        std::this_thread::sleep_for(std::chrono::milliseconds(2));
+    }
+    bool playlist_auth = false, guide_auth = false;
+    for (const auto &request : host::requests())
+    {
+        if (request.url == "http://tv.invalid:9981/playlist/channels")
+            playlist_auth = request.authorization == "Basic YTpi";
+        if (request.url == "http://tv.invalid:9981/xmltv/channels")
+            guide_auth = request.authorization == "Basic YTpi";
+    }
+    EXPECT_TRUE(playlist_auth);
+    EXPECT_TRUE(guide_auth);
+    model.close();
+    host::set_network(false, {});
+    ASSERT_TRUE(model.open());
+    EXPECT_EQ(model.channel_count(), 320u);
+    model.use_saved_source(tuner_id);
+    ASSERT_EQ(model.channel_count(), 1u);
+    EXPECT_EQ(model.channel(0).name, "Local station");
+    model.close();
 }
 
 TEST_F(RoadmapTest, AllProviderNamesRemainExactAndHiddenCategoriesSurviveRestart)

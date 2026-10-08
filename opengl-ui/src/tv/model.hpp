@@ -40,6 +40,7 @@ struct PlayRequest
     std::vector<std::string> urls;
     std::string user_agent;
     std::string referrer;
+    std::string authorization, credential_origin;
     std::uint64_t source_id = 0;
     bool reconnect_live = false;
     bool record_channel_result = true;
@@ -115,7 +116,7 @@ class Model
 {
   public:
     static constexpr unsigned kFacetMax = CatalogIndex::kFacetMax;
-    static constexpr unsigned kSourceCount = 4;
+    static constexpr unsigned kSourceCount = 6;
 
     // data_dir is where the app keeps its files: the title's own storage or
     // /data/prosperotv/config on the console, any folder on a PC. cache_dir
@@ -178,6 +179,8 @@ class Model
     void edit_saved_source(std::int64_t id);
     bool remove_source(std::int64_t id);
     bool set_schedule(std::int64_t id, RefreshSchedule schedule);
+    // Called on the menu thread by the authenticated phone remote.
+    int remote_sources(std::string_view input, std::string &output);
     VodLibrary &vod()
     {
         return vod_;
@@ -435,6 +438,9 @@ class Model
         password,
         portal_address,
         portal_mac,
+        local_address,
+        local_username,
+        local_password,
     };
 
     std::string path(const char *name) const;
@@ -464,6 +470,10 @@ class Model
     bool commit_source(SavedSource source);
     static void on_portal_address(const char *text, void *self);
     static void on_portal_mac(const char *text, void *self);
+    static void on_local_address(const char *text, void *self);
+    static void on_local_username(const char *text, void *self);
+    static void on_local_password(const char *text, void *self);
+    void commit_local_form();
     void select_source_record(const SavedSource &source);
     void mark_visibility();
     bool refresh_needed() const;
@@ -502,6 +512,7 @@ class Model
     std::atomic<bool> guide_done_{false}, guide_stop_{false};
     std::vector<std::string> guide_urls_;
     std::string guide_file_, guide_status_;
+    std::string guide_authorization_, guide_origin_;
     bool guide_ok_ = false, guide_saved_ = false;
     std::uint64_t next_guide_check_ = 0, guide_minute_ = 0;
 
@@ -533,6 +544,7 @@ class Model
     iptv::XtreamCredentials xtream_;
     iptv::XtreamCredentials account_form_;
     PortalCredentials portal_, portal_form_, refresh_portal_;
+    SavedSource local_source_, local_form_, refresh_local_;
     AccountStep account_step_ = AccountStep::none;
     bool account_prompt_pending_ = false;
 

@@ -83,6 +83,9 @@ struct RequestHeaders
     const char *cookie = nullptr;
     const char *authorization = nullptr;
     std::int64_t byte_offset = -1; // -1: ordinary GET; otherwise request bytes=<offset>-
+    // When provided, credentials stay on this origin even when a playlist
+    // points its segments or streams at another host.
+    const char *credential_origin = nullptr;
 };
 
 // Validate a ranged response before the demuxer interprets its first byte.

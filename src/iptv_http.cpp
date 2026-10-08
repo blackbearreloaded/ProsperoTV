@@ -512,7 +512,7 @@ RequestHeaders HeadersForUrl(const char *original, const char *target,
         return authority;
     };
     RequestHeaders result = headers;
-    const auto from = origin(original);
+    const auto from = origin(headers.credential_origin ? headers.credential_origin : original);
     if (from.empty() || from != origin(target))
     {
         result.cookie = nullptr;

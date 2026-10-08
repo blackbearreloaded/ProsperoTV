@@ -453,6 +453,23 @@ bool run_menu(ptv::Model &model, ptv::Settings *settings, const LastPlayback &la
             InputFrame input = tracker.update(std::span<const PadSample>(samples, count),
                                               static_cast<std::uint64_t>(now));
             iptv_remote_enable_search(!resolving_portal && app.accepts_remote_search());
+            iptv_remote_set_sources_handler(
+                resolving_portal ? nullptr
+                                 : +[](const char *input, size_t bytes, char *out, size_t capacity,
+                                       void *context) -> int
+                {
+                    std::string response;
+                    const int status = static_cast<ptv::Model *>(context)->remote_sources(
+                        std::string_view(input, bytes), response);
+                    if (response.size() >= capacity)
+                    {
+                        std::snprintf(out, capacity, "Source details exceed the response limit.");
+                        return 413;
+                    }
+                    std::memcpy(out, response.c_str(), response.size() + 1);
+                    return status;
+                },
+                &model);
             iptv_remote_poll();
             if (iptv_remote_take_connected())
                 app.phone_connected();
@@ -660,6 +677,7 @@ bool run_menu(ptv::Model &model, ptv::Settings *settings, const LastPlayback &la
             }
         }
         iptv_remote_enable_search(false);
+        iptv_remote_set_sources_handler(nullptr, nullptr);
         if (chosen)
             hand_over_to_channel(app, renderer, display, frame, request->channel_id,
                                  settings->reduced_motion);
@@ -760,15 +778,13 @@ PlaybackOutcome play_candidates(const ptv::PlayRequest &request, unsigned stop_a
             write_autotest_marker(archive_path, marker, marker_bytes);
             std::remove(kLatestReceiptPath);
         }
-        outcome.result =
-            stop_after_ms != 0
-                ? iptv_player_run_controlled(request.urls[candidate].c_str(),
-                                             request.channel_name.c_str(), stop_after_ms)
-                : iptv_player_run_with_headers(
-                      request.urls[candidate].c_str(), request.channel_name.c_str(),
-                      request.user_agent.empty() ? nullptr : request.user_agent.c_str(),
-                      request.referrer.empty() ? nullptr : request.referrer.c_str(),
-                      request.reconnect_live ? 1 : 0);
+        outcome.result = iptv_player_run_authenticated(
+            request.urls[candidate].c_str(), request.channel_name.c_str(),
+            request.user_agent.empty() ? nullptr : request.user_agent.c_str(),
+            request.referrer.empty() ? nullptr : request.referrer.c_str(),
+            request.authorization.empty() ? nullptr : request.authorization.c_str(),
+            request.credential_origin.empty() ? nullptr : request.credential_origin.c_str(),
+            stop_after_ms, request.reconnect_live ? 1 : 0);
         if (archive_path != nullptr)
         {
             append_autotest_receipt(archive_path, kLatestReceiptPath);

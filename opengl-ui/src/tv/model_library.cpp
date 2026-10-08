@@ -6,6 +6,7 @@
 #include "tv/category_path.hpp"
 #include "tv/platform.hpp"
 #include "tv/settings.hpp"
+#include "tv/local_tv.hpp"
 #include "iptv_ime.h"
 
 #include <algorithm>
@@ -41,11 +42,11 @@ void Model::load_library()
             notify(Level::warning, "A source could not be imported");
     sources_ = library_.sources();
     const auto saved = library_.selected_source();
-    if (saved != 0 && saved_source(saved) != nullptr && saved_source(saved)->kind <= 3)
+    if (saved != 0 && saved_source(saved) != nullptr && saved_source(saved)->kind <= 5)
         selected_source_id_ = saved;
     const auto last = library_.last_channel();
     if (settings.resume_last && last.first != 0 && saved_source(last.first) != nullptr &&
-        saved_source(last.first)->kind <= 3)
+        saved_source(last.first)->kind <= 5)
         selected_source_id_ = last.first;
     if (const auto *source = saved_source(selected_source_id_))
         select_source_record(*source);
@@ -73,6 +74,8 @@ void Model::select_source_record(const SavedSource &source)
         xtream_ = {source.url, source.username, source.password};
     if (source.kind == 3)
         portal_ = {source.url, source.mac};
+    if (source.kind >= 4)
+        local_source_ = source;
     vod_.configure(source.kind == 2 ? xtream_ : iptv::XtreamCredentials{},
                    cache_path(active_source_), schedule_);
     if (changed)
@@ -104,7 +107,7 @@ void Model::use_saved_source(std::int64_t id)
         return;
     }
     const auto *source = saved_source(id);
-    if (source == nullptr || source->kind > 3)
+    if (source == nullptr || source->kind > 5)
         return;
     if (source->kind != 0 && source->url.empty())
     {
@@ -147,12 +150,17 @@ void Model::add_source(iptv::SourceKind kind)
         account_form_ = {};
     if (kind == iptv::SourceKind::Portal)
         portal_form_ = {};
+    if (kind == iptv::SourceKind::HDHomeRun || kind == iptv::SourceKind::Tvheadend)
+    {
+        local_form_ = {};
+        local_form_.kind = static_cast<int>(kind);
+    }
 }
 
 void Model::edit_saved_source(std::int64_t id)
 {
     const auto *source = saved_source(id);
-    if (source == nullptr || source->kind == 0 || source->kind > 3 || refreshing() ||
+    if (source == nullptr || source->kind == 0 || source->kind > 5 || refreshing() ||
         !keyboard_ready_)
         return;
     const auto copy = *source;
@@ -166,6 +174,74 @@ void Model::edit_saved_source(std::int64_t id)
         account_form_ = {copy.url, copy.username, copy.password};
     if (copy.kind == 3)
         portal_form_ = {copy.url, copy.mac};
+    if (copy.kind >= 4)
+        local_form_ = copy;
+}
+
+void Model::on_local_address(const char *text, void *self)
+{
+    auto &model = *static_cast<Model *>(self);
+    if (!text || !local_tv_address(text, &model.local_form_.url))
+    {
+        model.account_step_ = AccountStep::none;
+        model.notify(Level::error, "That TV server address cannot be used",
+                     "Enter its HTTP or HTTPS address, including its port when needed.");
+        return;
+    }
+    if (model.local_form_.kind == 4)
+        model.commit_local_form();
+    else
+    {
+        model.account_step_ = AccountStep::local_username;
+        model.account_prompt_pending_ = true;
+    }
+}
+
+void Model::on_local_username(const char *text, void *self)
+{
+    auto &model = *static_cast<Model *>(self);
+    if (!text)
+    {
+        model.account_step_ = AccountStep::none;
+        return;
+    }
+    model.local_form_.username = text;
+    if (model.local_form_.username.empty())
+    {
+        model.local_form_.password.clear();
+        model.commit_local_form();
+    }
+    else
+    {
+        model.account_step_ = AccountStep::local_password;
+        model.account_prompt_pending_ = true;
+    }
+}
+
+void Model::on_local_password(const char *text, void *self)
+{
+    auto &model = *static_cast<Model *>(self);
+    if (!text)
+    {
+        model.account_step_ = AccountStep::none;
+        return;
+    }
+    model.local_form_.password = text;
+    model.commit_local_form();
+}
+
+void Model::commit_local_form()
+{
+    account_step_ = AccountStep::none;
+    local_form_.id = editing_source_id_;
+    if (local_form_.name.empty())
+        local_form_.name = local_form_.kind == 4 ? "HDHomeRun" : "Tvheadend";
+    if (!valid_source(local_form_))
+        notify(Level::error, "The TV server details could not be saved",
+               "Check the address and account details.");
+    else
+        (void)commit_source(local_form_);
+    local_form_ = {};
 }
 
 bool Model::save_source_form(std::string_view url, const iptv::XtreamCredentials *account)

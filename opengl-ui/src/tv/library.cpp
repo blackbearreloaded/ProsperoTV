@@ -62,21 +62,28 @@ bool valid_text(std::string_view text, std::size_t max)
                         [](unsigned char c) { return c < 32 || c == 127; });
 }
 
+} // namespace
+
 bool valid_source(const SavedSource &source)
 {
-    if (source.id < 0 || source.kind < 0 || source.kind > 3 || !valid_text(source.name, 128) ||
+    if (source.id < 0 || source.kind < 0 || source.kind > 5 || !valid_text(source.name, 128) ||
         source.schedule < RefreshSchedule::daily || source.schedule > RefreshSchedule::manual)
         return false;
     if (source.kind == 0)
         return source.id == 1;
     // An original source slot may remain unconfigured after migration.
-    if (source.id == source.kind + 1 && source.url.empty())
+    if (source.kind <= 3 && source.id == source.kind + 1 && source.url.empty())
         return source.username.empty() && source.password.empty() && source.mac.empty();
     std::string normalized;
     if (!iptv::CanonicalizeStreamUrl(source.url, &normalized) || source.url.size() > 4096)
         return false;
     if (source.kind == 2)
         return iptv::ValidateXtreamCredentials({source.url, source.username, source.password});
+    if (source.kind == 5)
+        return (source.username.empty() ? source.password.empty()
+                                        : valid_text(source.username, 255) &&
+                                              source.username.find(':') == std::string::npos) &&
+               (source.password.empty() || valid_text(source.password, 255));
     if (source.kind == 3)
     {
         if (source.mac.size() != 17)
@@ -92,8 +99,6 @@ bool valid_source(const SavedSource &source)
     }
     return true;
 }
-} // namespace
-
 bool refresh_due(RefreshSchedule schedule, std::uint64_t saved, std::uint64_t now)
 {
     if (saved == 0)

@@ -13,8 +13,8 @@ main{max-width:420px;margin:auto}header{display:flex;align-items:center;gap:14px
 h1{font-size:23px;margin:0}header p{margin:3px 0 0;color:#d3b6a8;font-size:14px}
 .card{background:#2b100d;border:1px solid #633428;border-radius:20px;padding:20px;margin:16px 0}
 label{display:block;color:#e8b968;font-size:13px;font-weight:700;letter-spacing:.08em;margin-bottom:10px}
-input,button{font:inherit;border:1px solid #81503e;border-radius:12px;color:inherit;min-height:52px}
-input{background:#190807;padding:13px;width:100%;font-size:18px}button{background:#3e1812;padding:12px;cursor:pointer;touch-action:manipulation}
+input,button,select{font:inherit;border:1px solid #81503e;border-radius:12px;color:inherit;min-height:52px}
+input,select{background:#190807;padding:13px;width:100%;font-size:18px}button{background:#3e1812;padding:12px;cursor:pointer;touch-action:manipulation}
 button:hover{background:#7d2412}button:active{transform:scale(.96)}button:focus-visible,input:focus-visible{outline:3px solid #fff2df;outline-offset:3px}
 button:disabled{opacity:.5;cursor:wait}.primary{background:#ff9445;color:#190807;font-weight:750}.primary:hover{background:#ffc276}
 .row{display:flex;gap:10px;margin-top:12px}.row>*{flex:1}.muted{font-size:13px;color:#d3b6a8;line-height:1.5}
@@ -44,12 +44,27 @@ input[type=range]{padding:0;min-height:44px;accent-color:#ff9445;cursor:pointer}
 <div class="row"><button class="primary" type="submit">Search on TV</button><button id="clear" type="button">Clear</button></div>
 <div class="row"><button type="button" data-key="search">Search &amp; filters on TV</button></div>
 <p class="muted">Up to 39 characters. Search the current channel list; Back also stops playback.</p></form>
+<section class="card"><button id="manage-sources" type="button" style="width:100%" aria-expanded="false" aria-controls="source-editor">Manage sources</button>
+<div id="source-editor" hidden>
+<p class="muted">Save playlists and accounts with this keyboard. Return to the TV menu before editing.</p>
+<label for="source-list">SAVED SOURCE</label><select id="source-list"></select>
+<form id="source-form">
+<p><label for="source-kind">SOURCE TYPE</label><select id="source-kind"><option value="1">Playlist</option><option value="2">Xtream Codes account</option><option value="3">MAC-code portal</option><option value="4">HDHomeRun tuner</option><option value="5">Tvheadend server</option></select></p>
+<p><label for="source-name">NAME</label><input id="source-name" maxlength="128" required autocomplete="off"></p>
+<p><label for="source-url">ADDRESS</label><input id="source-url" type="url" maxlength="4096" required autocapitalize="none" spellcheck="false" autocomplete="off" placeholder="http://server/playlist.m3u"></p>
+<div id="source-account"><p><label for="source-user">USER NAME</label><input id="source-user" maxlength="255" autocapitalize="none" autocomplete="off"></p>
+<p><label for="source-password">PASSWORD</label><input id="source-password" type="password" maxlength="255" autocomplete="new-password"><span class="muted" id="source-password-hint">Enter the account password.</span></p></div>
+<p id="source-portal"><label for="source-mac">MAC CODE</label><input id="source-mac" maxlength="17" placeholder="00:1A:79:12:34:56" autocomplete="off"></p>
+<p><label for="source-schedule">REFRESH</label><select id="source-schedule"><option value="0">Daily</option><option value="1">Weekly</option><option value="2">Only when asked</option></select></p>
+<div class="row"><button id="source-save" class="primary" type="submit">Save on TV</button><button id="source-select" type="button">Use on TV</button></div>
+<div class="row"><button id="source-remove" type="button">Remove source</button></div>
+</form></div></section>
 <button id="disconnect" type="button" style="width:100%">Forget this phone</button>
 </fieldset><footer>Local network remote · ProsperoTV</footer></main>
 <script>
 const $=id=>document.getElementById(id);
 let paired=false,busy=false,volumeEditing=false,volumePending=null,volumeSending=false;
-function unpair(){paired=false;volumePending=null;$('remote').disabled=true;$('remote').hidden=true;$('pair').hidden=false}
+function unpair(){paired=false;volumePending=null;sourceRows=[];$('source-form').reset();$('source-list').replaceChildren();$('remote').disabled=true;$('remote').hidden=true;$('pair').hidden=false}
 async function request(path,body){
  const response=await fetch('/api/'+path,{method:body===undefined?'GET':'POST',headers:{'X-ProsperoTV-Remote':'1','Content-Type':'text/plain;charset=UTF-8'},credentials:'same-origin',body,signal:AbortSignal.timeout(4000)});
  const text=await response.text();
@@ -68,6 +83,41 @@ document.querySelectorAll('[data-key]').forEach(button=>button.onclick=()=>comma
 $('search').onsubmit=event=>{event.preventDefault();const text=$('query').value;if([...text].length>39){$('status').textContent='Use up to 39 characters.';return}command('search',text)};
 $('clear').onclick=()=>{$('query').value='';command('search','')};
 $('disconnect').onclick=async()=>{try{await request('disconnect','');unpair();$('status').textContent='Phone forgotten'}catch(error){$('status').textContent=error.message}};
+let sourceRows=[];
+function sourceFields(){
+ const kind=Number($('source-kind').value);
+ $('source-account').hidden=kind!==2&&kind!==5;$('source-portal').hidden=kind!==3;
+ $('source-user').required=kind===2;$('source-mac').required=kind===3;
+ $('source-url').placeholder=kind===4?'http://192.168.1.10':kind===5?'http://192.168.1.10:9981':'http://server/playlist.m3u';
+}
+function editSource(){
+ const source=sourceRows.find(s=>String(s.id)===$('source-list').value);
+ $('source-kind').value=source&&source.kind?source.kind:1;$('source-kind').disabled=!!source;
+ for(const [id,key] of [['name','name'],['url','url'],['user','username'],['mac','mac'],['schedule','schedule']])$('source-'+id).value=source?source[key]:(id==='schedule'?'0':'');
+ $('source-password').value='';$('source-password-hint').textContent=source&&source.passwordSet?'Leave blank to keep the saved password.':'Enter the account password.';
+ $('source-save').disabled=!!source&&source.kind===0;$('source-select').disabled=!source||!source.url;$('source-remove').disabled=!source||source.id<=4;sourceFields();
+}
+async function loadSources(id){
+ sourceRows=JSON.parse(await request('sources'));$('source-list').replaceChildren(new Option('Add a source','0'));
+ for(const s of sourceRows)$('source-list').add(new Option(s.name+(s.selected?' (in use)':''),String(s.id)));
+ $('source-list').value=String(id===undefined?(sourceRows.find(s=>s.selected)?.id||0):id);editSource();
+}
+$('manage-sources').onclick=async()=>{
+ if(!$('source-editor').hidden){$('source-editor').hidden=true;$('manage-sources').setAttribute('aria-expanded','false');return}
+ try{await loadSources();$('source-editor').hidden=false;$('manage-sources').setAttribute('aria-expanded','true')}catch(error){$('status').textContent=error.message}
+};
+$('source-list').onchange=editSource;$('source-kind').onchange=sourceFields;
+async function sourceAction(details){
+ if(busy)return;busy=true;
+ try{const message=await request('sources',JSON.stringify(details));$('source-password').value='';await loadSources();$('status').textContent=message}
+ catch(error){$('status').textContent=error.message||'Could not save. Check the TV and Wi-Fi.'}finally{busy=false}
+}
+$('source-form').onsubmit=event=>{
+ event.preventDefault();const details={operation:'save',id:Number($('source-list').value),kind:Number($('source-kind').value),name:$('source-name').value,url:$('source-url').value,username:$('source-user').value,mac:$('source-mac').value,schedule:Number($('source-schedule').value)};
+ if($('source-password').value)details.password=$('source-password').value;sourceAction(details);
+};
+$('source-select').onclick=()=>sourceAction({operation:'select',id:Number($('source-list').value)});
+$('source-remove').onclick=()=>{if(confirm('Remove this saved source?'))sourceAction({operation:'remove',id:Number($('source-list').value)})};
 function showVolume(value){$('volume').value=value;$('volume-value').textContent=Number(value)===0?'Muted':value+'%';$('volume').setAttribute('aria-valuetext',Number(value)===0?'Muted':value+' percent')}
 async function sendVolume(){
  if(volumeSending||!paired)return;volumeSending=true;
@@ -81,7 +131,7 @@ $('volume').onchange=()=>{volumeEditing=false};
 $('volume').onpointerup=$('volume').onpointercancel=()=>{volumeEditing=false};
 $('volume').onblur=()=>{volumeEditing=false};
 document.addEventListener('keydown',event=>{
- if(event.target.matches('input,button')||event.ctrlKey||event.altKey||event.metaKey)return;
+ if(event.target.matches('input,button,select')||event.ctrlKey||event.altKey||event.metaKey)return;
  const key={ArrowUp:'up',ArrowDown:'down',ArrowLeft:'left',ArrowRight:'right',Enter:'enter',Escape:'back',Backspace:'back'}[event.key];
  if(key&&paired){event.preventDefault();command('key',key)}
 });

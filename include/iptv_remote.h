@@ -5,6 +5,7 @@
 #define IPTV_REMOTE_H
 #include "iptv_input.h"
 #include "iptv_ime.h"
+#include <stddef.h>
 #ifdef __cplusplus
 extern "C"
 {
@@ -21,6 +22,11 @@ extern "C"
     bool iptv_remote_forget_phones(void);
     void iptv_remote_set_volume(unsigned volume);
     void iptv_remote_set_volume_handler(bool (*save)(unsigned, void *), void *context);
+    /* Paired browser source editor. Empty input lists sources; JSON input edits
+     * them. The menu owns the handler and clears it before playback. */
+    void iptv_remote_set_sources_handler(int (*handle)(const char *, size_t, char *, size_t,
+                                                       void *),
+                                         void *context);
     void iptv_remote_set_icon(const char *path);
     void iptv_remote_stop(void);
     void iptv_remote_poll(void);

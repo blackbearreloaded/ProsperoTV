@@ -51,6 +51,22 @@ TEST(IptvHttpTest, RedirectsKeepPortalCredentialsOnlyOnTheOriginalOrigin)
     }
 }
 
+TEST(IptvHttpTest, PlaylistSegmentCredentialsStayOnTheConfiguredServer)
+{
+    iptv::http::RequestHeaders headers{};
+    headers.authorization = "Basic fixture";
+    headers.credential_origin = "http://tv.invalid:9981";
+    const auto own = iptv::http::HeadersForUrl("http://tv.invalid:9981/list.m3u8",
+                                               "http://tv.invalid:9981/segment.ts", headers);
+    EXPECT_EQ(own.authorization, headers.authorization);
+    const auto foreign = iptv::http::HeadersForUrl("http://cdn.invalid/segment.ts",
+                                                   "http://cdn.invalid/segment.ts", headers);
+    EXPECT_EQ(foreign.authorization, nullptr);
+    const auto port = iptv::http::HeadersForUrl("http://tv.invalid:9981/list.m3u8",
+                                                "http://tv.invalid/segment.ts", headers);
+    EXPECT_EQ(port.authorization, nullptr);
+}
+
 TEST(IptvHttpTest, DoesNotGuessThatEveryForbiddenResponseIsGeographic)
 {
     EXPECT_EQ(Describe(iptv::http::Status::http_status_error, 403, 0, "Forbidden"),

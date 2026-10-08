@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "tv/model.hpp"
 #include "tv/platform.hpp"
+#include "tv/local_tv.hpp"
 
 namespace ptv
 {
@@ -90,6 +91,9 @@ void Model::refresh_guide()
         return;
     }
     guide_file_ = guide_path();
+    guide_authorization_ =
+        active_source_ == iptv::SourceKind::Tvheadend ? local_tv_authorization(local_source_) : "";
+    guide_origin_ = active_source_ == iptv::SourceKind::Tvheadend ? local_source_.url : "";
     guide_ok_ = guide_saved_ = false;
     guide_stop_.store(false, std::memory_order_relaxed);
     guide_done_.store(false, std::memory_order_relaxed);
@@ -127,8 +131,13 @@ void Model::run_guide()
             const iptv::http::ListSink sink{
                 [](void *reader, const char *data, std::size_t bytes)
                 { return static_cast<XmltvReader *>(reader)->feed({data, bytes}); }, &reader};
-            const auto response =
-                platform::fetch_list(canonical.c_str(), sink, 512u * 1024u * 1024u, &control);
+            iptv::http::RequestHeaders headers{};
+            headers.authorization = guide_authorization_.c_str();
+            headers.credential_origin = guide_origin_.empty() ? nullptr : guide_origin_.c_str();
+            const auto scoped =
+                iptv::http::HeadersForUrl(canonical.c_str(), canonical.c_str(), headers);
+            const auto response = platform::fetch_list(canonical.c_str(), sink,
+                                                       512u * 1024u * 1024u, &control, &scoped);
             if (response.status != iptv::http::Status::ok || !reader.finish() ||
                 guide_stop_.load(std::memory_order_acquire))
             {

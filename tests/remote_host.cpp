@@ -21,6 +21,14 @@ int main(int argc, char **argv)
     iptv_remote_set_volume(75);
     iptv_remote_set_volume_handler([](unsigned v, void *) { return v != 13; }, nullptr);
     int calls = 0;
+    if (argc == 3)
+        iptv_remote_set_sources_handler(
+            [](const char *, size_t bytes, char *out, size_t capacity, void *)
+            {
+                std::snprintf(out, capacity, "%s", bytes ? "Source saved" : "[{\"id\":2}]");
+                return 200;
+            },
+            nullptr);
     if (argc == 4)
         iptv_remote_set_playback_favorite(
             [](void *context) -> int

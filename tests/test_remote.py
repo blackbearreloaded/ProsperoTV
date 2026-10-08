@@ -181,6 +181,20 @@ class RemoteTest(unittest.TestCase):
             with socket.create_connection(('127.0.0.1', self.port)) as raw:
                 raw.sendall(f'POST /api/key HTTP/1.1\r\n{headers}\r\n\r\nx'.encode())
                 self.assertIn(b'400 Error', raw.recv(4096))
+    def test_sources_require_pairing_custom_header_and_menu(self):
+        self.request('/api/sources', code=401)
+        self.request('/api/sources', '{"id":0}', code=401)
+        self.pair()
+        self.request('/api/sources', code=403, header=False)
+        self.request('/api/sources', '{"id":0}', code=403, header=False)
+        self.assertEqual(self.request('/api/sources'), '[{"id":2}]')
+        self.assertEqual(self.headers['Content-Type'], 'application/json')
+        self.request('/api/sources', '', code=400)
+        self.assertEqual(self.request('/api/sources', '{"id":0}'), 'Source saved')
+        self.stop()
+        self.start(playback=True)
+        self.request('/api/sources', code=409)
+        self.request('/api/sources', '{"id":0}', code=409)
     def test_playback_favorite_and_volume(self):
         self.stop()
         self.start(playback=True)

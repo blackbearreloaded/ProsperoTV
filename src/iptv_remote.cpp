@@ -53,7 +53,7 @@ namespace
 constexpr char page[] =
 #include "iptv_remote_page.h"
     ;
-constexpr size_t max_request = 4096;
+constexpr size_t max_request = 16384;
 struct Client
 {
     int fd = -1;
@@ -73,6 +73,8 @@ bool connected_pending = false;
 unsigned volume = 100;
 bool (*save_volume)(unsigned, void *) = nullptr;
 void *volume_context = nullptr;
+int (*sources_handler)(const char *, size_t, char *, size_t, void *) = nullptr;
+void *sources_context = nullptr;
 char search_text[IPTV_IME_MAX_TEXT_BYTES];
 bool search_enabled = false, search_pending = false;
 uint64_t next_pair_attempt = 0;
@@ -365,6 +367,24 @@ void Request(Client &client)
                              : "Connected · Controls ready (Back to browse)");
         return;
     }
+    if (first == "GET /api/sources HTTP/1.1" || first == "POST /api/sources HTTP/1.1")
+    {
+        const bool listing = first.front() == 'G';
+        if (!sources_handler)
+            Reply(client, 409, "Return to the TV menu to manage sources.");
+        else if (!listing && (!has_length || body.empty()))
+            Reply(client, 400, "Source details are required.");
+        else
+        {
+            std::string output(128u * 1024u, '\0');
+            const int code = sources_handler(listing ? "" : body.data(), listing ? 0 : body.size(),
+                                             output.data(), output.size(), sources_context);
+            output.resize(std::strlen(output.c_str()));
+            Reply(client, code, output,
+                  listing && code == 200 ? "application/json" : "text/plain; charset=utf-8");
+        }
+        return;
+    }
     if (first == "POST /api/disconnect HTTP/1.1")
     {
         auto tokens = paired_tokens;
@@ -550,8 +570,15 @@ void iptv_remote_stop(void)
     iptv_remote_cancel_pairing();
     remote_url[0] = 0;
     iptv_remote_set_playback_favorite(nullptr, nullptr);
+    iptv_remote_set_sources_handler(nullptr, nullptr);
     std::memset(pin, 0, sizeof(pin));
     std::snprintf(hint, sizeof(hint), "Phone remote unavailable (port 8888)");
+}
+void iptv_remote_set_sources_handler(int (*handle)(const char *, size_t, char *, size_t, void *),
+                                     void *context)
+{
+    sources_handler = handle;
+    sources_context = context;
 }
 void iptv_remote_poll(void)
 {

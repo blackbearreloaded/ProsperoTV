@@ -6,21 +6,27 @@
 #define IPTV_PLAYER_H
 
 #ifdef __cplusplus
-extern "C" {
+extern "C"
+{
 #endif
 
-/* Runs one foreground channel session after the launcher has released
- * RmlUi, SDL, and VideoOut. Returns only after every native stream resource
- * has been released so the launcher can safely be recreated. */
-int iptv_player_run(const char *url, const char *channel_name);
-int iptv_player_run_with_headers(const char *url, const char *channel_name,
-                                 const char *user_agent, const char *referrer,
-                                 int reconnect_live);
-const char *iptv_player_last_error(void);
-/* Runs the same foreground path with a bounded automatic stop. A zero timeout
- * disables the deadline. This is used by controlled hardware acceptance. */
-int iptv_player_run_controlled(const char *url, const char *channel_name,
-                               unsigned stop_after_ms);
+    /* Runs one foreground channel session after the launcher has released
+     * RmlUi, SDL, and VideoOut. Returns only after every native stream resource
+     * has been released so the launcher can safely be recreated. */
+    int iptv_player_run(const char *url, const char *channel_name);
+    int iptv_player_run_with_headers(const char *url, const char *channel_name,
+                                     const char *user_agent, const char *referrer,
+                                     int reconnect_live);
+    int iptv_player_run_authenticated(const char *url, const char *channel_name,
+                                      const char *user_agent, const char *referrer,
+                                      const char *authorization, const char *credential_origin,
+                                      unsigned stop_after_ms, int reconnect_live);
+    const char *iptv_player_last_error(void);
+    /* Runs the same foreground path with a bounded automatic stop. A zero timeout
+ * disables the
+     * deadline. This is used by controlled hardware acceptance. */
+    int iptv_player_run_controlled(const char *url, const char *channel_name,
+                                   unsigned stop_after_ms);
 
 #ifdef __cplusplus
 }

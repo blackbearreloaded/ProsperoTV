@@ -9,6 +9,7 @@
 #include "iptv_store.h"
 #include "tv/diag.hpp"
 #include "tv/platform.hpp"
+#include "tv/local_tv.hpp"
 #include "tv/stream_sniff.hpp"
 
 #include <algorithm>
@@ -46,6 +47,10 @@ const char *source_name(iptv::SourceKind source)
         return "your Xtream account";
     case iptv::SourceKind::Portal:
         return "your MAC-code portal";
+    case iptv::SourceKind::HDHomeRun:
+        return "your HDHomeRun tuner";
+    case iptv::SourceKind::Tvheadend:
+        return "your Tvheadend server";
     case iptv::SourceKind::BuiltIn:
         break;
     }
@@ -187,6 +192,10 @@ std::string Model::cache_path(iptv::SourceKind source) const
         return cache_dir_ + "/prosperotv-xtream-catalog.sqlite3";
     case iptv::SourceKind::Portal:
         return cache_dir_ + "/prosperotv-source-4.sqlite3";
+    case iptv::SourceKind::HDHomeRun:
+    case iptv::SourceKind::Tvheadend:
+        return cache_dir_ + "/prosperotv-source-" + std::to_string(selected_source_id_) +
+               ".sqlite3";
     case iptv::SourceKind::BuiltIn:
         break;
     }
@@ -203,6 +212,9 @@ std::uint64_t Model::source_id(iptv::SourceKind source) const
         return iptv::XtreamSourceId(xtream_);
     case iptv::SourceKind::Portal:
         return portal_source_id(portal_);
+    case iptv::SourceKind::HDHomeRun:
+    case iptv::SourceKind::Tvheadend:
+        return local_tv_source_id(local_source_);
     case iptv::SourceKind::BuiltIn:
         break;
     }
@@ -236,6 +248,9 @@ bool Model::is_set_up(iptv::SourceKind source) const
         return xtream_ready();
     case iptv::SourceKind::Portal:
         return !portal_.url.empty() && !portal_.mac.empty();
+    case iptv::SourceKind::HDHomeRun:
+    case iptv::SourceKind::Tvheadend:
+        return !local_source_.url.empty() && valid_source(local_source_);
     case iptv::SourceKind::BuiltIn:
         break;
     }
@@ -787,6 +802,11 @@ std::optional<PlayRequest> Model::preview_request(std::string_view channel_id) c
             request.urls.emplace_back(url);
     request.user_agent = channel.http_user_agent;
     request.referrer = channel.http_referrer;
+    if (active_source_ == iptv::SourceKind::Tvheadend)
+    {
+        request.authorization = local_tv_authorization(local_source_);
+        request.credential_origin = local_source_.url;
+    }
     request.record_channel_result = false;
     if (active_source_ == iptv::SourceKind::Portal)
     {
@@ -812,6 +832,11 @@ bool Model::play(unsigned catalog_index)
             play_request_.urls.emplace_back(alternate);
     play_request_.user_agent = channel.http_user_agent;
     play_request_.referrer = channel.http_referrer;
+    if (active_source_ == iptv::SourceKind::Tvheadend)
+    {
+        play_request_.authorization = local_tv_authorization(local_source_);
+        play_request_.credential_origin = local_source_.url;
+    }
     play_request_.source_id = channel.source_id;
     if (active_source_ == iptv::SourceKind::Portal)
     {
@@ -820,7 +845,9 @@ bool Model::play(unsigned catalog_index)
         if (channel.portal_command.empty())
             return false;
     }
-    play_request_.reconnect_live = active_source_ == iptv::SourceKind::Xtream;
+    play_request_.reconnect_live = active_source_ == iptv::SourceKind::Xtream ||
+                                   active_source_ == iptv::SourceKind::HDHomeRun ||
+                                   active_source_ == iptv::SourceKind::Tvheadend;
     play_requested_ = !play_request_.urls.empty();
     diag::event("play asked: \"%s\" id=%s addresses=%zu source=%d own user agent=%s referrer=%s",
                 play_request_.channel_name.c_str(), play_request_.channel_id.c_str(),
@@ -895,6 +922,17 @@ void Model::use_source(iptv::SourceKind source)
 {
     if (library_.ready())
     {
+        if (source == iptv::SourceKind::HDHomeRun || source == iptv::SourceKind::Tvheadend)
+        {
+            const auto found =
+                std::find_if(sources_.begin(), sources_.end(), [source](const SavedSource &s)
+                             { return s.kind == static_cast<int>(source); });
+            if (found != sources_.end())
+                use_saved_source(found->id);
+            else
+                add_source(source);
+            return;
+        }
         use_saved_source(static_cast<int>(source) + 1);
         return;
     }
@@ -949,6 +987,14 @@ void Model::edit_source(iptv::SourceKind source)
         return;
     }
     editing_source_id_ = static_cast<int>(source) + 1;
+    if (source == iptv::SourceKind::HDHomeRun || source == iptv::SourceKind::Tvheadend)
+    {
+        local_form_ = local_source_;
+        local_form_.kind = static_cast<int>(source);
+        account_step_ = AccountStep::local_address;
+        account_prompt_pending_ = true;
+        return;
+    }
     if (source == iptv::SourceKind::Portal)
     {
         portal_form_ = portal_;
@@ -1020,6 +1066,22 @@ void Model::continue_account_form()
     case AccountStep::portal_mac:
         iptv_ime_request_prompt(portal_form_.mac.c_str(), "Portal MAC code (2 of 2)",
                                 "00:1A:79:12:34:56", 17, &Model::on_portal_mac, this);
+        break;
+    case AccountStep::local_address:
+        iptv_ime_request_prompt(local_form_.url.c_str(),
+                                local_form_.kind == 4 ? "HDHomeRun address" : "Tvheadend address",
+                                local_form_.kind == 4 ? "http://192.168.1.10"
+                                                      : "http://192.168.1.10:9981",
+                                IPTV_IME_BUFFER_CHARACTERS, &Model::on_local_address, this);
+        break;
+    case AccountStep::local_username:
+        iptv_ime_request_prompt(local_form_.username.c_str(), "Tvheadend user name",
+                                "Leave empty when this server needs no account",
+                                IPTV_IME_BUFFER_CHARACTERS, &Model::on_local_username, this);
+        break;
+    case AccountStep::local_password:
+        iptv_ime_request_password("Tvheadend password", "Password", IPTV_IME_BUFFER_CHARACTERS,
+                                  &Model::on_local_password, this);
         break;
     case AccountStep::none:
         break;
@@ -1124,6 +1186,7 @@ void Model::refresh()
     refresh_source_id_ = source_id(active_source_);
     refresh_account_ = account ? xtream_ : iptv::XtreamCredentials{};
     refresh_portal_ = active_source_ == iptv::SourceKind::Portal ? portal_ : PortalCredentials{};
+    refresh_local_ = local_source_;
     const SourceHealth before = health_[static_cast<unsigned>(active_source_)];
     health_[static_cast<unsigned>(active_source_)] = SourceHealth::refreshing;
 
@@ -1196,7 +1259,15 @@ void Model::run_refresh()
                     std::memory_order_acquire);
             },
             this};
-        if (refresh_source_ == iptv::SourceKind::Portal)
+        if (refresh_source_ == iptv::SourceKind::HDHomeRun ||
+            refresh_source_ == iptv::SourceKind::Tvheadend)
+        {
+            pending_fetch_ =
+                load_local_tv(refresh_local_, &pending_catalog_, &pending_report_, &control);
+            refresh_count_.store(static_cast<unsigned>(pending_catalog_.size()),
+                                 std::memory_order_relaxed);
+        }
+        else if (refresh_source_ == iptv::SourceKind::Portal)
         {
             PortalClient client(refresh_portal_, &control);
             const bool ok = client.load(&pending_catalog_, &pending_report_, &refresh_count_);

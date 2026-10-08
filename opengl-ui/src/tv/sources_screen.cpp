@@ -38,7 +38,7 @@ void SourcesScreen::sync()
     ids_.clear();
     for (const auto &source : model.saved_sources())
     {
-        if (source.kind > 3)
+        if (source.kind > 5)
             continue;
         ui::ListItem row;
         row.title = source.name;
@@ -63,6 +63,16 @@ void SourcesScreen::sync()
     portal.subtitle = "Stalker / Ministra address and MAC code";
     rows.push_back(std::move(portal));
     ids_.push_back(-3);
+    ui::ListItem tuner;
+    tuner.title = "Add an HDHomeRun tuner";
+    tuner.subtitle = "Tuner address on your home network";
+    rows.push_back(std::move(tuner));
+    ids_.push_back(-4);
+    ui::ListItem server;
+    server.title = "Add a Tvheadend server";
+    server.subtitle = "HTTP address and optional account";
+    rows.push_back(std::move(server));
+    ids_.push_back(-5);
     list_.set_items(std::move(rows));
     list_.set_focus(std::clamp(focus, 0, static_cast<int>(ids_.size()) - 1), true);
     seen_revision_ = model.revision();

@@ -33,6 +33,8 @@ enum class SourceKind : std::uint8_t
     Custom,
     Xtream,
     Portal,
+    HDHomeRun,
+    Tvheadend,
 };
 
 SourceStateStatus SaveCustomSourceUrl(const std::string &path, std::string_view url);

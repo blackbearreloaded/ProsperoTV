@@ -87,6 +87,10 @@ const char *source_label(iptv::SourceKind source)
         return "Your account";
     case iptv::SourceKind::Portal:
         return "Your portal";
+    case iptv::SourceKind::HDHomeRun:
+        return "Your HDHomeRun tuner";
+    case iptv::SourceKind::Tvheadend:
+        return "Your Tvheadend server";
     case iptv::SourceKind::BuiltIn:
         break;
     }
