@@ -92,15 +92,36 @@ live channels.
 
 ## Validation
 
-- Host UI tests run under ASan and UBSan, including nested category visibility,
+- All 112 host UI tests pass under ASan and UBSan, including nested category visibility,
   multiple-source persistence, guide matching/timezones/catch-up, portal header
   scope, VOD navigation/cache failures and preview cancellation/frame ownership.
-- Container tests generate synthetic H.264/AAC MP4 and Matroska plus HEVC MP4,
+- The 72 core tests and native/tooling regressions pass. Three container tests
+  generate synthetic H.264/AAC MP4 and Matroska plus HEVC MP4,
   then feed their real compressed packets through the production demuxer and
   stream parser. Generated media stays under ignored `build/`.
 - The PS5 cross-build includes the complete interface and native preview path.
 - Host renders cover categories, guide, movies, seasons, episodes, Settings and
   a synthetic preview inside the television. These renders are not hardware
   evidence.
-- Console validation is pending. No real provider credentials were supplied;
-  provider protocols are exercised with synthetic responses.
+- Console validation used idle console `192.168.4.30`, disposable title
+  `PPSA88261` and its own sandbox, with elevation disabled throughout. Both
+  runs ended with no active user title and all three development services
+  answering. Evidence is retained locally in `results/roadmap/console-01/`
+  and `results/roadmap/console-02/`.
+- The first run (`50c7bad`) verified HLS/TS previews inside the television,
+  logos, nested categories, now/next, guide/archive navigation, programme search,
+  source switching, movie/season/episode browsing and native MP4/Matroska playback
+  with AAC. It exposed an unresponsive stop while buffered video drained.
+- The corrected candidate (`bf5b95d`) keeps polling controls while read-ahead
+  and native video queues drain. A completely buffered ten-second MP4 and a
+  longer Matroska movie stopped at 5.042 seconds; an episode stopped at 4.042
+  seconds and portal live playback at 5.025 seconds. All reported presented
+  video, decoded audio, the requested stop and successful cleanup. Preview
+  diagnostics reported delivered video, zero decoded audio and successful
+  cleanup; menu samples averaged about 16.7 ms per frame.
+- The second script's initial source-switch input arrived during the startup
+  animation, so its playlist/guide screenshots are not acceptance evidence.
+  Those paths are covered by the first run; the second validates the buffered
+  stop correction and repeats VOD and portal playback.
+- No real provider credentials were supplied. Protocol compatibility is tested
+  with synthetic responses, not claimed for every provider.

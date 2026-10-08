@@ -5,7 +5,10 @@ The G1–G5 record below describes the earlier player baseline. G6 adds the sixt
 requested roadmap items, including nested provider categories. Its console gate
 uses a disposable sandboxed title and synthetic IPTV fixtures: live preview,
 guide/archive navigation, source switching and MP4/Matroska VOD, followed by
-clean title shutdown and service health checks.
+clean title shutdown and service health checks. G6 passed on 2026-10-08 with
+candidate `bf5b95d`; the implementation guide records the two console cases,
+their limits and the full host test results. All sixteen requested items are
+implemented. The status and requirements below preserve the earlier baseline.
 
 Updated: 2026-08-29 America/New_York
 Status: active

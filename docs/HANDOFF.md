@@ -1,10 +1,15 @@
 # ProsperoTV handoff
 
 Current roadmap work is described in [ROADMAP_IMPLEMENTATION.md](ROADMAP_IMPLEMENTATION.md).
-The historical validation below predates these changes. The new feature branch
-has host sanitizer tests, container fixtures, UI renders and a PS5 cross-build;
-the G6 hardware gate remains pending. Test titles must use `dev/no-elevation.txt`
-and their own sandbox storage.
+G6 is complete on `feat/source-guide-roadmap`: 112 UI sanitizer tests, 72 core
+tests, three media-container tests, native/tooling regressions and the PS5
+cross-build pass. Hardware evidence for `50c7bad` and the buffered-stop fix
+`bf5b95d` is under `results/roadmap/console-01/` and `console-02/`; see the
+implementation guide for acceptance details and the scripted-input limitation.
+The test title closed cleanly on `192.168.4.30`, all development services remained
+healthy, and the shared lock was released. Test titles must use
+`dev/no-elevation.txt` and their own sandbox storage. The historical G1–G5 record
+below predates these changes.
 
 Updated: 2026-08-29 America/New_York
 
