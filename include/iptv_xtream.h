@@ -17,8 +17,7 @@
 namespace iptv
 {
 
-inline constexpr char kDefaultXtreamCredentialsPath[] =
-    "/download0/prosperotv-xtream-v1.txt";
+inline constexpr char kDefaultXtreamCredentialsPath[] = "/download0/prosperotv-xtream-v1.txt";
 inline constexpr std::size_t kMaxXtreamServerBytes = 1020u;
 inline constexpr std::size_t kMaxXtreamCredentialBytes = 255u;
 // The list of live streams: about 600 bytes a channel, read as it arrives.
@@ -66,18 +65,17 @@ std::uint64_t XtreamSourceId(const XtreamCredentials &credentials);
 
 bool BuildXtreamApiUrl(const XtreamCredentials &credentials, std::string_view action,
                        std::string *url);
+bool BuildXtreamGuideUrl(const XtreamCredentials &credentials, std::string *url);
 bool BuildXtreamLiveUrl(const XtreamCredentials &credentials, std::string_view stream_id,
                         std::string_view extension, std::string *url);
 
-XtreamStatus SaveXtreamCredentials(const std::string &path,
-                                    const XtreamCredentials &credentials);
+XtreamStatus SaveXtreamCredentials(const std::string &path, const XtreamCredentials &credentials);
 XtreamStatus LoadXtreamCredentials(const std::string &path, XtreamCredentials *credentials);
 XtreamStatus SaveXtreamCredentials(const XtreamCredentials &credentials);
 XtreamStatus LoadXtreamCredentials(XtreamCredentials *credentials);
 
 XtreamStatus ParseXtreamAuth(std::string_view json, XtreamAuth *auth);
-XtreamStatus ParseXtreamCategories(std::string_view json,
-                                   std::vector<XtreamCategory> *categories);
+XtreamStatus ParseXtreamCategories(std::string_view json, std::vector<XtreamCategory> *categories);
 // Reads the answer to get_live_streams as it arrives: Feed it the bytes in
 // order, in pieces of any size, then Finish. Each stream goes into `catalog`
 // when its last byte is in, so the answer (tens of megabytes for a large
@@ -106,8 +104,7 @@ class XtreamStreamsParser
 };
 
 // The same, for an answer that is already whole in memory.
-XtreamStatus ParseXtreamLiveStreams(std::string_view json,
-                                    const XtreamCredentials &credentials,
+XtreamStatus ParseXtreamLiveStreams(std::string_view json, const XtreamCredentials &credentials,
                                     const std::vector<XtreamCategory> &categories,
                                     std::uint64_t source_id, Catalog *catalog,
                                     ParseReport *report = nullptr,

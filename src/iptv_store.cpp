@@ -21,7 +21,7 @@ namespace
 {
 
 // The version written, and the oldest one still read.
-constexpr int kSchemaVersion = 2;
+constexpr int kSchemaVersion = 3;
 constexpr int kOldestSchemaVersion = 1;
 constexpr int kPlaybackSchemaVersion = 1;
 
@@ -124,6 +124,9 @@ bool ValidChannel(const ChannelView &channel, const StoreLimits &limits)
         channel.tvg_language,
         channel.http_user_agent,
         channel.http_referrer,
+        channel.catchup,
+        channel.catchup_source,
+        channel.catchup_days,
     };
     for (const std::string_view field : fields)
     {
@@ -156,12 +159,14 @@ bool CreateSchema(sqlite3 *database)
         "name TEXT NOT NULL,url TEXT NOT NULL,tvg_id TEXT NOT NULL,"
         "tvg_name TEXT NOT NULL,tvg_logo TEXT NOT NULL,group_title TEXT NOT NULL,"
         "tvg_country TEXT NOT NULL,tvg_language TEXT NOT NULL,user_agent TEXT NOT NULL,"
-        "referrer TEXT NOT NULL);"
+        "referrer TEXT NOT NULL,catchup TEXT NOT NULL,catchup_source TEXT NOT NULL,catchup_days "
+        "TEXT NOT NULL);"
+        "CREATE TABLE guide_urls(url TEXT NOT NULL);"
         "CREATE TABLE alternate_urls(channel INTEGER NOT NULL,position INTEGER NOT NULL,"
         "url TEXT NOT NULL,PRIMARY KEY(channel,position)) WITHOUT ROWID;"
         "CREATE TABLE alternate_groups(channel INTEGER NOT NULL,position INTEGER NOT NULL,"
         "value TEXT NOT NULL,PRIMARY KEY(channel,position)) WITHOUT ROWID;"
-        "PRAGMA user_version=2;");
+        "PRAGMA user_version=3;");
 }
 
 bool CreatePlaybackSchema(sqlite3 *database)
@@ -205,8 +210,9 @@ bool InsertCatalog(sqlite3 *database, const Catalog &catalog, const StoreLimits 
     const bool prepared =
         Prepare(database,
                 "INSERT INTO channels(position,id,source_line,name,url,tvg_id,tvg_name,"
-                "tvg_logo,group_title,tvg_country,tvg_language,user_agent,referrer)"
-                "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                "tvg_logo,group_title,tvg_country,tvg_language,user_agent,referrer,catchup,catchup_"
+                "source,catchup_days)"
+                "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 &channel_statement) &&
         Prepare(database, "INSERT INTO alternate_urls(channel,position,url) VALUES(?,?,?)",
                 &url_statement) &&
@@ -261,6 +267,9 @@ bool InsertCatalog(sqlite3 *database, const Catalog &catalog, const StoreLimits 
              BindCatalogText(channel_statement, 11, channel.tvg_language) &&
              BindCatalogText(channel_statement, 12, channel.http_user_agent) &&
              BindCatalogText(channel_statement, 13, channel.http_referrer) &&
+             BindCatalogText(channel_statement, 14, channel.catchup) &&
+             BindCatalogText(channel_statement, 15, channel.catchup_source) &&
+             BindCatalogText(channel_statement, 16, channel.catchup_days) &&
              sqlite3_step(channel_statement) == SQLITE_DONE &&
              InsertAlternates(url_statement, index, channel.alternate_urls,
                               limits.max_alternate_urls, limits.max_url_bytes) &&
@@ -272,6 +281,18 @@ bool InsertCatalog(sqlite3 *database, const Catalog &catalog, const StoreLimits 
     sqlite3_finalize(url_statement);
     sqlite3_finalize(group_statement);
     sqlite3_finalize(meta_statement);
+    sqlite3_stmt *guide_statement = nullptr;
+    ok = ok && catalog.guide_urls.size() <= 8 &&
+         Prepare(database, "INSERT INTO guide_urls(url) VALUES(?)", &guide_statement);
+    for (const auto &url : catalog.guide_urls)
+    {
+        if (!ok)
+            break;
+        sqlite3_reset(guide_statement);
+        ok = Fits(url, limits.max_url_bytes) && BindText(guide_statement, 1, url) &&
+             sqlite3_step(guide_statement) == SQLITE_DONE;
+    }
+    sqlite3_finalize(guide_statement);
     return ok;
 }
 
@@ -508,11 +529,12 @@ static StoreStatus LoadCatalogFile(const std::string &path, Catalog *catalog,
     // Each row goes from SQLite's page into the catalog; nothing is copied
     // on the way.
     statement = nullptr;
-    ok = ok &&
-         Prepare(database,
-                 "SELECT id,source_line,name,url,tvg_id,tvg_name,tvg_logo,group_title,"
-                 "tvg_country,tvg_language,user_agent,referrer FROM channels ORDER BY position",
-                 &statement);
+    const std::string query =
+        "SELECT id,source_line,name,url,tvg_id,tvg_name,tvg_logo,group_title,"
+        "tvg_country,tvg_language,user_agent,referrer" +
+        std::string(version >= 3 ? ",catchup,catchup_source,catchup_days" : "") +
+        " FROM channels ORDER BY position";
+    ok = ok && Prepare(database, query.c_str(), &statement);
     while (ok && sqlite3_step(statement) == SQLITE_ROW)
     {
         ChannelView channel;
@@ -529,10 +551,31 @@ static StoreStatus LoadCatalogFile(const std::string &path, Catalog *catalog,
         channel.tvg_language = ColumnText(statement, 9);
         channel.http_user_agent = ColumnText(statement, 10);
         channel.http_referrer = ColumnText(statement, 11);
+        if (version >= 3)
+        {
+            channel.catchup = ColumnText(statement, 12);
+            channel.catchup_source = ColumnText(statement, 13);
+            channel.catchup_days = ColumnText(statement, 14);
+        }
         ok = loaded.size() < count && ValidChannel(channel, limits) && loaded.Add(channel);
     }
     sqlite3_finalize(statement);
     ok = ok && loaded.size() == count;
+    if (ok && version >= 3)
+    {
+        statement = nullptr;
+        ok = Prepare(database, "SELECT url FROM guide_urls", &statement);
+        int step = SQLITE_DONE;
+        while (ok && (step = sqlite3_step(statement)) == SQLITE_ROW)
+        {
+            const auto url = ColumnText(statement, 0);
+            ok = loaded.guide_urls.size() < 8 && Fits(url, limits.max_url_bytes);
+            if (ok)
+                loaded.guide_urls.emplace_back(url);
+        }
+        ok = ok && step == SQLITE_DONE;
+        sqlite3_finalize(statement);
+    }
     ok = ok && LoadAlternates(database, version, true, limits, &loaded) &&
          LoadAlternates(database, version, false, limits, &loaded);
     if (ok)

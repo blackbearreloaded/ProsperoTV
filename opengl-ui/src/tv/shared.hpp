@@ -8,6 +8,7 @@
 #include "tv/model.hpp"
 #include "tv/settings.hpp"
 #include "tv/theme.hpp"
+#include "tv/images.hpp"
 #include "ui/components/toast.hpp"
 
 namespace ptv
@@ -25,6 +26,7 @@ struct Shared
     ui::Theme theme;
     Settings settings;
     ui::ToastStack toasts;
+    ImageCache images;
     float clock = 0.0f; // free-running seconds, for idle motion
 };
 

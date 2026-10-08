@@ -62,6 +62,7 @@ cp -a "$tv/vendor/qrcodegen" "$out/vendor/qrcodegen"
 cp "$tv/vendor/ps5/sdk/stubs/videodec2_link_stub.c" "$out/vendor/ps5/sdk/stubs/"
 cp "$tv"/tooling/native/ps5_radio_import_stub_{audiodec,common_dialog}.cpp "$out/tooling/native/"
 cp "$tv/tools/setup-audio-dependencies.sh" "$out/tools/"
+cp "$tv/tools/setup-guide-dependencies.sh" "$out/tools/"
 cp -a "$tv/assets/." "$out/assets/"
 cp -a "$tv/sce_sys" "$out/sce_sys"
 # The home-screen artwork of this interface replaces the released one, and
@@ -103,6 +104,7 @@ seed() {
 seed native "$kit"
 seed pacbrew "$proto/../../prosperoradio-ui-build" "$tv"
 seed ffmpeg-audio "$tv"
+seed expat "$tv"
 seed lapy "$proto/../../ps5-native-app-boilerplate"
 if [[ ! -e $out/.deps/ps5-opengl && -d $kit/.deps/ps5-opengl ]]; then
     mkdir -p "$out/.deps/ps5-opengl"

@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 #include "tv/browse_screen.hpp"
+#include "tv/platform.hpp"
 
 #include "tv/draw.hpp"
 
@@ -168,6 +169,26 @@ std::optional<iptv::ChannelView> BrowseScreen::focused() const
 int BrowseScreen::current_letter() const
 {
     return grid_.count() > 0 ? shared_.model.letter_at(static_cast<unsigned>(grid_.focus())) : 0;
+}
+
+std::vector<std::string> BrowseScreen::image_urls() const
+{
+    std::vector<std::string> urls;
+    if (const auto channel = focused())
+        urls.emplace_back(channel->tvg_logo);
+    // Two rows in view, plus the rows entering/leaving during a scroll.
+    const int first = std::max(0, grid_.focus() / kColumns * kColumns - kColumns);
+    const int end = std::min(grid_.count(), first + kColumns * 5);
+    for (int i = first; i < end; ++i)
+    {
+        const auto rect = grid_.cell_rect(i);
+        if (rect.y + rect.h < kGridTop - kTileHeight || rect.y > 1000)
+            continue;
+        const auto channel = shared_.model.channel(shared_.model.visible(static_cast<unsigned>(i)));
+        if (!channel.tvg_logo.empty())
+            urls.emplace_back(channel.tvg_logo);
+    }
+    return urls;
 }
 
 int BrowseScreen::page_turn(const InputFrame &input, bool *repeat)
@@ -337,8 +358,8 @@ BrowseScreen::Result BrowseScreen::handle(const InputFrame &input, ui::Feedback 
                 // letter's first row goes to the top of the view, so that its
                 // channels follow it.
                 const bool far = std::abs(target - before) > 3 * kColumns;
-                grid_.set_focus(
-                    std::min(target + kColumns * (kRowsInView - 1), grid_.count() - 1), far);
+                grid_.set_focus(std::min(target + kColumns * (kRowsInView - 1), grid_.count() - 1),
+                                far);
                 grid_.set_focus(target, far);
                 feedback.play(audio::Cue::focus, 1.1f - 0.008f * static_cast<float>(letter));
                 show_focus(before, !input.nav_repeat);
@@ -577,8 +598,8 @@ void BrowseScreen::update(float dt)
     }
 }
 
-void BrowseScreen::draw_hero_text(ui::Canvas &canvas, const iptv::ChannelView &channel, unsigned index,
-                                  bool favorite, float alpha, float dx) const
+void BrowseScreen::draw_hero_text(ui::Canvas &canvas, const iptv::ChannelView &channel,
+                                  unsigned index, bool favorite, float alpha, float dx) const
 {
     if (alpha <= 0.01f)
         return;
@@ -598,7 +619,8 @@ void BrowseScreen::draw_hero_text(ui::Canvas &canvas, const iptv::ChannelView &c
         (favorites_ ? std::string("FAVORITE")
                     : "CHANNEL " + group_digits(shared_.model.number_of(index))) +
         "  \xC2\xB7  " +
-        ui::upper(readable(face_for(fonts, fonts.semibold, category_of(channel)), category_of(channel)));
+        ui::upper(
+            readable(face_for(fonts, fonts.semibold, category_of(channel)), category_of(channel)));
     const ui::FontRef &kicker_face = face_for(fonts, fonts.semibold, kicker);
     ui::text(list, kicker_face, kicker_face.font->fit(kicker, 18.0f, kHeroText * 0.8f), x,
              156.0f + rise(0), 18.0f, tone::accent, gfx::Align::left, 4.0f);
@@ -616,15 +638,28 @@ void BrowseScreen::draw_hero_text(ui::Canvas &canvas, const iptv::ChannelView &c
     list.pop_opacity();
 
     list.push_opacity(appear(2));
-    const std::string place = place_line(channel);
+    const auto time = static_cast<std::int64_t>(platform::unix_time());
+    const auto *now = shared_.model.guide().now(channel.id, time);
+    const auto *next = shared_.model.guide().next(channel.id, time);
+    const std::string place = now    ? "Now: " + now->title
+                              : next ? "No programme on now"
+                                     : place_line(channel);
     const ui::FontRef &place_face = face_for(fonts, fonts.regular, place);
-    ui::text(list, place_face, place_face.font->fit(readable(place_face, place), 26.0f, kHeroText),
-             x, 282.0f + rise(2), 26.0f, theme.text_muted);
+    ui::text(list, place_face, place_face.font->fit(readable(place_face, place), 24.0f, kHeroText),
+             x, 280.0f + rise(2), 24.0f, theme.text_muted);
+    if (now || next)
+    {
+        const std::string line = next ? "Next " + programme_time(next->start) + ": " + next->title
+                                      : "Next: No programme information";
+        const auto &face = face_for(fonts, fonts.regular, line);
+        ui::text(list, face, face.font->fit(line, 21, kHeroText), x, 309 + rise(2), 21,
+                 theme.text_muted);
+    }
     list.pop_opacity();
 
     // ---- what the record says about the picture, and how the last try went ----
     list.push_opacity(appear(3));
-    const float chips_y = 332.0f + rise(3);
+    const float chips_y = 346.0f + rise(3);
     float at = x;
     const std::string picture = resolution_label(channel);
     at += draw_chip(paint, at, chips_y, picture.empty() ? "Auto quality" : picture) + 12.0f;
@@ -656,6 +691,10 @@ void BrowseScreen::draw_hero_text(ui::Canvas &canvas, const iptv::ChannelView &c
     list.ring(star_x, cy, 34.0f, 1.5f, kWhite.with_alpha(0.22f));
     list.star(star_x, cy - 1.0f, 15.0f + 8.0f * star_.value, favorite ? tone::accent : tone::cream,
               favorite ? 0.0f : 2.5f);
+    ui::draw_button(list, fonts, ui::GlyphStyle::dark(), ui::Button::right_stick, star_x + 75, cy,
+                    34);
+    ui::text(list, fonts.regular, "Guide", star_x + 120, baseline_for(cy, 23), 23,
+             theme.text_muted);
     list.pop_opacity();
 
     list.pop_opacity();
@@ -673,7 +712,8 @@ void BrowseScreen::draw_hero_art(ui::Canvas &canvas, const iptv::ChannelView &ch
     list.shadow({set.x, set.y + 26.0f, set.w, set.h}, kHeroRadius, 56.0f,
                 Color::rgb(0x000000, 0.5f));
     list.glow(set.inset(-4.0f), kHeroRadius + 4.0f, 80.0f, accent.with_alpha(0.24f));
-    draw_channel_art(list, canvas.fonts, kHeroArt, kHeroRadius, channel);
+    draw_channel_art(list, canvas.fonts, kHeroArt, kHeroRadius, channel,
+                     shared_.images.find(channel.tvg_logo));
     list.pop_opacity();
 }
 
@@ -726,6 +766,7 @@ void BrowseScreen::draw_list_header(ui::Canvas &canvas) const
         if (!model.query().empty())
             add("\"" + model.query() + "\"");
         add(model.country());
+        add(model.provider_category());
         add(model.category());
         add(model.language());
         if (model.quality() != kQualityAny)
@@ -860,14 +901,14 @@ void BrowseScreen::draw_rail(ui::Canvas &canvas) const
         // which is written larger.
         const float away = (home - y) / kRailPitch;
         const float near = std::abs(away);
-        const float push = near < 1.0f ? away : std::copysign(std::exp(-(near - 1.0f) * 0.9f), away);
+        const float push =
+            near < 1.0f ? away : std::copysign(std::exp(-(near - 1.0f) * 0.9f), away);
         const float cy = home + focus * 7.0f * push;
         const float size = kRailText + focus * 7.0f * std::max(0.0f, 1.0f - near);
         // Letters with nothing under them stay, dimmed: the column keeps its shape.
-        const Color color = near < 0.5f ? tone::ink
-                            : model.letter_start(letter) >= 0
-                                ? shared_.theme.text.with_alpha(0.88f)
-                                : kWhite.with_alpha(0.2f);
+        const Color color = near < 0.5f                       ? tone::ink
+                            : model.letter_start(letter) >= 0 ? shared_.theme.text.with_alpha(0.88f)
+                                                              : kWhite.with_alpha(0.2f);
         ui::text(list, fonts.semibold, text, kRailX, baseline_for(cy, size), size, color,
                  gfx::Align::center);
     }

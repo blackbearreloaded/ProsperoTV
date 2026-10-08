@@ -6,7 +6,6 @@
 
 #include "tv/shared.hpp"
 #include "ui/components/list.hpp"
-#include "ui/components/progress.hpp"
 #include "ui/glyphs.hpp"
 
 namespace ptv
@@ -24,16 +23,15 @@ class SourcesScreen
     void update(float dt);
     void draw(ui::Canvas &canvas) const;
     int hints(ui::Hint *out, int capacity) const;
+    std::int64_t focused_id() const;
 
   private:
-    iptv::SourceKind focused() const;
-    void draw_row(ui::Canvas &canvas, const Rect &row, iptv::SourceKind source, float focus) const;
-    void draw_details(ui::Canvas &canvas) const;
+    void sync();
 
     Shared &shared_;
     ui::ListView list_;
-    ui::Spinner spinner_;
-    float age_ = 10.0f;
+    unsigned seen_revision_ = 0;
+    std::vector<std::int64_t> ids_;
 };
 
 } // namespace ptv

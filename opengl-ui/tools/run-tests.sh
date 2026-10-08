@@ -18,11 +18,12 @@ tv=$(cd -- "${TV:-$root/..}" && pwd)
 cxx=$(command -v "${HOST_CXX:-clang++}")
 cache=$(command -v ccache || true)
 gtest=$(bash "$tv/tools/setup-test-dependencies.sh" | tail -1)
+expat=$(bash "$tv/tools/setup-guide-dependencies.sh" host | tail -1)
 build="$root/build/tests"
 mkdir -p "$build/obj"
 
 sanitize="-fsanitize=address,undefined -fno-omit-frame-pointer -g"
-includes="-I$root/src -I$root/ps5/src -I$root/host -I$kit/src -I$kit/third_party -I$tv/include -I$tv/vendor/qrcodegen"
+includes="-I$root/src -I$root/ps5/src -I$root/host -I$kit/src -I$kit/third_party -I$tv/include -I$tv/vendor/qrcodegen -I$expat/include"
 {
     echo "rule cxx"
     echo "  command = $cache $cxx -std=c++20 -O1 $sanitize \$flags $includes -MD -MF \$out.d -c \$in -o \$out"
@@ -30,7 +31,7 @@ includes="-I$root/src -I$root/ps5/src -I$root/host -I$kit/src -I$kit/third_party
     echo "  deps = gcc"
     echo "  description = CXX \$in"
     echo "rule link"
-    echo "  command = $cxx $sanitize \$in -lsqlite3 -lpthread -lm -o \$out"
+    echo "  command = $cxx $sanitize \$in $expat/lib/libexpat.a -lpng -ljpeg -lz -lsqlite3 -lpthread -lm -o \$out"
     echo "  description = LINK \$out"
     objects=()
     edge() {
@@ -70,7 +71,7 @@ includes="-I$root/src -I$root/ps5/src -I$root/host -I$kit/src -I$kit/third_party
     echo "default $build/tv_tests"
 } > "$build/build.ninja"
 
-if ! ninja -C "$build" > "$build/build.log" 2>&1; then
+if ! ninja -j "${BUILD_JOBS:-4}" -C "$build" > "$build/build.log" 2>&1; then
     grep -E 'error|FAILED' -A12 "$build/build.log" | head -150 >&2
     exit 1
 fi

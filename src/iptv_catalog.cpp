@@ -5,6 +5,7 @@
 #include "iptv_catalog.h"
 
 #include <algorithm>
+#include <array>
 #include <cctype>
 #include <cstring>
 #include <limits>
@@ -301,6 +302,8 @@ namespace
 
 constexpr std::uint32_t kNone = 0xffffffffu;
 constexpr std::size_t kFieldCount = static_cast<std::size_t>(Catalog::Field::count);
+constexpr std::size_t kCoreFieldCount = static_cast<std::size_t>(Catalog::Field::catchup);
+using ArchiveFields = std::array<std::string_view, kFieldCount - kCoreFieldCount>;
 constexpr std::size_t kNameField = static_cast<std::size_t>(Catalog::Field::name);
 constexpr std::size_t kGuideNameField = static_cast<std::size_t>(Catalog::Field::tvg_name);
 // From here on a field's values repeat from channel to channel.
@@ -318,8 +321,8 @@ constexpr char kEmptyText[1] = {'\0'};
 
 struct Record
 {
-    std::uint32_t at[kFieldCount];
-    std::uint16_t bytes[kFieldCount];
+    std::uint32_t at[kCoreFieldCount];
+    std::uint16_t bytes[kCoreFieldCount];
     std::uint8_t playback;
     std::uint8_t reserved;
     std::uint32_t source_line;
@@ -442,6 +445,9 @@ struct Catalog::Storage
     std::vector<Alternate> alternates;
     std::unordered_map<std::string_view, std::uint32_t> shared;
     std::unordered_map<std::uint32_t, Played> played;
+    // Most public channels have no archive. Their records stay the same size.
+    // These optional fields borrow text from the same stable arena.
+    std::unordered_map<std::uint32_t, ArchiveFields> archives;
     KeyTable ids;
 
     const char *Text(std::uint32_t at) const
@@ -531,7 +537,8 @@ Catalog::Catalog() = default;
 Catalog::~Catalog() = default;
 
 Catalog::Catalog(Catalog &&other) noexcept
-    : source_id(other.source_id), storage_(std::move(other.storage_))
+    : source_id(other.source_id), guide_urls(std::move(other.guide_urls)),
+      storage_(std::move(other.storage_))
 {
     other.source_id = 0;
 }
@@ -541,13 +548,14 @@ Catalog &Catalog::operator=(Catalog &&other) noexcept
     if (this != &other)
     {
         source_id = other.source_id;
+        guide_urls = std::move(other.guide_urls);
         storage_ = std::move(other.storage_);
         other.source_id = 0;
     }
     return *this;
 }
 
-Catalog::Catalog(const Catalog &other) : source_id(other.source_id)
+Catalog::Catalog(const Catalog &other) : source_id(other.source_id), guide_urls(other.guide_urls)
 {
     for (std::size_t index = 0; index < other.size(); ++index)
         (void)Add(other[index]);
@@ -592,6 +600,13 @@ ChannelView Catalog::operator[](std::size_t index) const
     view.tvg_language = text(Field::tvg_language);
     view.http_user_agent = text(Field::http_user_agent);
     view.http_referrer = text(Field::http_referrer);
+    const auto archive = storage.archives.find(static_cast<std::uint32_t>(index));
+    if (archive != storage.archives.end())
+    {
+        view.catchup = archive->second[0];
+        view.catchup_source = archive->second[1];
+        view.catchup_days = archive->second[2];
+    }
     view.source_line = record.source_line;
     view.playback_status = static_cast<PlaybackStatus>(record.playback);
     if (view.playback_status != PlaybackStatus::unknown)
@@ -640,6 +655,9 @@ bool Catalog::Add(const ChannelView &channel)
         channel.tvg_language,
         channel.http_user_agent,
         channel.http_referrer,
+        channel.catchup,
+        channel.catchup_source,
+        channel.catchup_days,
     };
     for (const std::string_view text : texts)
         if (text.size() > kMaxTextBytes)
@@ -669,6 +687,8 @@ bool Catalog::Add(const ChannelView &channel)
     }
 
     Record record{};
+    ArchiveFields archive{};
+    bool has_archive = false;
     for (std::size_t field = 0; field < kFieldCount; ++field)
     {
         std::uint32_t at = 0;
@@ -678,8 +698,16 @@ bool Catalog::Add(const ChannelView &channel)
         else if (!(field >= kFirstSharedField ? storage.StoreShared(texts[field], &at)
                                               : storage.Store(texts[field], &at)))
             return false;
-        record.at[field] = at;
-        record.bytes[field] = static_cast<std::uint16_t>(texts[field].size());
+        if (field < kCoreFieldCount)
+        {
+            record.at[field] = at;
+            record.bytes[field] = static_cast<std::uint16_t>(texts[field].size());
+        }
+        else
+        {
+            archive[field - kCoreFieldCount] = storage.View(at, texts[field].size());
+            has_archive = has_archive || !texts[field].empty();
+        }
     }
     record.source_line = channel.source_line;
     record.urls = kNone;
@@ -695,6 +723,8 @@ bool Catalog::Add(const ChannelView &channel)
     if (!storage.ids.Add(KeyOf(channel.id), index))
         return false;
     storage.At(index) = record;
+    if (has_archive)
+        storage.archives.emplace(index, archive);
     ++storage.count;
     if (channel.playback_status != PlaybackStatus::unknown)
         SetPlayback(index, channel.playback_status, channel.playback_result,
@@ -724,6 +754,13 @@ bool Catalog::Set(std::size_t index, Field field, std::string_view value)
                                   : storage_->Store(value, &place)))
         return false;
     Record &record = storage_->At(index);
+    if (at >= kCoreFieldCount)
+    {
+        const auto key = static_cast<std::uint32_t>(index);
+        if (!value.empty() || storage_->archives.contains(key))
+            storage_->archives[key][at - kCoreFieldCount] = storage_->View(place, value.size());
+        return true;
+    }
     record.at[at] = place;
     record.bytes[at] = static_cast<std::uint16_t>(value.size());
     return true;
@@ -762,6 +799,7 @@ std::size_t Catalog::Find(std::string_view id) const
 
 void Catalog::Clear()
 {
+    guide_urls.clear();
     storage_.reset();
 }
 
@@ -773,7 +811,7 @@ std::size_t Catalog::MemoryBytes() const
     return storage.blocks.size() * kBlockBytes +
            storage.chunks.size() * kRecordsPerChunk * sizeof(Record) +
            storage.alternates.capacity() * sizeof(Alternate) + storage.ids.Bytes() +
-           (storage.shared.size() + storage.played.size()) * 64u;
+           (storage.shared.size() + storage.played.size()) * 64u + storage.archives.size() * 80u;
 }
 
 std::string_view Catalog::AlternateText(std::uint32_t node) const
@@ -867,9 +905,10 @@ ChannelView::ChannelView(const Channel &channel)
       tvg_logo(channel.tvg_logo), group_title(channel.group_title),
       alternate_group_titles(channel.alternate_group_titles), tvg_country(channel.tvg_country),
       tvg_language(channel.tvg_language), http_user_agent(channel.http_user_agent),
-      http_referrer(channel.http_referrer), source_line(channel.source_line),
-      playback_status(channel.playback_status), playback_result(channel.playback_result),
-      playback_checked_unix(channel.playback_checked_unix)
+      http_referrer(channel.http_referrer), catchup(channel.catchup),
+      catchup_source(channel.catchup_source), catchup_days(channel.catchup_days),
+      source_line(channel.source_line), playback_status(channel.playback_status),
+      playback_result(channel.playback_result), playback_checked_unix(channel.playback_checked_unix)
 {
 }
 
@@ -890,6 +929,9 @@ Channel ChannelView::Copy() const
     channel.tvg_language = tvg_language;
     channel.http_user_agent = http_user_agent;
     channel.http_referrer = http_referrer;
+    channel.catchup = catchup;
+    channel.catchup_source = catchup_source;
+    channel.catchup_days = catchup_days;
     channel.source_line = source_line;
     channel.playback_status = playback_status;
     channel.playback_result = playback_result;
@@ -913,6 +955,7 @@ struct EntryMetadata
     std::string tvg_language;
     std::string http_user_agent;
     std::string http_referrer;
+    std::string catchup, catchup_source, catchup_days, guide_urls;
 };
 
 struct PendingEntry
@@ -969,6 +1012,14 @@ bool IsAttributeKeyChar(char value)
 
 void SetAttribute(std::string_view key, std::string &&value, EntryMetadata *metadata)
 {
+    if (key == "catchup")
+        metadata->catchup = std::move(value);
+    else if (key == "catchup-source")
+        metadata->catchup_source = std::move(value);
+    else if (key == "catchup-days" || key == "timeshift")
+        metadata->catchup_days = std::move(value);
+    else if (key == "url-tvg" || key == "x-tvg-url" || key == "tvg-url")
+        metadata->guide_urls = std::move(value);
     if (key == "tvg-id")
     {
         metadata->tvg_id = std::move(value);
@@ -1238,6 +1289,9 @@ void MergeChannel(Catalog *catalog, std::size_t index, const EntryMetadata &meta
     fill(Catalog::Field::tvg_language, existing.tvg_language, metadata.tvg_language);
     fill(Catalog::Field::http_user_agent, existing.http_user_agent, metadata.http_user_agent);
     fill(Catalog::Field::http_referrer, existing.http_referrer, metadata.http_referrer);
+    fill(Catalog::Field::catchup, existing.catchup, metadata.catchup);
+    fill(Catalog::Field::catchup_source, existing.catchup_source, metadata.catchup_source);
+    fill(Catalog::Field::catchup_days, existing.catchup_days, metadata.catchup_days);
     if (!metadata.group_title.empty())
     {
         if (existing.group_title.empty())
@@ -1267,6 +1321,7 @@ struct M3uParser::State
     KeyTable by_url;
     bool pending = false;
     PendingEntry entry;
+    EntryMetadata defaults;
     std::size_t line_number = 0;
     std::size_t bytes_seen = 0;
     // The start of a line whose end has not arrived yet.
@@ -1331,6 +1386,29 @@ struct M3uParser::State
         }
         if (line.front() == '#')
         {
+            if (StartsWithInsensitive(line, "#EXTM3U"))
+            {
+                ParseIssueCode error{};
+                EntryMetadata header;
+                if (ParseExtinf("#EXTINF:-1 " + std::string(line.substr(7)) + ",Header",
+                                limits.max_field_bytes, &header, &error))
+                {
+                    defaults = std::move(header);
+                    std::string_view urls = defaults.guide_urls;
+                    while (!urls.empty() && catalog->guide_urls.size() < 8)
+                    {
+                        const auto comma = urls.find(',');
+                        std::string url;
+                        if (CanonicalizeStreamUrl(Trim(urls.substr(0, comma)), &url) &&
+                            std::find(catalog->guide_urls.begin(), catalog->guide_urls.end(),
+                                      url) == catalog->guide_urls.end())
+                            catalog->guide_urls.push_back(std::move(url));
+                        if (comma == std::string_view::npos)
+                            break;
+                        urls.remove_prefix(comma + 1);
+                    }
+                }
+            }
             if (StartsWithInsensitive(line, "#EXTINF:"))
             {
                 if (pending)
@@ -1342,6 +1420,12 @@ struct M3uParser::State
                 EntryMetadata parsed;
                 if (ParseExtinf(line, limits.max_field_bytes, &parsed, &error))
                 {
+                    if (parsed.catchup.empty())
+                        parsed.catchup = defaults.catchup;
+                    if (parsed.catchup_source.empty())
+                        parsed.catchup_source = defaults.catchup_source;
+                    if (parsed.catchup_days.empty())
+                        parsed.catchup_days = defaults.catchup_days;
                     entry.metadata = std::move(parsed);
                     entry.line = static_cast<std::uint32_t>(std::min<std::size_t>(
                         line_number, std::numeric_limits<std::uint32_t>::max()));
@@ -1412,6 +1496,9 @@ struct M3uParser::State
         channel.tvg_language = metadata.tvg_language;
         channel.http_user_agent = metadata.http_user_agent;
         channel.http_referrer = metadata.http_referrer;
+        channel.catchup = metadata.catchup;
+        channel.catchup_source = metadata.catchup_source;
+        channel.catchup_days = metadata.catchup_days;
         channel.name = !metadata.title.empty()      ? std::string_view(metadata.title)
                        : !metadata.tvg_name.empty() ? std::string_view(metadata.tvg_name)
                                                     : std::string_view(canonical_url);

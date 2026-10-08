@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 #include "tv/draw.hpp"
+#include "tv/platform.hpp"
 
 #include "ui/components/overlay.hpp"
 #include "ui/components/progress.hpp"
@@ -196,10 +197,10 @@ void draw_antenna(gfx::DrawList &list, float cx, float base_y, float height, Col
 }
 
 void draw_channel_art(gfx::DrawList &list, const ui::Fonts &fonts, const Rect &r, float radius,
-                      const iptv::ChannelView &channel)
+                      const iptv::ChannelView &channel, ImageTexture image)
 {
     const Rect screen = draw_tv_shell(list, r, radius, art_colors(channel.id));
-    draw_channel_screen(list, fonts, screen, screen.h * 0.13f, channel);
+    draw_channel_screen(list, fonts, screen, screen.h * 0.13f, channel, image);
 }
 
 Rect draw_tv_shell(gfx::DrawList &list, const Rect &r, float radius, const ArtColors &colors)
@@ -247,17 +248,27 @@ Rect draw_tv_shell(gfx::DrawList &list, const Rect &r, float radius, const ArtCo
 }
 
 void draw_channel_screen(gfx::DrawList &list, const ui::Fonts &fonts, const Rect &r, float radius,
-                         const iptv::ChannelView &channel)
+                         const iptv::ChannelView &channel, ImageTexture image)
 {
     const ArtColors colors = art_colors(channel.id);
     list.gradient_rect(r, radius, colors.top, colors.bottom);
     // A soft disc behind the letters gives the flat ground a centre.
     const float disc = std::min(r.w, r.h) * 0.42f;
     list.circle(r.cx(), r.cy(), disc, kWhite.with_alpha(0.07f));
-    const std::string letters = monogram(channel);
-    const float size = std::min(r.h * 0.44f, r.w * 0.3f);
-    ui::text(list, face_for(fonts, fonts.display, letters), letters, r.cx(), r.cy() + size * 0.36f,
-             size, kWhite.with_alpha(0.94f), gfx::Align::center);
+    if (image.id != 0 && image.width > 0 && image.height > 0)
+    {
+        const float scale = std::min(r.w * 0.82f / image.width, r.h * 0.78f / image.height);
+        const float width = image.width * scale, height = image.height * scale;
+        list.image(image.id, {r.cx() - width / 2, r.cy() - height / 2, width, height}, {0, 0, 1, 1},
+                   kWhite);
+    }
+    else
+    {
+        const std::string letters = monogram(channel);
+        const float size = std::min(r.h * 0.44f, r.w * 0.3f);
+        ui::text(list, face_for(fonts, fonts.display, letters), letters, r.cx(),
+                 r.cy() + size * 0.36f, size, kWhite.with_alpha(0.94f), gfx::Align::center);
+    }
     // The glass: light from above, fading before the middle.
     list.gradient_rect({r.x, r.y, r.w, r.h * 0.46f}, radius, kWhite.with_alpha(0.11f),
                        kWhite.with_alpha(0.0f));
@@ -344,7 +355,7 @@ void draw_channel_tile(ui::Canvas &canvas, const Shared &shared, const Rect &cel
     list.bordered_rect(cell, kRadius, kClear, 1.5f, kWhite.with_alpha(0.12f + 0.14f * focus));
     const Rect art{cell.x + kInset, cell.y + kInset, cell.w - 2.0f * kInset, kArtHeight};
     list.rounded_rect(art.inset(-2.0f), 18.0f, tone::night.with_alpha(0.5f));
-    draw_channel_screen(list, fonts, art, 16.0f, channel);
+    draw_channel_screen(list, fonts, art, 16.0f, channel, shared.images.find(channel.tvg_logo));
 
     const float x = cell.x + 20.0f;
     const float room = cell.w - 40.0f;
@@ -362,7 +373,9 @@ void draw_channel_tile(ui::Canvas &canvas, const Shared &shared, const Rect &cel
         list.circle(at + 5.0f, cell.y + 173.0f, 5.0f, tone::bad);
         at += 18.0f;
     }
-    const std::string category = category_of(channel);
+    const auto *programme =
+        shared.model.guide().now(channel.id, static_cast<std::int64_t>(platform::unix_time()));
+    const std::string category = programme ? programme->title : category_of(channel);
     const ui::FontRef &category_face = face_for(fonts, fonts.regular, category);
     ui::text(list, category_face,
              category_face.font->fit(readable(category_face, category), 19.0f,

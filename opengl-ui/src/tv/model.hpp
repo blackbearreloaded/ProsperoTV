@@ -15,6 +15,8 @@
 #include "iptv_xtream.h"
 #include "tv/catalog_index.hpp"
 #include "tv/channel_text.hpp"
+#include "tv/library.hpp"
+#include "tv/guide.hpp"
 
 #include <array>
 #include <atomic>
@@ -38,6 +40,7 @@ struct PlayRequest
     std::string referrer;
     std::uint64_t source_id = 0;
     bool reconnect_live = false;
+    bool record_channel_result = true;
 };
 
 // The lists a catalog is browsed by.
@@ -124,6 +127,50 @@ class Model
     // Once per frame: keyboard answers, the steps of the account form, and
     // the result of a download.
     void poll();
+    void set_hide_failed(bool hide);
+    // Attempts startup playback once per application lifetime, after a catalog arrives.
+    void resume_last(bool enabled);
+
+    std::span<const Facet> provider_categories() const
+    {
+        return index_.provider_categories;
+    }
+    const std::string &provider_category() const
+    {
+        return provider_category_;
+    }
+    void set_provider_category(std::string_view category);
+    bool category_hidden(std::string_view category) const;
+    bool hide_category(std::string_view category, bool hidden);
+    std::vector<std::string> folders() const
+    {
+        return library_.folders();
+    }
+    const std::string &folder() const
+    {
+        return folder_;
+    }
+    void set_folder(std::string_view folder);
+    bool create_folder(std::string_view name);
+    bool rename_folder(std::string_view name, std::string_view replacement);
+    bool remove_folder(std::string_view name);
+    bool in_folder(std::string_view folder, std::string_view channel) const;
+    bool put_in_folder(std::string_view folder, unsigned index, bool included);
+
+    const std::vector<SavedSource> &saved_sources() const
+    {
+        return sources_;
+    }
+    std::int64_t selected_source_id() const
+    {
+        return selected_source_id_;
+    }
+    const SavedSource *saved_source(std::int64_t id) const;
+    void use_saved_source(std::int64_t id);
+    void add_source(iptv::SourceKind kind);
+    void edit_saved_source(std::int64_t id);
+    bool remove_source(std::int64_t id);
+    bool set_schedule(std::int64_t id, RefreshSchedule schedule);
 
     // ---- the catalog ----
     bool has_catalog() const
@@ -256,6 +303,20 @@ class Model
     // Queues the channel for the player; the frame loop takes the request,
     // closes the menu and plays it.
     bool play(unsigned catalog_index);
+    bool play_programme(unsigned catalog_index, const Programme &programme);
+    const Guide &guide() const
+    {
+        return guide_;
+    }
+    bool guide_refreshing() const
+    {
+        return guide_thread_ != nullptr;
+    }
+    const std::string &guide_status() const
+    {
+        return guide_status_;
+    }
+    void refresh_guide();
     bool take_play_request(PlayRequest *request);
     // Called when the menu reopens after a channel that would not play.
     void report_playback_failure(const char *channel_id, const char *channel_name, int result,
@@ -377,6 +438,16 @@ class Model
     static void *refresh_entry(void *self);
     void run_refresh();
     void save_account_receipt() const;
+    void load_library();
+    bool save_source_form(std::string_view url, const iptv::XtreamCredentials *account);
+    void select_source_record(const SavedSource &source);
+    void mark_visibility();
+    bool refresh_needed() const;
+    std::string guide_path() const;
+    void stop_guide();
+    void poll_guide();
+    static void *guide_entry(void *self);
+    void run_guide();
 
     static void on_query(const char *text, void *self);
     static void on_custom_url(const char *text, void *self);
@@ -388,6 +459,25 @@ class Model
     std::string cache_dir_;
     bool opened_once_ = false;
     bool keyboard_ready_ = false;
+    Library library_;
+    std::vector<SavedSource> sources_;
+    std::int64_t selected_source_id_ = 1;
+    std::int64_t editing_source_id_ = 2;
+    RefreshSchedule schedule_ = RefreshSchedule::daily;
+    std::uint64_t next_schedule_check_ = 0;
+    std::unordered_set<std::string> hidden_categories_;
+    std::unordered_set<std::string> folder_channels_;
+    std::string provider_category_;
+    std::string folder_;
+    bool hide_failed_ = false;
+    bool resume_attempted_ = false;
+    Guide guide_, pending_guide_;
+    void *guide_thread_ = nullptr;
+    std::atomic<bool> guide_done_{false}, guide_stop_{false};
+    std::vector<std::string> guide_urls_;
+    std::string guide_file_, guide_status_;
+    bool guide_ok_ = false, guide_saved_ = false;
+    std::uint64_t next_guide_check_ = 0, guide_minute_ = 0;
 
     // ---- catalog and lists ----
     iptv::Catalog catalog_;

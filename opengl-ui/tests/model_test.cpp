@@ -217,7 +217,7 @@ TEST_F(ModelTest, AnOldSavedCopyShowsAtOnceAndIsDownloadedAgain)
         load(first);
         first.close();
     }
-    host::set_unix_time(now_ + 13 * 3600);
+    host::set_unix_time(now_ + 25 * 3600);
     ptv::Model model(dir_);
     ASSERT_TRUE(model.open());
     EXPECT_TRUE(model.has_catalog());
@@ -234,7 +234,7 @@ TEST_F(ModelTest, OfflineWithASavedCopyKeepsBrowsing)
         load(first);
         first.close();
     }
-    host::set_unix_time(now_ + 13 * 3600);
+    host::set_unix_time(now_ + 25 * 3600);
     host::set_network(false, "");
     ptv::Model model(dir_);
     ASSERT_TRUE(model.open());
@@ -726,7 +726,9 @@ TEST(ChannelText, NamesAreFiledUnderTheirLetter)
     EXPECT_EQ(ptv::sort_key(named("Alder News (1080p)")), "AALDER NEWS");
     // Accents are put aside, and so is punctuation.
     EXPECT_EQ(ptv::sort_key(named("\xC3\x89lan TV")), "EELAN TV");
-    EXPECT_EQ(ptv::sort_key(named("\xC5\x81\xC3\xB3" "d\xC5\xBA")), "LLODZ");
+    EXPECT_EQ(ptv::sort_key(named("\xC5\x81\xC3\xB3"
+                                  "d\xC5\xBA")),
+              "LLODZ");
     EXPECT_EQ(ptv::sort_key(named("(( Zed! ))")), "ZZED");
     EXPECT_EQ(ptv::sort_key(named("+Plus TV")), "PPLUS TV");
     // Digits and other scripts go under '#'.
@@ -744,13 +746,14 @@ TEST(ChannelText, NamesAreFiledUnderTheirLetter)
 TEST_F(ModelTest, TheListsAreInTheOrderOfTheAlphabet)
 {
     // The playlist gives them in another order, and writes some with accents.
-    std::ofstream(playlist_) << "#EXTM3U\n"
-                                "#EXTINF:-1 tvg-id=\"z.xx\",Zenith\nhttps://s.example.invalid/z\n"
-                                "#EXTINF:-1 tvg-id=\"e2.xx\",Echo Two\nhttps://s.example.invalid/e2\n"
-                                "#EXTINF:-1 tvg-id=\"n9.xx\",9 Live\nhttps://s.example.invalid/n9\n"
-                                "#EXTINF:-1 tvg-id=\"el.xx\",\xC3\x89lan\nhttps://s.example.invalid/el\n"
-                                "#EXTINF:-1 tvg-id=\"a.xx\",alder\nhttps://s.example.invalid/a\n"
-                                "#EXTINF:-1 tvg-id=\"e1.xx\",Echo One\nhttps://s.example.invalid/e1\n";
+    std::ofstream(playlist_)
+        << "#EXTM3U\n"
+           "#EXTINF:-1 tvg-id=\"z.xx\",Zenith\nhttps://s.example.invalid/z\n"
+           "#EXTINF:-1 tvg-id=\"e2.xx\",Echo Two\nhttps://s.example.invalid/e2\n"
+           "#EXTINF:-1 tvg-id=\"n9.xx\",9 Live\nhttps://s.example.invalid/n9\n"
+           "#EXTINF:-1 tvg-id=\"el.xx\",\xC3\x89lan\nhttps://s.example.invalid/el\n"
+           "#EXTINF:-1 tvg-id=\"a.xx\",alder\nhttps://s.example.invalid/a\n"
+           "#EXTINF:-1 tvg-id=\"e1.xx\",Echo One\nhttps://s.example.invalid/e1\n";
     ptv::Model model(dir_);
     load(model);
     ASSERT_EQ(model.visible_count(), 6u);

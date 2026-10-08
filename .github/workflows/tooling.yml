@@ -155,7 +155,7 @@ jobs:
       - name: Install the toolchain
         run: |
           sudo apt-get update
-          sudo apt-get install --yes clang-18 lld-18 llvm-18 ninja-build ccache libsqlite3-dev make pkg-config curl tar unzip wget xz-utils
+          sudo apt-get install --yes clang-18 lld-18 llvm-18 ninja-build ccache cmake libsqlite3-dev libpng-dev libjpeg-dev zlib1g-dev make pkg-config curl tar unzip wget xz-utils
 
       - name: Read app identity and version
         id: identity

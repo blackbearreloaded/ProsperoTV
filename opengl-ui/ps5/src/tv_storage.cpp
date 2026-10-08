@@ -41,8 +41,9 @@ constexpr const char *kCarried[] = {
     "iptv-favorites-v1.bin",
     "iptv-history-v1.bin",
     "prosperotv-playback-history.sqlite3",
+    "prosperotv-library.sqlite3",
 };
-constexpr std::size_t kCarriedLimit = 4u * 1024u * 1024u;
+constexpr std::size_t kCarriedLimit = 32u * 1024u * 1024u;
 
 enum class Place
 {

@@ -9,6 +9,7 @@
 #include <cstdio>
 #include <cstring>
 #include <limits>
+#include <unordered_set>
 
 #ifdef _WIN32
 #include <windows.h>
@@ -24,10 +25,10 @@ constexpr char kRecentMagic[8] = {'I', 'P', 'T', 'V', 'R', 'E', 'C', '1'};
 constexpr char kUserStateMagic[8] = {'I', 'P', 'T', 'V', 'U', 'S', 'R', '1'};
 constexpr std::uint32_t kFileVersion = 1u;
 constexpr std::size_t kHeaderBytes = 32u;
-constexpr std::size_t kHardMaxFavoriteIds = 512u;
+constexpr std::size_t kHardMaxFavoriteIds = 65536u;
 constexpr std::size_t kHardMaxRecentChannelIds = 256u;
 constexpr std::size_t kHardMaxIdBytes = 512u;
-constexpr std::size_t kHardMaxFileBytes = 512u * 1024u;
+constexpr std::size_t kHardMaxFileBytes = 32u * 1024u * 1024u;
 
 struct EffectiveLimits
 {
@@ -121,11 +122,10 @@ bool ValidList(const std::vector<std::string> &ids, std::size_t max_count, std::
     {
         return false;
     }
-    for (std::size_t i = 0; i < ids.size(); ++i)
+    std::unordered_set<std::string_view> seen;
+    for (const auto &id : ids)
     {
-        if (!ValidId(ids[i], max_id_bytes) ||
-            std::any_of(ids.begin(), ids.begin() + static_cast<std::ptrdiff_t>(i),
-                        [&ids, i](const std::string &other) { return other == ids[i]; }))
+        if (!ValidId(id, max_id_bytes) || !seen.insert(id).second)
         {
             return false;
         }
@@ -365,6 +365,7 @@ UserStateStatus ParseFile(const std::string &path, FileKind expected_kind,
     {
         if (count > max_count)
             return false;
+        std::unordered_set<std::string_view> seen;
         for (std::uint32_t i = 0; i < count; ++i)
         {
             if (payload_bytes - offset < 4u)
@@ -379,7 +380,7 @@ UserStateStatus ParseFile(const std::string &path, FileKind expected_kind,
                 return false;
             }
             const std::string_view id(reinterpret_cast<const char *>(payload + offset), size);
-            if (!ValidId(id, limits.max_id_bytes) || Contains(*ids, id))
+            if (!ValidId(id, limits.max_id_bytes) || !seen.insert(id).second)
                 return false;
             ids->emplace_back(id);
             offset += size;

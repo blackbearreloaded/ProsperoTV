@@ -20,6 +20,8 @@ struct Settings
 
     bool reduced_motion = false;
     bool sounds = true;
+    bool hide_failed = false;
+    bool resume_last = false;
     int volume = 100;
     int resolution = kBest;
     // The diagnostic log (tv/diag.hpp). Off unless the viewer turns it on.

@@ -14,6 +14,7 @@ kit=$(bash "$root/tools/fetch-kit.sh")
 tv=$(cd -- "${TV:-$root/..}" && pwd)
 cxx=$(command -v "${HOST_CXX:-clang++}")
 cache=$(command -v ccache || true)
+expat=$(bash "$tv/tools/setup-guide-dependencies.sh" host | tail -1)
 # HOST_SANITIZE=1 runs the walk under AddressSanitizer and UBSan.
 sanitize=""
 build="$root/build/host"
@@ -23,7 +24,7 @@ if [[ ${HOST_SANITIZE:-0} == 1 ]]; then
 fi
 mkdir -p "$build/obj"
 
-includes="-I$root/src -I$root/host -I$kit/src -I$kit/third_party -I$tv/include -I$tv/vendor/qrcodegen"
+includes="-I$root/src -I$root/host -I$kit/src -I$kit/third_party -I$tv/include -I$tv/vendor/qrcodegen -I$expat/include"
 {
     echo "rule cxx"
     echo "  command = $cache $cxx -std=c++20 -O2 -Wall -Wextra $sanitize \$flags -DGL_GLEXT_PROTOTYPES=1 $includes -MD -MF \$out.d -c \$in -o \$out"
@@ -31,7 +32,7 @@ includes="-I$root/src -I$root/host -I$kit/src -I$kit/third_party -I$tv/include -
     echo "  deps = gcc"
     echo "  description = CXX \$in"
     echo "rule link"
-    echo "  command = $cxx $sanitize \$in -lEGL -lGL -lsqlite3 -lpthread -lm -o \$out"
+    echo "  command = $cxx $sanitize \$in $expat/lib/libexpat.a -lpng -ljpeg -lz -lEGL -lGL -lsqlite3 -lpthread -lm -o \$out"
     echo "  description = LINK \$out"
     objects=()
     edge() {
@@ -59,7 +60,7 @@ includes="-I$root/src -I$root/host -I$kit/src -I$kit/third_party -I$tv/include -
     echo "default $build/tv_snapshots"
 } > "$build/build.ninja"
 
-if ! ninja -C "$build" > "$build/build.log" 2>&1; then
+if ! ninja -j "${BUILD_JOBS:-4}" -C "$build" > "$build/build.log" 2>&1; then
     grep -E 'error|FAILED' -A8 "$build/build.log" | head -150 >&2
     exit 1
 fi
@@ -68,6 +69,7 @@ grep -E 'warning' -A5 "$build/build.log" | head -60 >&2 || true
 fonts=$(bash "$root/tools/bake-fonts.sh" 2>/dev/null)
 output=${1:-"$root/build/snapshots"}
 mkdir -p "$output"
+cp "$root/ps5/sce_sys/icon0.png" "$output/test-logo.png"
 playlist="$root/build/sample.m3u"
 [[ -f $playlist ]] || python3 "$root/tools/make-sample-playlist.py" "$playlist"
 # The software GL driver keeps memory until exit; only the app's own errors count.

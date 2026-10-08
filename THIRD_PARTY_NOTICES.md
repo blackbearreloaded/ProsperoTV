@@ -31,6 +31,18 @@ ProsperoTV builds on and acknowledges:
 
 ## Native build dependencies
 
+The programme guide uses [Expat](https://github.com/libexpat/libexpat) 2.8.5
+(MIT), built by `tools/setup-guide-dependencies.sh` from the upstream release
+with SHA-256 `1e727b8933ec51a77a9a9d9afcf8e688bce45d907c13e36ab7393fe36e703182`.
+General entity and DTD processing are disabled. The release's full license is
+included in the application at `assets/licenses/Expat-MIT.txt`. XMLTV gzip
+decompression uses the existing zlib dependency.
+
+Channel logos use libpng 1.6.43 (PNG Reference Library License) and
+libjpeg-turbo 3.0.2 (IJG, BSD and zlib licenses) from the same pinned PacBrew
+prefix. Their license notices are included in `assets/licenses/`. This
+software is based in part on the work of the Independent JPEG Group.
+
 The application build uses LLVM/Clang/lld, zlib 1.3.2, and the public
 [PS5 payload SDK](https://github.com/ps5-payload-dev/sdk). The bootstrapper
 downloads SDK v0.42 after verifying SHA-256

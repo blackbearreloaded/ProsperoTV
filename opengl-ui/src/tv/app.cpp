@@ -49,12 +49,14 @@ enum FormRow : int
     kRowForgetPhones,
     kRowPhones,
     kRowDiagnostics,
+    kRowHideFailed,
+    kRowResume,
 };
 
 constexpr const char *kTabNames[] = {"Live TV", "Favorites", "Sources", "Settings", "About"};
-constexpr const char *kActionNames[] = {"Up",       "Down", "Left", "Right", "Cross", "Circle",
-                                        "Triangle", "Square", "L1",  "R1",    "L2",    "R2",
-                                        "Options",  "Touchpad", "L3", "R3"};
+constexpr const char *kActionNames[] = {"Up",       "Down",     "Left", "Right", "Cross", "Circle",
+                                        "Triangle", "Square",   "L1",   "R1",    "L2",    "R2",
+                                        "Options",  "Touchpad", "L3",   "R3"};
 constexpr const char *kDirectionNames[] = {"none", "up", "down", "left", "right"};
 
 ui::StatusKind toast_kind(Level level)
@@ -92,7 +94,8 @@ const char *source_label(iptv::SourceKind source)
 App::App(Model &model, const ui::Fonts &fonts, std::uint32_t glass_texture,
          const Settings &settings, std::string version)
     : shared_(model, fonts, settings), browse_(shared_), sources_(shared_), search_(shared_),
-      update_(shared_), glass_texture_(glass_texture), version_(std::move(version))
+      library_sheet_(shared_), guide_sheet_(shared_), update_(shared_),
+      glass_texture_(glass_texture), version_(std::move(version))
 {
     const ui::Theme &theme = shared_.theme;
 
@@ -151,6 +154,9 @@ App::App(Model &model, const ui::Fonts &fonts, std::uint32_t glass_texture,
     form_.add_header("Channel list");
     form_.add_value(kRowChannels, "Channels", "");
     form_.add_action(kRowUpdate, "Download it again now");
+    form_.add_toggle(kRowHideFailed, "Hide channels that failed", settings.hide_failed);
+    form_.add_toggle(kRowResume, "Start on the last channel", settings.resume_last);
+    model.set_hide_failed(settings.hide_failed);
     form_.add_header("Troubleshooting");
     form_.add_toggle(kRowDiagnostics, "Diagnostic log", settings.diagnostics).description =
         "Records what the app does in logs/debug-trace.txt, to send with a report.";
@@ -202,8 +208,9 @@ void App::set_pairing_info(std::string url, std::string code, unsigned seconds, 
         pair_qr_size_ = 0;
         uint8_t qr[qrcodegen_BUFFER_LEN_FOR_VERSION(5)];
         uint8_t temporary[sizeof(qr)];
-        if (!pair_url_.empty() && qrcodegen_encodeText(pair_url_.c_str(), temporary, qr,
-                qrcodegen_Ecc_MEDIUM, 1, 5, qrcodegen_Mask_AUTO, true))
+        if (!pair_url_.empty() &&
+            qrcodegen_encodeText(pair_url_.c_str(), temporary, qr, qrcodegen_Ecc_MEDIUM, 1, 5,
+                                 qrcodegen_Mask_AUTO, true))
         {
             pair_qr_size_ = qrcodegen_getSize(qr);
             for (int y = 0; y < pair_qr_size_; ++y)
@@ -225,7 +232,8 @@ void App::draw_pairing(ui::Canvas &canvas) const
     list.rounded_rect({0, 0, kWidth, kHeight}, 0, tone::night.with_alpha(0.88f));
     draw_glass(canvas, theme, {300, 170, 1320, 730}, 28);
     ui::text(list, fonts.display, "Pair a phone", 380, 255, 54, theme.text);
-    ui::text(list, fonts.regular, "Use the same Wi-Fi as your PS5.", 380, 305, 26, theme.text_muted);
+    ui::text(list, fonts.regular, "Use the same Wi-Fi as your PS5.", 380, 305, 26,
+             theme.text_muted);
     if (pair_qr_size_ > 0)
     {
         const float cell = std::floor(380.0f / (pair_qr_size_ + 8));
@@ -235,12 +243,12 @@ void App::draw_pairing(ui::Canvas &canvas) const
         for (int y = 0; y < pair_qr_size_; ++y)
             for (int x = 0; x < pair_qr_size_; ++x)
                 if (pair_qr_[static_cast<size_t>(y * pair_qr_size_ + x)])
-                    list.rounded_rect({left + (x + 4) * cell, top + (y + 4) * cell, cell, cell},
-                                      0, Color::rgb(0x000000));
+                    list.rounded_rect({left + (x + 4) * cell, top + (y + 4) * cell, cell, cell}, 0,
+                                      Color::rgb(0x000000));
     }
     ui::text(list, fonts.semibold, "1. Scan to open the remote", 825, 390, 30, theme.text);
-    ui::text(list, fonts.regular, pair_url_.empty() ? "Remote unavailable" : pair_url_,
-             825, 442, 28, theme.text_muted);
+    ui::text(list, fonts.regular, pair_url_.empty() ? "Remote unavailable" : pair_url_, 825, 442,
+             28, theme.text_muted);
     ui::text(list, fonts.semibold, "2. Enter this code on your phone", 825, 515, 30, theme.text);
     if (!pair_code_.empty())
     {
@@ -253,8 +261,8 @@ void App::draw_pairing(ui::Canvas &canvas) const
         ui::text(list, fonts.semibold, "Code expired or unavailable", 825, 602, 28, tone::accent);
         ui::text(list, fonts.regular, "Press X for a new code", 825, 652, 26, theme.text_muted);
     }
-    ui::text(list, fonts.regular, "Your browser reconnects automatically on future visits.",
-             380, 800, 26, theme.text_muted);
+    ui::text(list, fonts.regular, "Your browser reconnects automatically on future visits.", 380,
+             800, 26, theme.text_muted);
     ui::text(list, fonts.semibold, "Circle: Close", 1380, 850, 24, theme.text_muted);
 }
 
@@ -339,6 +347,9 @@ void App::apply_settings()
     next.resolution = form_.choice_index(kRowResolution) == Settings::kFullHd ? Settings::kFullHd
                                                                               : Settings::kBest;
     next.diagnostics = form_.toggle_value(kRowDiagnostics);
+    next.hide_failed = form_.toggle_value(kRowHideFailed);
+    next.resume_last = form_.toggle_value(kRowResume);
+    shared_.model.set_hide_failed(next.hide_failed);
     if (next == shared_.settings)
         return;
     // Said before it goes quiet and after it starts, so both ends are in the log.
@@ -357,6 +368,19 @@ void App::apply_settings()
 void App::handle_screen(const InputFrame &input, ui::Feedback &feedback)
 {
     Model &model = shared_.model;
+    if (browsing() && input.is_pressed(Action::r3))
+    {
+        const auto channel = browse_.focused();
+        guide_sheet_.open(channel ? channel->id : std::string_view(), feedback);
+        return;
+    }
+    if (browsing() && input.is_pressed(Action::touch))
+    {
+        const auto channel = browse_.focused();
+        library_sheet_.open(tabs_.active() == kFavorites,
+                            channel ? std::string(channel->id) : std::string(), feedback);
+        return;
+    }
     const int turn = input.is_pressed(Action::page_next)   ? 1
                      : input.is_pressed(Action::page_prev) ? -1
                                                            : 0;
@@ -434,8 +458,7 @@ void App::handle_screen(const InputFrame &input, ui::Feedback &feedback)
 
 void App::follow_channel(float dt)
 {
-    const std::optional<iptv::ChannelView> channel =
-        browsing() ? browse_.focused() : std::nullopt;
+    const std::optional<iptv::ChannelView> channel = browsing() ? browse_.focused() : std::nullopt;
     if (channel)
     {
         const ArtColors colors = art_colors(channel->id);
@@ -457,7 +480,8 @@ void App::play_intro()
 
 bool App::accepts_remote_search() const
 {
-    return browsing() && !update_.is_open() && !failure_.is_open();
+    return browsing() && !update_.is_open() && !failure_.is_open() && !library_sheet_.is_open() &&
+           !guide_sheet_.is_open();
 }
 
 bool App::remote_search(const char *query)
@@ -492,7 +516,8 @@ void App::update(const InputFrame &input, float dt, ui::Feedback &feedback)
 void App::step(const InputFrame &input, float dt, ui::Feedback &feedback)
 {
     Model &model = shared_.model;
-    if (diag::enabled() && (input.pressed != 0 || (input.nav != Direction::none && !input.nav_repeat)))
+    if (diag::enabled() &&
+        (input.pressed != 0 || (input.nav != Direction::none && !input.nav_repeat)))
     {
         // What the viewer did, and where the interface was when they did it.
         std::string buttons;
@@ -506,7 +531,8 @@ void App::step(const InputFrame &input, float dt, ui::Feedback &feedback)
                         ? kDirectionNames[direction]
                         : "",
                     kTabNames[std::clamp(tabs_.active(), 0, kTabCount - 1)],
-                    search_.is_open() ? " (search open)" : "", failure_.is_open() ? " (failure dialog)" : "",
+                    search_.is_open() ? " (search open)" : "",
+                    failure_.is_open() ? " (failure dialog)" : "",
                     update_.stage() != UpdateSheet::Stage::closed ? " (update dialog)" : "",
                     pairing_open_ ? " (pairing screen)" : "");
     }
@@ -514,8 +540,7 @@ void App::step(const InputFrame &input, float dt, ui::Feedback &feedback)
     shared_.clock += dt;
     page_age_ += dt;
 
-    if (search_.is_open() &&
-        (input.is_pressed(Action::back) || input.is_pressed(Action::north)))
+    if (search_.is_open() && (input.is_pressed(Action::back) || input.is_pressed(Action::north)))
         iptv_ime_cancel();
     model.poll();
     for (Notice &notice : model.take_notices())
@@ -561,6 +586,8 @@ void App::step(const InputFrame &input, float dt, ui::Feedback &feedback)
     }
 
     // ---- input goes to whatever is on top ----
+    if (input.pressed != 0 || input.nav != Direction::none)
+        model.resume_last(false);
     if (pairing_open_)
     {
         if (input.is_pressed(Action::back))
@@ -592,10 +619,22 @@ void App::step(const InputFrame &input, float dt, ui::Feedback &feedback)
     {
         search_.handle(input, feedback);
     }
+    else if (library_sheet_.is_open())
+    {
+        library_sheet_.handle(input, feedback);
+    }
+    else if (guide_sheet_.is_open())
+    {
+        guide_sheet_.handle(input, feedback);
+    }
     else
     {
         handle_screen(input, feedback);
     }
+    if (intro_ < 0 && !update_.is_open() && !failure_.is_open() && !library_sheet_.is_open() &&
+        !guide_sheet_.is_open() && !search_.is_open() && !pairing_open_)
+        model.resume_last(shared_.settings.resume_last && input.pressed == 0 &&
+                          input.nav == Direction::none);
 
     // ---- everything moves every frame ----
     tabs_.style.reduced_motion = reduced;
@@ -610,8 +649,11 @@ void App::step(const InputFrame &input, float dt, ui::Feedback &feedback)
 
     tabs_.update(dt);
     browse_.update(dt);
+    shared_.images.update(browsing() ? browse_.image_urls() : std::vector<std::string>{});
     sources_.update(dt);
     search_.update(dt);
+    library_sheet_.update(dt);
+    guide_sheet_.update();
     form_.update(dt);
     failure_.update(dt);
     update_.update(dt, feedback);
@@ -883,7 +925,8 @@ void App::draw_tuning(Frame &frame, const std::string &channel_id, float t,
     list.shadow({set.x, set.y + 28.0f, set.w, set.h}, theme.radius_card, 60.0f,
                 Color::rgb(0x000000, 0.55f));
     if (channel)
-        draw_channel_art(list, fonts, kTuningArt, theme.radius_card, *channel);
+        draw_channel_art(list, fonts, kTuningArt, theme.radius_card, *channel,
+                         shared_.images.find(channel->tvg_logo));
     list.pop_transform();
 
     // What is opening.
@@ -926,7 +969,9 @@ void App::draw_hints(ui::Canvas &canvas) const
     {
     case kLive:
     case kFavorites:
-        count = browse_.hints(hints, 6);
+        count = browse_.hints(hints, 5);
+        hints[count++] = {ui::Button::touchpad,
+                          tabs_.active() == kFavorites ? "Folders" : "Categories"};
         break;
     case kSources:
         count = sources_.hints(hints, 6);
@@ -999,6 +1044,8 @@ void App::draw(Frame &frame) const
     shared_.toasts.draw(over);
     announcements_.draw(over);
     search_.draw(over);
+    library_sheet_.draw(over);
+    guide_sheet_.draw(over);
     failure_.draw(over);
     update_.draw(over);
     if (pairing_open_)

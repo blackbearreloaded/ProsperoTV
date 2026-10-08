@@ -196,7 +196,8 @@ Building requires Linux, WSL, or a Linux CI runner. On Ubuntu, Debian, or WSL:
 ```bash
 sudo apt update
 sudo apt install clang-18 clang-format-18 clang-tidy-18 curl git lld-18 make \
-  pkg-config python3 python3-pip python3-venv tar unzip wget libsqlite3-dev
+  pkg-config python3 python3-pip python3-venv tar unzip wget libsqlite3-dev \
+  cmake ninja-build libpng-dev libjpeg-dev zlib1g-dev
 ```
 
 The build downloads, verifies, and caches the public PS5 Payload SDK, zlib,
@@ -396,6 +397,9 @@ scheduled or promised yet; they are listed so they are not lost.
 
 - **The provider's own categories.** Browsing a source by the groups it
   defines ("US / Movies", "US / Sports", ...), beside the app's own lists.
+- **Subcategories.** Opening a parent such as "US" to browse its "Sports"
+  and "Movies" groups, including deeper groups such as "Sports / Football".
+  Browse or hide a whole parent, or choose its children individually.
 - **Showing and hiding categories.** Choosing which of a provider's categories
   appear at all, so an account with tens of thousands of channels shows only
   the ones wanted.

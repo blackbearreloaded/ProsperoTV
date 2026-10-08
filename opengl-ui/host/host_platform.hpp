@@ -26,6 +26,8 @@ void set_keyboard_available(bool available);
 // The stand-in network: every download answers with this file, after this
 // long, or fails when `reachable` is false.
 void set_network(bool reachable, const std::string &playlist_path, unsigned delay_ms = 0);
+// An exact URL's response, for sources with distinct catalog and guide endpoints.
+void set_network_response(const std::string &url, const std::string &file);
 // The size of the pieces a list arrives in (0: as on the console).
 void set_network_piece(std::size_t bytes);
 // How many downloads were asked for.

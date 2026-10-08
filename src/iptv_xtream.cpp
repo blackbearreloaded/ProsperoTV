@@ -742,6 +742,14 @@ bool BuildXtreamLiveUrl(const XtreamCredentials &credentials, std::string_view s
            LiveUrlFromPrefix(LiveUrlPrefix(credentials), stream_id, extension, url);
 }
 
+bool BuildXtreamGuideUrl(const XtreamCredentials &credentials, std::string *url)
+{
+    if (!BuildXtreamApiUrl(credentials, "", url))
+        return false;
+    url->replace(credentials.server_url.size(), sizeof("/player_api.php") - 1, "/xmltv.php");
+    return true;
+}
+
 XtreamStatus SaveXtreamCredentials(const std::string &path, const XtreamCredentials &credentials)
 {
     if (path.empty() || !ValidateXtreamCredentials(credentials))
@@ -928,12 +936,17 @@ struct XtreamStreamsParser::State
         std::string extension;
         std::string direct_source;
         std::string stream_url;
+        std::string archive, archive_days;
         JsonReader entry(element);
         if (!ReadObject(&entry,
                         [&](const std::string &key, JsonReader *value)
                         {
                             if (key == "stream_id")
                                 return value->StringOrScalar(&stream_id, 64u);
+                            if (key == "tv_archive")
+                                return value->StringOrScalar(&archive, 12u);
+                            if (key == "tv_archive_duration")
+                                return value->StringOrScalar(&archive_days, 12u);
                             if (key == "name")
                                 return value->StringOrScalar(&name);
                             if (key == "stream_icon")
@@ -978,6 +991,13 @@ struct XtreamStreamsParser::State
         channel.tvg_id = epg_id;
         channel.group_title = CategoryName(category_names, category_id);
         channel.source_line = source_line;
+        if (archive == "1")
+        {
+            channel.catchup = "xc";
+            // Keep the generated live path even when playback uses a direct CDN URL.
+            channel.catchup_source = generated_url;
+            channel.catchup_days = archive_days;
+        }
         if (CanonicalizeStreamUrl(logo, &logo_url))
             channel.tvg_logo = logo_url;
         if (direct_source.empty())

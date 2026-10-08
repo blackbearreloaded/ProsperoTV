@@ -51,6 +51,8 @@ struct CatalogIndex
     // The most common values of each kind, at most kFacetMax of them.
     std::array<Facet, kFacetMax> countries;
     std::array<Facet, kFacetMax> categories;
+    // Provider names are exact, untruncated and include every category.
+    std::vector<Facet> provider_categories;
     std::array<Facet, kFacetMax> languages;
     unsigned country_count = 0;
     unsigned category_count = 0;

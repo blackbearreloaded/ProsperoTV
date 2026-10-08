@@ -46,6 +46,7 @@ class BrowseScreen
     // The channel in focus, or null: the backdrop takes its colours.
     // The channel in focus, to read and let go: nothing when the list is empty.
     std::optional<iptv::ChannelView> focused() const;
+    std::vector<std::string> image_urls() const;
     bool showing_favorites() const
     {
         return favorites_;
