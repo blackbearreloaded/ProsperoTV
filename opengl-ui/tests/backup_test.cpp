@@ -129,6 +129,33 @@ TEST_F(BackupTest, RecoversInterruptedRestoreAndRefusesLinkedDestinations)
     EXPECT_FALSE(ptv::backup_settings(config, archive, error));
 }
 
+TEST_F(BackupTest, KeepsJournalWhenRollbackFailsAndRecoversOnRetry)
+{
+    const auto settings = config + "/prosperotv-interface-v1.txt";
+    const auto library = config + "/prosperotv-library.sqlite3";
+    const auto journal = config + "/prosperotv-restore-journal.sqlite3";
+    std::ofstream(settings) << "backed up settings";
+    std::ofstream(library) << "backed up library";
+    ASSERT_TRUE(ptv::backup_settings(config, archive, error));
+    std::ofstream(settings) << "current settings";
+    std::ofstream(library) << "current library";
+    // Block the second replacement after the first file has been restored.
+    // The same obstruction prevents rollback from completing.
+    std::filesystem::create_directory(library + ".restore-tmp");
+    EXPECT_FALSE(ptv::restore_settings(config, archive, error));
+    EXPECT_TRUE(std::filesystem::exists(journal));
+    EXPECT_FALSE(ptv::recover_settings(config, error));
+    EXPECT_TRUE(std::filesystem::exists(journal));
+    std::filesystem::remove(library + ".restore-tmp");
+    ASSERT_TRUE(ptv::recover_settings(config, error)) << error;
+    EXPECT_EQ(read(settings), "current settings");
+    EXPECT_EQ(read(library), "current library");
+    EXPECT_FALSE(std::filesystem::exists(journal));
+    ASSERT_TRUE(ptv::restore_settings(config, archive, error)) << error;
+    EXPECT_EQ(read(settings), "backed up settings");
+    EXPECT_EQ(read(library), "backed up library");
+}
+
 TEST_F(BackupTest, ReportsKeepUsefulNumericEvidenceAndExcludeProviderDetails)
 {
     auto report = ptv::failure_report(

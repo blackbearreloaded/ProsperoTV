@@ -117,3 +117,10 @@ cover two users, private pairing/settings paths, first-user-only migration,
 resuming an interrupted copy and retaining deliberate deletions after migration.
 Console profile discovery is supported by the test runner; changing console
 users is not automated.
+
+PR #11 validation after rebasing onto main: all 126 UI tests pass under
+ASan/UBSan. A filesystem obstruction during restore now has explicit coverage:
+the recovery journal survives a failed rollback, recovery succeeds after the
+obstruction is removed, and the backup can then be restored successfully.
+CI also passed for the rebased application at `60832ed`. Physical USB media and
+switching actual console users remain unverified.
