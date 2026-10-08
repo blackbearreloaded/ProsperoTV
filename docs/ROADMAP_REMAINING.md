@@ -218,3 +218,12 @@ suite passes, as does the PS5 build. Host render captures are retained locally a
 `results/roadmap/playback-banner.png` and `playback-list.png`. Controller behavior,
 compositor cost and uninterrupted teardown on hardware remain console acceptance
 criteria.
+
+- 2026-10-08 | Playback | 72c5141 | PPSA88261 / .30 | partial-pass: pairing, 45s HLS, list-open input, clean teardown | results/roadmap/console-07/validation.json | native navigation
+
+The first playback case installed and verified this candidate. The fixture server
+started late after a host process-launch error; the script then left focus above
+the channel grid. Pairing and a subsequent remote-selected channel worked, but
+the script's report had already been collected. Native next/previous/last,
+list selection, display capture and compositor cost remain unverified. The next
+case must verify fixture health before launch and use a timed remote sequence.
