@@ -111,4 +111,5 @@ done
 ffmpeg -hide_banner -loglevel error -y -i "$output/many-subtitles-40.mkv" -map 0 \
     -c copy -c:s mov_text "$output/many-subtitles-40.mp4"
 ffmpeg -hide_banner -loglevel error -y -f lavfi -i testsrc2=size=160x96:rate=10 -t 0.5 -c:v libx265 -x265-params pools=1:frame-threads=1:log-level=error -an "$output/hevc.mp4"
+ffmpeg -hide_banner -loglevel error -y -f lavfi -i testsrc2=size=160x96:rate=10 -t 0.5 -c:v libx265 -x265-params pools=1:frame-threads=1:log-level=error:repeat-headers=1 -an "$output/hevc-inband.mkv"
 printf '%s\n' "$stamp" > "$output/.complete"
