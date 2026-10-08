@@ -326,6 +326,9 @@ def main():
     logs = "/data/prosperotv/logs" if elevated else f"{storage}/prosperotv"
     log = console.read(f"{logs}/app.log") or b""
     (results / "app.log").write_bytes(log)
+    trace = console.read(f"{logs}/debug-trace.txt")
+    if trace:
+        (results / "debug-trace.txt").write_bytes(trace)
     for name in ("iptv-last-receipt.txt", "iptv-attempt-receipt.txt"):
         receipt = console.read(f"{logs if elevated else storage}/{name}")
         if receipt:

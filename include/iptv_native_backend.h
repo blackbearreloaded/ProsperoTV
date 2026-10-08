@@ -85,6 +85,9 @@ extern "C"
         void (*picture)(void *context, const iptv_native_picture_t *picture);
         void *picture_context;
         int (*picture_cancelled)(void *context);
+        /* Called on the draining caller's thread while queued video finishes. */
+        void (*poll_controls)(void *context);
+        void *controls_context;
     } iptv_native_open_config_t;
 
     typedef struct iptv_native_telemetry

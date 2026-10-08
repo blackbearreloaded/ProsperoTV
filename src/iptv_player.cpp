@@ -653,6 +653,8 @@ struct NativeAdapter
     iptv_native_backend_t backend{};
     bool initialized = false;
     bool opened = false;
+    void (*poll_controls)(void *) = nullptr;
+    void *controls_context = nullptr;
 };
 
 int AdapterOpen(void *context, const iptv_stream_format_t *format)
@@ -689,6 +691,8 @@ int AdapterOpen(void *context, const iptv_stream_format_t *format)
     config.hdr = 0;
     config.enable_audio = format->audio_pid != 0;
     config.audio_stream_type = format->audio_stream_type;
+    config.poll_controls = adapter->poll_controls;
+    config.controls_context = adapter->controls_context;
     iptv_native_agc_loading_stop();
     const int handoff = iptv_native_agc_present_shutdown();
     if (handoff != 0)
@@ -780,6 +784,9 @@ class StreamRunner
         if (iptv_native_backend_init(&adapter_.backend) != 0)
             return false;
         adapter_.initialized = true;
+        adapter_.poll_controls = [](void *self)
+        { (void)static_cast<StreamRunner *>(self)->StopRequested(); };
+        adapter_.controls_context = this;
 
         iptv_stream_init(&session_);
         iptv_stream_backend_t backend{};
@@ -816,6 +823,9 @@ class StreamRunner
         if (iptv_native_backend_init(&adapter_.backend) != 0)
             return false;
         adapter_.initialized = true;
+        adapter_.poll_controls = [](void *self)
+        { (void)static_cast<StreamRunner *>(self)->StopRequested(); };
+        adapter_.controls_context = this;
         iptv_stream_init(&session_);
         session_.telemetry.state = IPTV_STREAM_STATE_OPEN;
         session_.telemetry.last_result = IPTV_STREAM_OK;
@@ -1129,6 +1139,7 @@ class StreamRunner
         read_ahead_result_.store(IPTV_STREAM_OK, std::memory_order_relaxed);
         read_ahead_stop_.store(false, std::memory_order_relaxed);
         read_ahead_finished_.store(false, std::memory_order_relaxed);
+        read_ahead_done_.store(false, std::memory_order_relaxed);
         if (scePthreadCreate(&read_ahead_thread_, nullptr, ReadAheadEntry, this,
                              "prosperotv-buffer") != 0)
         {
@@ -1173,6 +1184,7 @@ class StreamRunner
             }
             read_ahead_read_.store(read + chunk, std::memory_order_release);
         }
+        read_ahead_done_.store(true, std::memory_order_release);
     }
 
     int StopReadAhead(bool drain)
@@ -1186,6 +1198,16 @@ class StreamRunner
         else
         {
             read_ahead_stop_.store(true, std::memory_order_release);
+            if (adapter_.initialized)
+                iptv_native_backend_request_stop(&adapter_.backend);
+        }
+        // A finite file can fit completely in read-ahead before its first
+        // picture. Keep reading the controller while the buffered input drains.
+        while (!read_ahead_done_.load(std::memory_order_acquire))
+        {
+            if (StopRequested())
+                read_ahead_stop_.store(true, std::memory_order_release);
+            sceKernelUsleep(1000u);
         }
         const int join_result = scePthreadJoin(read_ahead_thread_, nullptr);
         read_ahead_thread_ = nullptr;
@@ -1231,6 +1253,7 @@ class StreamRunner
     std::atomic<int> read_ahead_result_{IPTV_STREAM_OK};
     std::atomic<bool> read_ahead_stop_{false};
     std::atomic<bool> read_ahead_finished_{false};
+    std::atomic<bool> read_ahead_done_{false};
 };
 
 #if IPTV_PROBE

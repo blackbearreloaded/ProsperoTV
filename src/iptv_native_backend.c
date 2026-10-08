@@ -331,6 +331,7 @@ typedef struct backend_state
     _Atomic uint32_t video_queue_write;
     _Atomic uint64_t video_queue_bytes;
     _Atomic int video_worker_stop;
+    _Atomic int video_worker_done;
     _Atomic int video_worker_result;
     _Atomic int playback_started;
     _Atomic uint64_t playback_gate_started_us;
@@ -1919,6 +1920,7 @@ static void *video_worker_entry(void *argument)
             break;
         }
     }
+    atomic_store_explicit(&state->video_worker_done, 1, memory_order_release);
     return NULL;
 }
 
@@ -1933,6 +1935,7 @@ static int32_t start_video_worker(backend_state_t *state)
     atomic_store_explicit(&state->video_queue_write, 0, memory_order_relaxed);
     atomic_store_explicit(&state->video_queue_bytes, 0, memory_order_relaxed);
     atomic_store_explicit(&state->video_worker_stop, 0, memory_order_relaxed);
+    atomic_store_explicit(&state->video_worker_done, 0, memory_order_relaxed);
     atomic_store_explicit(&state->video_worker_result, 0, memory_order_relaxed);
     result =
         scePthreadCreate(&state->video_thread, NULL, video_worker_entry, state, "prosperotv-video");
@@ -1953,6 +1956,12 @@ static int32_t stop_video_worker(backend_state_t *state)
         void *thread_result = NULL;
         atomic_store_explicit(&state->playback_started, 1, memory_order_release);
         atomic_store_explicit(&state->video_worker_stop, 1, memory_order_release);
+        while (!atomic_load_explicit(&state->video_worker_done, memory_order_acquire))
+        {
+            if (state->config.poll_controls)
+                state->config.poll_controls(state->config.controls_context);
+            (void)sceKernelUsleep(1000u);
+        }
         result = scePthreadJoin(state->video_thread, &thread_result);
         state->video_thread = NULL;
     }
@@ -2690,6 +2699,30 @@ int32_t iptv_native_backend_close(iptv_native_backend_t *backend)
 
 #ifdef IPTV_NATIVE_BACKEND_STATE_TEST
 static int test_volume_calls, test_volume_left, test_volume_right;
+static int test_control_polls, test_join_calls;
+int sceKernelUsleep(uint32_t microseconds)
+{
+    (void)microseconds;
+    return 0;
+}
+int scePthreadJoin(void *thread, void **result)
+{
+    (void)result;
+    backend_state_t *state = thread;
+    assert(atomic_load(&state->video_worker_done));
+    ++test_join_calls;
+    return 0;
+}
+static void test_drain_controls(void *context)
+{
+    backend_state_t *state = context;
+    if (++test_control_polls == 3)
+    {
+        // Simulate a decoder waiting on queued playback until a user stops it.
+        atomic_store(&state->stop_requested, 1);
+        atomic_store(&state->video_worker_done, 1);
+    }
+}
 int sceAudioOutSetVolume(int handle, int flags, const int *volumes)
 {
     assert(handle == 7 && flags == 3);
@@ -2701,6 +2734,13 @@ int sceAudioOutSetVolume(int handle, int flags, const int *volumes)
 
 int main(void)
 {
+    backend_state_t draining = {0};
+    draining.video_thread = &draining;
+    draining.config.poll_controls = test_drain_controls;
+    draining.config.controls_context = &draining;
+    assert(stop_video_worker(&draining) == 0);
+    assert(test_control_polls == 3 && test_join_calls == 1);
+    assert(atomic_load(&draining.stop_requested) && !draining.video_thread);
     audio_sink_t volume_sink = {0};
     volume_sink.handle = 7;
     volume_sink.applied_volume = -1;
