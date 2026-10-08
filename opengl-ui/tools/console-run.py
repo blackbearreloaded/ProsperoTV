@@ -358,6 +358,9 @@ def main():
         picture = console.read(f"{dev}/{name}")
         if picture:
             (results / name).write_bytes(picture)
+    exported = console.read(f"{dev}/exported-failure.txt")
+    if exported:
+        (results / "exported-failure.txt").write_bytes(exported)
     lifecycle = console.read("/data/shadowmount/debug.log") or b""
     (results / "shadowmount.txt").write_text("".join(
         line + "\n" for line in lifecycle.decode("utf-8", "replace").splitlines() if title in line))

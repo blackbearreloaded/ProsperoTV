@@ -232,6 +232,8 @@ void Script::status_line(const ptv::Model &model, const ptv::App &app)
     if (position >= 0)
         focused = model.channel(model.visible(static_cast<unsigned>(position))).name;
     const int tab = app.tab();
+    note("settings volume=%d hide_failed=%d preview=%d", app.settings().volume,
+         app.settings().hide_failed ? 1 : 0, app.settings().live_preview ? 1 : 0);
     note("status tab=%s channels=%u visible=%u position=%d focused=\"%s\" letters=%d search=%d "
          "query=\"%s\" refreshing=%d level=%d frames=%d avg=%.2fms worst=%.2fms slow=%d",
          tab >= 0 && tab < 6 ? kTabNames[tab] : "?", model.channel_count(), model.visible_count(),

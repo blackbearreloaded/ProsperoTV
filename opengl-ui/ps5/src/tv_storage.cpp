@@ -264,7 +264,9 @@ bool select_profile(int user_id, std::string &error)
         return false;
     config() = std::move(paths.config);
     cache() = std::move(paths.cache);
-    logs() = std::move(paths.logs);
+    // The disposable sandbox test title exposes its diagnostics to the test
+    // runner. Production profile data and logs retain private directories.
+    logs() = TV_DEV_SCRIPTS != 0 && !g_elevated ? kSandboxLogs : std::move(paths.logs);
     pthread_mutex_lock(&g_lock);
     for (int i = 0; i < g_slot_count; ++i)
         fill(g_slots[i]);
