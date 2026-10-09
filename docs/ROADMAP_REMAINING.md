@@ -13,7 +13,7 @@ and relevant checks work.
 | Zapping | Next, previous and previously watched channel during playback | Implemented; 140 UI sanitizer tests and PS5 build pass; console case pending |
 | Playback channel list | Select a channel from a list over the playing video | Implemented; host input/render checks and PS5 build pass; console case pending |
 | Channel banner | Brief channel/guide banner on tune and on request | Implemented; mapped guide, timing and rendered image checks pass; console case pending |
-| Audio/subtitles | Select available language tracks and render subtitles | Embedded/HLS audio and container/DVB/WebVTT subtitles implemented with host checks; live-provider and native acceptance pending |
+| Audio/subtitles | Select available language tracks and render subtitles | Implemented; native case 71 passes TS/MP4/Matroska/HLS audio switching, Off/restore, and timed MP4/Matroska/HLS subtitle selection/composition; subjective synchronization and physical display checks remain deferred |
 | Sleep timer | Stop playback at a selected deadline | Implemented; 134 UI sanitizer tests and PS5 build pass; console case pending |
 | Live pause/rewind | Pause and replay several minutes of the current live channel | Implemented for TS/HLS and direct VP9 WebM; 119 core tests, media/subtitle checks, PS5 build and native controls/expiry/format-change cases pass; native caption visibility and subjective sync remain acceptance checks |
 | Deinterlacing | Preserve field-rate motion on interlaced broadcast video | Implemented with parsed field order and spatial bob; 120 core and 25 media/field sanitizer checks and PS5 build pass; native 1080i controls, uninterrupted 50-field/s playback and separate-field PAFF camera acceptance pass |
@@ -28,6 +28,35 @@ and relevant checks work.
 Completion also requires host checks, a PS5 build, bounded testing on an idle
 192.168.4.30 or 192.168.4.40, an updated deliverable, and a pull request. Console
 tests retain the workspace lock and sandbox-only test-title protocol.
+
+## Audio switching acceptance
+
+Native case 69 exposed a buffering defect despite successful selection-state
+checks: the demuxer queued up to 512 video frames, so a newly selected audio
+language waited many seconds for the displayed picture. The native queue now
+limits valid timestamp spans to three seconds, including startup and rebuffering.
+The existing two-second startup cushion retains one second of interleaving room.
+Time pressure releases the startup gate even when audio is underfilled; missing,
+backward or discontinuous clocks retain the existing byte/frame limits. Network
+downloads and live history keep their independent buffers.
+
+Case 71 (`38eecde`, disposable title `PPSA88304`) passes paired-remote audio
+language switching, Off and restore for TS, MP4, Matroska and HLS. MP4, Matroska
+and HLS also pass both subtitle selections, presentation-time cue composition
+and Off. The queue peaks at 76 frames in each 25-fps fixture. Audio output is
+5.323 seconds in the short TS case and 14.987, 14.987 and 13.152 seconds in the
+longer cases; the validator requires actual output, not only selection state.
+All four report zero cleanup errors and no presentation gap over 250 ms.
+All 52 installed hashes match, and the console returns idle with healthy services.
+Subjective synchronization and physical caption appearance still require a viewer.
+
+The same binary passes case 72's 4K PQ/HLG/SDR/HLG regression: 750 decoded and
+749 presented pictures, an 86,678-microsecond maximum gap, correct RGB HDR export
+within one code value, clean teardown and healthy idle services. Host validation
+includes 31 tooling tests with startup/queue-time edge cases, 540 HDR color vectors,
+lint and the PS5 cross-build. The combined UI baseline passes 155 sanitizer tests.
+Evidence is retained in `../psiptv/results/roadmap/console-71/validation.json` and
+`../psiptv/results/roadmap/console-72/result.json`.
 
 ## Interface languages
 
