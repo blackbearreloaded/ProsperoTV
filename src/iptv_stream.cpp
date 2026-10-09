@@ -2573,6 +2573,7 @@ int iptv_stream_reposition_from(iptv_stream_session_t *session, const iptv_strea
     }
     video_parameters_t restored;
     size_t restored_bytes = 0;
+    uint64_t restored_start = 0;
     if (history->video_configurations)
     {
         const auto *chosen = history->video_configurations.get();
@@ -2597,6 +2598,7 @@ int iptv_stream_reposition_from(iptv_stream_session_t *session, const iptv_strea
             at += parameter.size;
         }
         restored_bytes = at;
+        restored_start = std::max(chosen->pts_us, history->video_history_floor);
     }
     // Prepare the complete copy before discarding queued playback. The source
     // can expire or close after this call without invalidating the decoder.
@@ -2607,6 +2609,15 @@ int iptv_stream_reposition_from(iptv_stream_session_t *session, const iptv_strea
     {
         impl->video_parameters = std::move(restored);
         impl->video_parameter_bytes = restored_bytes;
+        if (source != session)
+        {
+            // The old local cache may omit configurations seen only by the
+            // download parser. Start local retention at the restored version;
+            // older seeks still require the authoritative download history.
+            clear_video_history(impl);
+            impl->video_history_floor = restored_start;
+            remember_video_configuration(impl, true, restored_start);
+        }
     }
     impl->video_replaying = true;
     // History converts ticks to whole microseconds. Round back to the nearest

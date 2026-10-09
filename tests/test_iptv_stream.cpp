@@ -1015,6 +1015,14 @@ TEST_F(AudioSelectionTest, DownloadConfigurationSurvivesUnreadTransportExpiry)
     ASSERT_GT(fake.videos, 1u);
     EXPECT_EQ(FixturePpsVersion(fake.video_packets[1]), 0x82);
     EXPECT_EQ(fake.discontinuities, 1u);
+    // Local history must not silently restore the stale configuration 1 after
+    // an external restore. Configuration 2 remains usable after source cleanup.
+    EXPECT_EQ(iptv_stream_reposition(&session, 1000000), IPTV_STREAM_INVALID_ARGUMENT);
+    ASSERT_EQ(iptv_stream_reposition(&session, resume->pts_us), IPTV_STREAM_OK);
+    const auto before_replay = fake.video_packets.size();
+    ASSERT_EQ(iptv_stream_push(&session, bytes.data(), retained.bytes), IPTV_STREAM_OK);
+    ASSERT_GT(fake.video_packets.size(), before_replay);
+    EXPECT_EQ(FixturePpsVersion(fake.video_packets[before_replay]), 0x82);
 }
 
 TEST_F(AudioSelectionTest, DownloadReplayRejectsUnavailableHistoryBeforeResettingPlayback)
