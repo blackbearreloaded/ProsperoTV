@@ -550,3 +550,7 @@ synchronization, switching latency and resource cost remain pending.
 - 2026-10-09 | rewind | 911f3b2 | .30 PPSA88281 | partial-pass: natural track transition; one video queue gap unclassified | ../psiptv/results/roadmap/console-42/result.json | timing/formats
 
 - 2026-10-09 | rewind | f79f9e5 | .30 PPSA88282 | pass: natural transition gap81.5ms, none>250ms; clean teardown | ../psiptv/results/roadmap/console-43/result.json | formats/timeline/subtitle sync
+
+- 2026-10-09 | rewind | 0c13eff | .30 PPSA88283 | failed: replacement decoder discarded input before opening; native-state regression reproduces | ../psiptv/results/roadmap/console-44/result.json | idle decoder cancellation
+
+- 2026-10-09 | rewind | d7db0b4 | .30 PPSA88284 | pass: 360p/720p native reopen, bidirectional history seeks, live continuation, one connection and clean teardown; 115 core/21 media/native-state checks | ../psiptv/results/roadmap/console-45/result.json | codec/timeline/subtitle/WebM coverage
