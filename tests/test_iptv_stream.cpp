@@ -197,6 +197,7 @@ struct FakeBackend
     int drain_result = 0;
     int select_result = 0;
     std::vector<std::uint32_t> audio_selections;
+    std::vector<std::vector<std::uint8_t>> video_packets;
     std::vector<iptv_stream_subtitle_track_t> subtitle_tracks;
     unsigned subtitle_updates = 0, subtitle_resets = 0;
     struct Caption
@@ -218,9 +219,11 @@ int FakeOpen(void *context, const iptv_stream_format_t *format)
     return 0;
 }
 
-int FakeVideo(void *context, const std::uint8_t *, std::size_t, std::uint64_t)
+int FakeVideo(void *context, const std::uint8_t *bytes, std::size_t count, std::uint64_t)
 {
-    ++static_cast<FakeBackend *>(context)->videos;
+    auto &fake = *static_cast<FakeBackend *>(context);
+    ++fake.videos;
+    fake.video_packets.emplace_back(bytes, bytes + count);
     return 0;
 }
 
@@ -929,6 +932,26 @@ TEST(IptvStreamTest, ResetsTransportTimelineWithoutReopeningBackend)
     EXPECT_EQ(fake.discontinuities, 1u);
     EXPECT_EQ(fake.videos, 2u);
     EXPECT_EQ(iptv_stream_cleanup(&session), IPTV_STREAM_OK);
+}
+
+TEST_F(AudioSelectionTest, RepositionRestoresMissingParametersOnlyOnTheFirstPicture)
+{
+    ASSERT_EQ(pmt({{0x111, 0x0f, "eng", 0}}, true), IPTV_STREAM_OK);
+    ASSERT_EQ(fake.video_packets.size(), 1u);
+    const auto configured = fake.video_packets.front();
+    for (const bool repeated_headers : {false, true, false})
+    {
+        ASSERT_EQ(iptv_stream_reposition(&session, 1000000), IPTV_STREAM_OK);
+        const auto restart = StreamBytes(0x0f, H264Packet(0, repeated_headers));
+        for (const auto byte : restart)
+            ASSERT_EQ(iptv_stream_push(&session, &byte, 1), IPTV_STREAM_OK);
+        EXPECT_EQ(fake.video_packets.back(), configured);
+        const auto following = H264Packet(1, false);
+        ASSERT_EQ(iptv_stream_push(&session, following.data(), following.size()), IPTV_STREAM_OK);
+        EXPECT_LT(fake.video_packets.back().size(), configured.size());
+    }
+    EXPECT_EQ(fake.opens, 1u);
+    EXPECT_EQ(fake.discontinuities, 3u);
 }
 
 TEST(IptvStreamTest, AudioProgramChangeDoesNotStopOpenedVideoBackend)

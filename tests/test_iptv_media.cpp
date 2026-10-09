@@ -5,11 +5,17 @@
 #include "iptv_stream.h"
 #include <gtest/gtest.h>
 #include <algorithm>
+#include <array>
 #include <cstring>
 #include <fstream>
 #include <iterator>
 #include <memory>
 #include <vector>
+extern "C"
+{
+#include <libavcodec/avcodec.h>
+#include <libavutil/imgutils.h>
+}
 
 namespace
 {
@@ -209,6 +215,149 @@ TEST(Media, ConvertsHevcLengthPrefixedPacketsForTheNativeDecoder)
     ASSERT_EQ(memory.run(&error), 0) << error;
     check_transport(memory, true);
 }
+void decode_picture(AVCodecID codec_id, const std::vector<std::uint8_t> &bytes,
+                    std::vector<std::uint8_t> *pixels)
+{
+    const auto free_context = [](AVCodecContext *p) { avcodec_free_context(&p); };
+    const auto free_packet = [](AVPacket *p) { av_packet_free(&p); };
+    const auto free_frame = [](AVFrame *p) { av_frame_free(&p); };
+    const auto *codec = avcodec_find_decoder(codec_id);
+    ASSERT_NE(codec, nullptr);
+    std::unique_ptr<AVCodecContext, decltype(free_context)> context(avcodec_alloc_context3(codec));
+    std::unique_ptr<AVPacket, decltype(free_packet)> packet(av_packet_alloc());
+    std::unique_ptr<AVFrame, decltype(free_frame)> frame(av_frame_alloc());
+    ASSERT_TRUE(context && packet && frame);
+    context->thread_count = 1;
+    ASSERT_EQ(avcodec_open2(context.get(), codec, nullptr), 0);
+    ASSERT_EQ(av_new_packet(packet.get(), static_cast<int>(bytes.size())), 0);
+    std::memcpy(packet->data, bytes.data(), bytes.size());
+    ASSERT_EQ(avcodec_send_packet(context.get(), packet.get()), 0);
+    auto result = avcodec_receive_frame(context.get(), frame.get());
+    if (result == AVERROR(EAGAIN))
+    {
+        ASSERT_EQ(avcodec_send_packet(context.get(), nullptr), 0);
+        result = avcodec_receive_frame(context.get(), frame.get());
+    }
+    ASSERT_EQ(result, 0);
+    const auto format = static_cast<AVPixelFormat>(frame->format);
+    const int size = av_image_get_buffer_size(format, frame->width, frame->height, 1);
+    ASSERT_GT(size, 0);
+    pixels->resize(static_cast<std::size_t>(size));
+    ASSERT_EQ(av_image_copy_to_buffer(pixels->data(), size, frame->data, frame->linesize, format,
+                                      frame->width, frame->height, 1),
+              size);
+}
+
+TEST(Media, SeekRestoresConfigurationForFreshH264AndHevcDecoders)
+{
+    for (const bool hevc : {false, true})
+    {
+        SCOPED_TRACE(hevc ? "HEVC" : "H264");
+        Memory memory(hevc ? "hevc.mp4" : "h264-aac.mp4");
+        std::string error;
+        ASSERT_EQ(memory.run(&error), 0) << error;
+        std::vector<std::vector<std::uint8_t>> pictures;
+        iptv_stream_backend_t backend{};
+        backend.context = &pictures;
+        backend.open = [](void *, const iptv_stream_format_t *) { return 0; };
+        backend.submit_video =
+            [](void *self, const std::uint8_t *data, std::size_t size, std::uint64_t)
+        {
+            static_cast<decltype(pictures) *>(self)->emplace_back(data, data + size);
+            return 0;
+        };
+        backend.submit_audio = [](void *, const std::uint8_t *, std::size_t, std::uint64_t)
+        { return 0; };
+        backend.disable_audio = backend.drain = backend.discontinuity = [](void *) { return 0; };
+        backend.close = [](void *) {};
+        const auto close = [](iptv_stream_session_t *p)
+        {
+            (void)iptv_stream_cleanup(p);
+            delete p;
+        };
+        std::unique_ptr<iptv_stream_session_t, decltype(close)> session(
+            new iptv_stream_session_t{});
+        iptv_stream_init(session.get());
+        ASSERT_EQ(iptv_stream_open(session.get(), nullptr, &backend), IPTV_STREAM_OK);
+        ASSERT_EQ(iptv_stream_start(session.get()), IPTV_STREAM_OK);
+        ASSERT_EQ(iptv_stream_push(session.get(), memory.transport.data(), memory.transport.size()),
+                  IPTV_STREAM_OK);
+        ASSERT_FALSE(pictures.empty());
+        const auto configured = pictures.front();
+        std::vector<std::uint8_t> stripped;
+        // Remove only parameter NALs from the real encoded keyframe. A fresh
+        // decoder must receive their retained bytes from the application parser.
+        const auto start_code = [&](std::size_t at, std::size_t *prefix)
+        {
+            for (; at + 3 <= configured.size(); ++at)
+                if (!configured[at] && !configured[at + 1])
+                {
+                    if (configured[at + 2] == 1)
+                    {
+                        *prefix = 3;
+                        return at;
+                    }
+                    if (at + 4 <= configured.size() && !configured[at + 2] &&
+                        configured[at + 3] == 1)
+                    {
+                        *prefix = 4;
+                        return at;
+                    }
+                }
+            return configured.size();
+        };
+        for (std::size_t at = 0, prefix = 0; at < configured.size();)
+        {
+            at = start_code(at, &prefix);
+            ASSERT_LT(at + prefix, configured.size());
+            std::size_t next_prefix = 0;
+            const auto next = start_code(at + prefix, &next_prefix);
+            const auto type =
+                hevc ? (configured[at + prefix] >> 1) & 0x3f : configured[at + prefix] & 0x1f;
+            if (!(hevc ? type >= 32 && type <= 34 : type == 7 || type == 8))
+                stripped.insert(stripped.end(), configured.begin() + at, configured.begin() + next);
+            at = next;
+        }
+        ASSERT_LT(stripped.size(), configured.size());
+        ASSERT_EQ(iptv_stream_reposition(session.get(), 1000000), IPTV_STREAM_OK);
+        pictures.clear();
+        const auto pid = session->telemetry.format.video_pid;
+        unsigned counter = 0;
+        for (unsigned repeat = 0; repeat < 3; ++repeat)
+        {
+            std::vector<std::uint8_t> pes{0, 0, 1, 0xe0, 0, 0, 0x80, 0, 0};
+            pes.insert(pes.end(), stripped.begin(), stripped.end());
+            for (std::size_t at = 0; at < pes.size();)
+            {
+                const auto count = std::min<std::size_t>(184, pes.size() - at);
+                std::array<std::uint8_t, 188> packet;
+                packet.fill(0xff);
+                packet[0] = 0x47;
+                packet[1] = (pid >> 8) | (at ? 0 : 0x40);
+                packet[2] = pid;
+                packet[3] = (count == 184 ? 0x10 : 0x30) | (counter++ & 15);
+                if (count < 184)
+                {
+                    packet[4] = 183 - count;
+                    if (packet[4])
+                        packet[5] = 0;
+                }
+                std::memcpy(packet.data() + 188 - count, pes.data() + at, count);
+                ASSERT_EQ(iptv_stream_push(session.get(), packet.data(), packet.size()),
+                          IPTV_STREAM_OK);
+                at += count;
+            }
+        }
+        ASSERT_FALSE(pictures.empty());
+        const auto codec = hevc ? AV_CODEC_ID_HEVC : AV_CODEC_ID_H264;
+        std::vector<std::uint8_t> original, replay;
+        decode_picture(codec, configured, &original);
+        decode_picture(codec, pictures.front(), &replay);
+        ASSERT_FALSE(original.empty());
+        EXPECT_EQ(replay, original);
+    }
+}
+
 TEST(Media, ReadsMoviesWithManySubtitleLanguagesButRetainsAStreamLimit)
 {
     std::string error;

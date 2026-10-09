@@ -9,6 +9,7 @@
 #include <cstdio>
 #include <cstring>
 #include <limits>
+#include <memory>
 #include <new>
 
 namespace
@@ -27,6 +28,14 @@ constexpr size_t kPacketBufferBytes = IPTV_STREAM_TS_PACKET_BYTES * 4u;
 constexpr size_t kNoOffset = static_cast<size_t>(-1);
 constexpr uint64_t kPtsModulus = UINT64_C(1) << 33;
 constexpr uint64_t kPtsHalf = UINT64_C(1) << 32;
+constexpr size_t kVideoParameterBytes = 65536;
+constexpr size_t kVideoParameterSlots = 32 + 256; // H.264 SPS/PPS IDs; HEVC uses 16/16/64.
+
+struct video_parameter_t
+{
+    std::unique_ptr<uint8_t[]> data;
+    size_t size = 0;
+};
 
 struct buffer_t
 {
@@ -136,6 +145,8 @@ struct impl_t
     timestamp_t video_time;
     timestamp_t audio_time;
     buffer_t video_es;
+    video_parameter_t video_parameters[kVideoParameterSlots];
+    size_t video_parameter_bytes;
     buffer_t audio_es;
     marker_list_t video_markers;
     marker_list_t audio_markers;
@@ -951,6 +962,9 @@ static int parse_pmt_section(iptv_stream_session_t *session, impl_t *impl, const
         impl->video_pps = false;
         impl->video_vps = false;
         impl->video_random_access = false;
+        for (auto &parameter : impl->video_parameters)
+            parameter = {};
+        impl->video_parameter_bytes = 0;
         impl->video_es.size = 0;
         impl->audio_es.size = 0;
         marker_clear(&impl->video_markers);
@@ -1232,10 +1246,98 @@ static uint32_t hevc_parameter_mask(const uint8_t *data, size_t bytes)
     return mask;
 }
 
+static size_t video_parameter_slot(bool hevc, const uint8_t *nal, size_t bytes)
+{
+    const size_t header = hevc ? 2u : 1u;
+    if (bytes <= header)
+        return kNoOffset;
+    const unsigned type = hevc ? (nal[0] >> 1) & 0x3fu : nal[0] & 0x1fu;
+    uint8_t rbsp[1024];
+    const size_t count = make_rbsp(nal + header, bytes - header, rbsp, sizeof(rbsp));
+    bit_reader_t bits{rbsp, count * 8u, 0};
+    uint32_t id = 0;
+    if (!hevc)
+    {
+        if (type == 7 && !skip_bits(&bits, 24))
+            return kNoOffset;
+        if (!read_ue(&bits, &id) || id >= (type == 7 ? 32u : 256u))
+            return kNoOffset;
+        return (type == 7 ? 0u : 32u) + id;
+    }
+    if (type == 32)
+        return read_bits(&bits, 4, &id) ? id : kNoOffset;
+    if (type == 33)
+    {
+        uint32_t layers = 0, profile[7]{}, level[7]{};
+        if (!skip_bits(&bits, 4) || !read_bits(&bits, 3, &layers) || !skip_bits(&bits, 1 + 96))
+            return kNoOffset;
+        for (unsigned i = 0; i < layers; ++i)
+            if (!read_bits(&bits, 1, &profile[i]) || !read_bits(&bits, 1, &level[i]))
+                return kNoOffset;
+        if (layers && !skip_bits(&bits, (8 - layers) * 2))
+            return kNoOffset;
+        for (unsigned i = 0; i < layers; ++i)
+            if ((profile[i] && !skip_bits(&bits, 88)) || (level[i] && !skip_bits(&bits, 8)))
+                return kNoOffset;
+    }
+    if (!read_ue(&bits, &id) || id >= (type == 33 ? 16u : 64u))
+        return kNoOffset;
+    return (type == 33 ? 16u : 32u) + id;
+}
+
+static int cache_video_parameters(iptv_stream_session_t *session, impl_t *impl, size_t bytes,
+                                  bool *present)
+{
+    const bool hevc = impl->format.video_codec == IPTV_STREAM_VIDEO_HEVC;
+    for (size_t at = 0; at < bytes;)
+    {
+        size_t prefix = 0, next_prefix = 0;
+        const auto start = find_start_code(impl->video_es.data, bytes, at, &prefix);
+        if (start == kNoOffset || start + prefix >= bytes)
+            break;
+        auto next = find_start_code(impl->video_es.data, bytes, start + prefix, &next_prefix);
+        if (next == kNoOffset)
+            next = bytes;
+        const auto *nal = impl->video_es.data + start + prefix;
+        const unsigned type = hevc ? (nal[0] >> 1) & 0x3fu : nal[0] & 0x1fu;
+        if (hevc ? type >= 32 && type <= 34 : type == 7 || type == 8)
+        {
+            const size_t size = next - start - prefix;
+            const size_t slot = video_parameter_slot(hevc, nal, size);
+            if (slot >= kVideoParameterSlots)
+                return fail(session, IPTV_STREAM_MALFORMED_TS, "invalid video parameter-set ID");
+            auto &parameter = impl->video_parameters[slot];
+            present[slot] = true;
+            if (size != parameter.size || std::memcmp(parameter.data.get(), nal, size) != 0)
+            {
+                const size_t retained = impl->video_parameter_bytes - parameter.size;
+                if (size > kVideoParameterBytes - retained)
+                    return fail(session, IPTV_STREAM_BUFFER_LIMIT, "video parameter cache full");
+                std::unique_ptr<uint8_t[]> copy(new (std::nothrow) uint8_t[size]);
+                if (!copy)
+                    return fail(session, IPTV_STREAM_BUFFER_LIMIT,
+                                "video parameter allocation failed");
+                std::memcpy(copy.get(), nal, size);
+                parameter.data = std::move(copy);
+                parameter.size = size;
+                impl->video_parameter_bytes = retained + size;
+            }
+        }
+        at = next;
+    }
+    return IPTV_STREAM_OK;
+}
+
 static int emit_video(iptv_stream_session_t *session, impl_t *impl, size_t bytes)
 {
     if (!bytes || bytes > impl->video_es.size)
         return fail(session, IPTV_STREAM_MALFORMED_TS, "invalid video access-unit boundary");
+    // Retain sets from this access unit, including pictures dropped while waiting
+    // for an IDR/CRA. Inspecting the next unit must not replace this one's setup.
+    bool present[kVideoParameterSlots]{};
+    int result = cache_video_parameters(session, impl, bytes, present);
+    if (result != IPTV_STREAM_OK)
+        return result;
     if (!video_config_ready(impl))
     {
         ++session->telemetry.dropped_payloads;
@@ -1246,6 +1348,7 @@ static int emit_video(iptv_stream_session_t *session, impl_t *impl, size_t bytes
     const int picture_type = video_access_unit_type(impl, bytes);
     const bool hevc = impl->format.video_codec == IPTV_STREAM_VIDEO_HEVC;
     const bool random_access = hevc ? picture_type >= 16 && picture_type <= 21 : picture_type == 5;
+    const bool first_picture = !impl->video_random_access;
     if (!impl->video_random_access)
     {
         if (!random_access)
@@ -1276,12 +1379,55 @@ static int emit_video(iptv_stream_session_t *session, impl_t *impl, size_t bytes
         update_buffered(session, impl);
         return IPTV_STREAM_OK;
     }
-    int result = maybe_activate(session, impl);
+    result = maybe_activate(session, impl);
     if (result != IPTV_STREAM_OK)
         return result;
     if (impl->backend_open)
     {
-        result = impl->backend.submit_video(impl->backend.context, impl->video_es.data, bytes,
+        const uint8_t *data = impl->video_es.data;
+        size_t submitted = bytes, setup = 0;
+        std::unique_ptr<uint8_t[]> replay;
+        if (first_picture)
+            for (size_t i = 0; i < kVideoParameterSlots; ++i)
+                if (!present[i] && impl->video_parameters[i].size)
+                    setup += 4 + impl->video_parameters[i].size;
+        if (setup)
+        {
+            if (setup > impl->config.max_pes_bytes - bytes)
+                return fail(session, IPTV_STREAM_BUFFER_LIMIT,
+                            "video replay exceeds access-unit limit");
+            submitted += setup;
+            replay.reset(new (std::nothrow) uint8_t[submitted]);
+            if (!replay)
+                return fail(session, IPTV_STREAM_BUFFER_LIMIT, "video replay allocation failed");
+            // Preserve an initial access-unit delimiter ahead of its parameters.
+            size_t prefix = 0, next_prefix = 0, insert = 0;
+            if (find_start_code(data, bytes, 0, &prefix) == 0 && prefix < bytes &&
+                (hevc ? ((data[prefix] >> 1) & 0x3fu) == 35 : (data[prefix] & 0x1fu) == 9))
+            {
+                insert = find_start_code(data, bytes, prefix, &next_prefix);
+                if (insert == kNoOffset)
+                    insert = 0;
+            }
+            std::memcpy(replay.get(), data, insert);
+            size_t at = insert;
+            for (size_t i = 0; i < kVideoParameterSlots; ++i)
+            {
+                const auto &parameter = impl->video_parameters[i];
+                if (present[i] || !parameter.size)
+                    continue;
+                const uint8_t start[] = {0, 0, 0, 1};
+                std::memcpy(replay.get() + at, start, sizeof(start));
+                at += sizeof(start);
+                std::memcpy(replay.get() + at, parameter.data.get(), parameter.size);
+                at += parameter.size;
+            }
+            std::memcpy(replay.get() + at, data + insert, bytes - insert);
+            data = replay.get();
+        }
+        if (first_picture && hevc)
+            session->telemetry.first_rap_hevc_parameter_mask = hevc_parameter_mask(data, submitted);
+        result = impl->backend.submit_video(impl->backend.context, data, submitted,
                                             impl->video_markers.base_pts);
         if (result != 0)
         {
