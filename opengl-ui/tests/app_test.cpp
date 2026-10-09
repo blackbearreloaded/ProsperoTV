@@ -515,30 +515,42 @@ TEST_F(AppTest, TheListsAreReachedFromTheTopRow)
     move(Direction::right); // Recent (empty)
     EXPECT_EQ(model_->group(), ptv::Group::recent);
     EXPECT_EQ(model_->visible_count(), 0u);
-    move(Direction::right); // News
-    EXPECT_EQ(model_->group(), ptv::Group::news);
-    EXPECT_EQ(model_->visible_count(), 12u);
+    // The chips after Recent are the list's own categories, in its order.
+    ASSERT_FALSE(model_->provider_categories().empty());
+    const std::string first = model_->provider_categories().front().value;
+    const unsigned held = model_->provider_categories().front().count;
+    move(Direction::right);
+    EXPECT_EQ(model_->group(), ptv::Group::all);
+    EXPECT_EQ(model_->provider_category(), first);
+    EXPECT_EQ(model_->visible_count(), held);
     move(Direction::down); // back into the grid
     press(Action::confirm);
     ptv::PlayRequest request;
     ASSERT_TRUE(model_->take_play_request(&request));
-    EXPECT_EQ(request.channel_id, model_->channel(1).id);
-    EXPECT_EQ(model_->view.live_group, ptv::Group::news);
+    EXPECT_EQ(request.channel_id, model_->channel(model_->visible(0)).id);
+    EXPECT_EQ(model_->view.live_group, ptv::Group::all);
+    // Left twice is All again, and the whole list.
+    move(Direction::up);
+    move(Direction::left);
+    move(Direction::left);
+    EXPECT_TRUE(model_->provider_category().empty());
+    EXPECT_EQ(model_->visible_count(), 60u);
 }
 
 TEST_F(AppTest, BackGoesToTheTopThenToTheFirstList)
 {
     move(Direction::up);
     move(Direction::right);
-    move(Direction::right); // News
+    move(Direction::right); // the list's first category
+    ASSERT_FALSE(model_->provider_category().empty());
+    ASSERT_GT(model_->visible_count(), 6u);
     move(Direction::down);
     move(Direction::down);
     move(Direction::right);
     EXPECT_EQ(model_->view.focused_channel, model_->channel(model_->visible(6)).id);
-    press(Action::back); // to the top of the list
-    EXPECT_EQ(model_->view.focused_channel, model_->channel(model_->visible(0)).id);
-    press(Action::back); // onto the chips
-    press(Action::back); // to All
+    for (int presses = 0; presses < 4 && !model_->provider_category().empty(); ++presses)
+        press(Action::back); // to the top of the list, onto the chips, to All
+    EXPECT_TRUE(model_->provider_category().empty());
     EXPECT_EQ(model_->group(), ptv::Group::all);
     EXPECT_EQ(model_->visible_count(), 60u);
 }

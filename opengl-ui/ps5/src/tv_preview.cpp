@@ -283,7 +283,7 @@ struct Decoder
         audio->active.store(wanted && result == 0);
         if (!wanted || result != 0)
             audio->release();
-        diag::event("multiview audio type=%u active=%d result=%d channel=%s", wanted,
+        diag::event("preview sound type=%u active=%d result=%d channel=%s", wanted,
                     audio->active.load() ? 1 : 0, result, channel.c_str());
     }
     bool push(const char *bytes, std::size_t count)

@@ -185,7 +185,7 @@ App::App(Model &model, const ui::Fonts &fonts, std::uint32_t glass_texture,
     form_.add_toggle(kRowHideFailed, tr("Hide channels that failed"), settings.hide_failed);
     form_.add_toggle(kRowResume, tr("Start on the last channel"), settings.resume_last);
     form_.add_toggle(kRowPreview, tr("Live previews"), settings.live_preview).description =
-        tr("Play the focused channel in the large television, muted, after a moment.");
+        tr("Play the focused channel in the large television after a moment.");
     model.set_hide_failed(settings.hide_failed);
     form_
         .add_choice(kRowSleep, tr("Sleep timer"),

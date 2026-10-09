@@ -2,6 +2,7 @@
 // Copyright (C) 2026 BlackBearReloaded
 // SPDX-License-Identifier: GPL-3.0-or-later
 
+#include "tv/category_path.hpp"
 #include "tv/i18n.hpp"
 #include "tv/browse_screen.hpp"
 #include "tv/platform.hpp"
@@ -112,6 +113,7 @@ BrowseScreen::BrowseScreen(Shared &shared) : shared_(shared)
     for (const Group group : kChips)
         chips.push_back({tr(Model::group_name(group))});
     groups_.set_tabs(std::move(chips));
+    rebuild_chips();
     groups_.set_bounds({kMargin, kListY - 24.0f, 1000.0f, 48.0f});
     groups_.set_focused(false);
 
@@ -131,7 +133,8 @@ void BrowseScreen::show(bool favorites)
     favorites_ = favorites;
     zone_ = Zone::grid;
     model.set_group(favorites ? Group::favorites : model.view.live_group);
-    groups_.set_active(chip_of(model.view.live_group), true);
+    rebuild_chips();
+    groups_.set_active(current_chip(), true);
     grid_.style.exits.up = !favorites;
 
     const int position = model.position_of(model.view.focused_channel);
@@ -268,9 +271,72 @@ void BrowseScreen::restart_list()
     empty_.enter();
 }
 
+// The provider's categories, in its order, without the hidden ones. A
+// category inside another ("US / Sports") is a chip too, under its own name:
+// the sheet (Touchpad) is where the levels are browsed.
+void BrowseScreen::rebuild_chips()
+{
+    const Model &model = shared_.model;
+    std::vector<std::string> categories;
+    for (const auto &facet : model.provider_categories())
+    {
+        if (facet.value.empty() || facet.count == 0 || model.category_hidden(facet.value))
+            continue;
+        categories.push_back(facet.value);
+        if (categories.size() == 200)
+            break;
+    }
+    if (categories == chip_categories_ && !groups_.tabs().empty())
+        return;
+    const int active = groups_.active();
+    chip_categories_ = std::move(categories);
+    std::vector<ui::TabItem> chips;
+    chips.push_back({tr(Model::group_name(Group::all))});
+    chips.push_back({tr(Model::group_name(Group::recent))});
+    if (chip_categories_.empty())
+        for (const Group group : {Group::news, Group::sports, Group::kids})
+            chips.push_back({tr(Model::group_name(group))});
+    else
+        for (const auto &category : chip_categories_)
+            chips.push_back({label_text(category_leaf(category))});
+    groups_.set_tabs(std::move(chips));
+    groups_.set_active(std::min(active, static_cast<int>(groups_.tabs().size()) - 1), true);
+}
+
+// The chip that stands for what the list shows now. A category chosen in the
+// sheet that has no chip of its own (a parent) leaves All lit, and the label
+// at the right says what narrows the list.
+int BrowseScreen::current_chip() const
+{
+    const Model &model = shared_.model;
+    if (!chip_categories_.empty())
+    {
+        const auto at = std::find(chip_categories_.begin(), chip_categories_.end(),
+                                  model.provider_category());
+        if (at != chip_categories_.end())
+            return 2 + static_cast<int>(at - chip_categories_.begin());
+        return model.view.live_group == Group::recent ? 1 : 0;
+    }
+    return chip_of(model.view.live_group);
+}
+
 void BrowseScreen::apply_group(int chip)
 {
     Model &model = shared_.model;
+    chip = std::clamp(chip, 0, static_cast<int>(groups_.tabs().size()) - 1);
+    if (!chip_categories_.empty())
+    {
+        // All and Recent are lists of the whole source; a provider's chip is
+        // the whole source narrowed to that category and what is under it.
+        const Group group = chip == 1 ? Group::recent : Group::all;
+        model.view.live_group = group;
+        model.set_group(group);
+        model.set_provider_category(
+            chip >= 2 ? std::string_view(chip_categories_[static_cast<std::size_t>(chip - 2)])
+                      : std::string_view());
+        restart_list();
+        return;
+    }
     const Group group = kChips[std::clamp(chip, 0, kChipCount - 1)];
     model.view.live_group = group;
     model.set_group(group);
@@ -548,9 +614,28 @@ void BrowseScreen::update(float dt)
         page_hold_ += dt;
 
     // ---- the chips say how many each list holds ----
-    for (int i = 0; i < kChipCount; ++i)
-        groups_.tab(i).label = std::string(tr(Model::group_name(kChips[i]))) + "  " +
-                               group_digits(model.group_size(kChips[i]));
+    rebuild_chips();
+    if (!favorites_ && groups_.active() != current_chip())
+        groups_.set_active(current_chip()); // the category was chosen or cleared elsewhere
+    if (chip_categories_.empty())
+        for (int i = 0; i < kChipCount; ++i)
+            groups_.tab(i).label = std::string(tr(Model::group_name(kChips[i]))) + "  " +
+                                   group_digits(model.group_size(kChips[i]));
+    else
+    {
+        groups_.tab(0).label = std::string(tr(Model::group_name(Group::all))) + "  " +
+                               group_digits(model.channel_count());
+        groups_.tab(1).label = std::string(tr(Model::group_name(Group::recent))) + "  " +
+                               group_digits(model.group_size(Group::recent));
+        std::size_t chip = 0;
+        for (const auto &facet : model.provider_categories())
+            if (chip < chip_categories_.size() && facet.value == chip_categories_[chip])
+            {
+                groups_.tab(static_cast<int>(chip) + 2).label =
+                    label_text(category_leaf(facet.value)) + "  " + group_digits(facet.count);
+                ++chip;
+            }
+    }
 
     // One focus on screen: the part that is not in use shows no ring at all.
     groups_.set_focused(zone_ == Zone::groups);
@@ -765,9 +850,11 @@ void BrowseScreen::draw_list_header(ui::Canvas &canvas) const
     else
     {
         // Every list wears a hairline; the cream plate of the bar marks the one in use.
-        for (int i = 0; i < kChipCount; ++i)
+        for (int i = 0; i < static_cast<int>(groups_.tabs().size()); ++i)
         {
             const Rect chip = groups_.tab_rect(fonts, i);
+            if (chip.x + chip.w < kMargin || chip.x > kMargin + 1000.0f)
+                continue; // scrolled out of the row
             list.bordered_rect(chip, chip.h * 0.5f, kWhite.with_alpha(0.05f), 1.5f,
                                kWhite.with_alpha(0.14f));
         }

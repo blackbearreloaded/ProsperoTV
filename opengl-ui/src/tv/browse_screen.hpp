@@ -91,6 +91,11 @@ class BrowseScreen
     Shared &shared_;
     ui::GridView grid_;
     ui::TabBar groups_;
+    // The chips after All and Recent: the provider's own top categories when
+    // the source has any, otherwise News, Sports and Kids.
+    std::vector<std::string> chip_categories_;
+    void rebuild_chips();
+    int current_chip() const;
     ui::EmptyState empty_;
     bool favorites_ = false;
     bool selection_mode_ = false;
