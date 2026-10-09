@@ -94,6 +94,9 @@
   1.2 seconds. Settings also offers hiding failed channels and starting on the
   last channel. See [the roadmap implementation guide](docs/ROADMAP_IMPLEMENTATION.md)
   for controls, provider requirements and validation status.
+- Watch two or four live TS/HLS channels in Multiview, with audio following
+  focus. Four simultaneous 720p H.264 feeds are validated on hardware; higher
+  resolutions and other codec combinations depend on available decoder resources.
 - Open the last verified channel catalog immediately from a local SQLite cache
   while a refresh runs in the background.
 - Browse Live TV, Favorites, Recent, News, Sports, Kids, and other channel
@@ -164,6 +167,7 @@ at 3840×2160. Codec and renderer details are documented in
 | Square in Sources | Cycle daily, weekly and manual refresh |
 | Touchpad in Live TV / Favorites | Provider categories / favorite folders |
 | R3 in the channel browser | Open the programme guide |
+| L3 in Live TV / Favorites | Open Multiview; Square chooses a channel, Triangle switches two/four tiles, R3 mutes, Cross opens full screen |
 | Options | Refresh the selected catalog source |
 | Circle during playback | Close the open panel, or stop playback and return to the browser |
 | Options during playback | Open or close the audio/subtitle track panel |
@@ -497,7 +501,7 @@ The remaining ideas are not scheduled or promised.
   to preserve its full motion.
 - [x] **HDR.** Showing HDR10 and HLG channels as HDR, with SDR tone mapping when
   HDR output is unavailable.
-- **Several channels at once.** Two or four pictures side by side, for
+- [x] **Several channels at once.** Two or four pictures side by side, for
   sport, if the console's decoder allows it.
 
 ### Household
