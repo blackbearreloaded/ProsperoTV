@@ -17,7 +17,7 @@ and relevant checks work.
 | Sleep timer | Stop playback at a selected deadline | Implemented; 134 UI sanitizer tests and PS5 build pass; console case pending |
 | Live pause/rewind | Pause and replay several minutes of the current live channel | Implemented for TS/HLS and direct VP9 WebM; 119 core tests, media/subtitle checks, PS5 build and native controls/expiry/format-change cases pass; native caption visibility and subjective sync remain acceptance checks |
 | Deinterlacing | Preserve field-rate motion on interlaced broadcast video | Implemented with parsed field order and spatial bob; 120 core and 25 media/field sanitizer checks and PS5 build pass; native 1080i controls, uninterrupted 50-field/s playback and separate-field PAFF camera acceptance pass |
-| HDR | Preserve HDR metadata and output HDR on compatible displays | Pending |
+| HDR | Preserve HDR metadata and output HDR on compatible displays | In progress: HEVC color snapshots, HDR10 output selection, 203-nit UI/captions and SDR previews implemented; 26 media and 148 UI sanitizer tests pass; native output, transitions and display acceptance pending |
 | Multiview | Two or four simultaneous channels, within measured decoder limits | Pending |
 | Parental controls | PIN-protected adult categories and kids-only mode | Implemented; 132 UI sanitizer tests, 73 core tests and PS5 build pass; console case pending |
 | Profiles | Separate sources, favorites and history by signed-in console user | Implemented; isolation/migration sanitizer tests, PS5 build and console startup pass |
@@ -28,6 +28,23 @@ and relevant checks work.
 Completion also requires host checks, a PS5 build, bounded testing on an idle
 192.168.4.30 or 192.168.4.40, an updated deliverable, and a pull request. Console
 tests retain the workspace lock and sandbox-only test-title protocol.
+
+## HDR implementation in progress
+
+The pinned HEVC parser exports its existing VUI fields without decoding another
+copy of the picture. Color metadata follows each queued presentation timestamp,
+including pause redraws. Only limited-range BT.2020/PQ Main10 selects HDR10.
+The presenter retypes its registered buffers between completed frames, uses a
+ten-bit output target and preserves PQ through the BT.2020 matrix. It records
+both the mode request and the platform's output-status readback.
+
+Menus and bitmap/text captions use 203-nit reference white. The menu preview
+reads native low-aligned ten-bit samples and uses a bounded SDR tone map.
+The [public HDR research](https://github.com/blackbearreloaded/ps5-hardware-video-decoding-research/blob/main/docs/hdr.md)
+documents the surface contract and limits of Remote Play color verification;
+[EVO Player](https://github.com/sainsaji/EVO-PLAYER-PS5) provides the public
+buffer-attribute transition reference. Native chart/transition/4K acceptance,
+mastering metadata, HLG, and unsupported-display fallback remain pending.
 
 ## Live pause and rewind foundations
 

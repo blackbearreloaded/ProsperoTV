@@ -21,11 +21,12 @@ struct VideoPanel
     void text(const hui::gfx::Font &font, std::string_view value, float left, float baseline,
               float size, float max_width, std::uint8_t ink = 235);
     bool composite(void *surface, std::size_t bytes, unsigned pitch, unsigned surface_height,
-                   unsigned visible_width, unsigned visible_height, unsigned depth) const;
+                   unsigned visible_width, unsigned visible_height, unsigned depth,
+                   bool hdr = false) const;
 };
 bool composite_subtitle_bitmaps(const iptv::SubtitleCue &cue, void *surface, std::size_t bytes,
                                 unsigned pitch, unsigned surface_height, unsigned visible_width,
-                                unsigned visible_height, unsigned depth);
+                                unsigned visible_height, unsigned depth, bool hdr = false);
 
 class PlaybackOsd
 {
@@ -46,7 +47,8 @@ class PlaybackOsd
     }
     bool draw(void *surface, std::size_t bytes, unsigned pitch, unsigned surface_height,
               unsigned visible_width, unsigned visible_height, unsigned depth, std::uint64_t now,
-              const std::vector<std::shared_ptr<const iptv::SubtitleCue>> &subtitles = {});
+              const std::vector<std::shared_ptr<const iptv::SubtitleCue>> &subtitles = {},
+              bool hdr = false);
 
   private:
     void update_guide();

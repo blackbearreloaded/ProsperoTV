@@ -9,6 +9,38 @@
 #include <memory>
 #include <vector>
 
+TEST(Fields, HevcColorFollowsEachAccessUnitWithoutMistakingMain10ForHdr)
+{
+    std::unique_ptr<iptv_field_parser_t, decltype(&iptv_field_parser_destroy)> parser(
+        iptv_field_parser_create(2), iptv_field_parser_destroy);
+    ASSERT_TRUE(parser);
+    const struct
+    {
+        const char *name;
+        iptv_color_info_t color;
+        bool hdr;
+    } cases[] = {{"pq", {9, 16, 9, 1}, true},      {"sdr", {1, 1, 1, 1}, false},
+                 {"full", {9, 16, 9, 2}, false},   {"hlg", {9, 18, 9, 1}, false},
+                 {"unknown", {2, 2, 2, 1}, false}, {"pq", {9, 16, 9, 1}, true}};
+    for (const auto &item : cases)
+    {
+        SCOPED_TRACE(item.name);
+        std::ifstream file(std::string("build/media-tests/fixtures/color-") + item.name + ".hevc",
+                           std::ios::binary);
+        const std::vector<std::uint8_t> bytes{std::istreambuf_iterator<char>(file), {}};
+        ASSERT_FALSE(bytes.empty());
+        const auto info = iptv_field_parse(parser.get(), bytes.data(), bytes.size());
+        EXPECT_EQ(info.color.primaries, item.color.primaries);
+        EXPECT_EQ(info.color.transfer, item.color.transfer);
+        EXPECT_EQ(info.color.matrix, item.color.matrix);
+        EXPECT_EQ(info.color.range, item.color.range);
+        EXPECT_EQ(bool(iptv_color_is_hdr10(info.color)), item.hdr);
+        EXPECT_EQ(info.first, 0u);
+    }
+    EXPECT_FALSE(iptv_color_is_hdr10(iptv_field_parse(parser.get(), nullptr, 0).color));
+    EXPECT_EQ(iptv_field_parser_create(0), nullptr);
+}
+
 TEST(Fields, ReadsActualTopBottomAndProgressivePictures)
 {
     for (const auto expected : {0u, 1u, 2u})
@@ -26,7 +58,7 @@ TEST(Fields, ReadsActualTopBottomAndProgressivePictures)
         ASSERT_EQ(starts.size(), 25u);
         starts.push_back(bytes.size());
         std::unique_ptr<iptv_field_parser_t, decltype(&iptv_field_parser_destroy)> parser(
-            iptv_field_parser_create(), iptv_field_parser_destroy);
+            iptv_field_parser_create(1), iptv_field_parser_destroy);
         ASSERT_TRUE(parser);
         constexpr unsigned pitch = 176, height = 96;
         std::vector<std::uint8_t> surface(pitch * height * 3 / 2 + 16, 0xee);

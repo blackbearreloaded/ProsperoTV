@@ -14,7 +14,7 @@ extern "C"
 
 struct iptv_field_parser
 {
-    AVCodecParserContext *parser = av_parser_init(AV_CODEC_ID_H264);
+    AVCodecParserContext *parser = nullptr;
     AVCodecContext *codec = avcodec_alloc_context3(nullptr);
     AVCodecContext *decoder = nullptr;
     AVPacket *packet = nullptr;
@@ -33,13 +33,17 @@ struct iptv_field_parser
     }
 };
 
-iptv_field_parser_t *iptv_field_parser_create()
+iptv_field_parser_t *iptv_field_parser_create(uint32_t codec)
 {
+    if (codec != 1 && codec != 2)
+        return nullptr;
     auto *state = new (std::nothrow) iptv_field_parser;
+    if (state)
+        state->parser = av_parser_init(codec == 1 ? AV_CODEC_ID_H264 : AV_CODEC_ID_HEVC);
     if (state && state->parser && state->codec)
     {
         state->parser->flags |= PARSER_FLAG_COMPLETE_FRAMES;
-        state->codec->codec_id = AV_CODEC_ID_H264;
+        state->codec->codec_id = codec == 1 ? AV_CODEC_ID_H264 : AV_CODEC_ID_HEVC;
         state->codec->codec_type = AVMEDIA_TYPE_VIDEO;
         return state;
     }
@@ -61,9 +65,19 @@ iptv_field_info_t iptv_field_parse(iptv_field_parser_t *state, const void *data,
     std::memcpy(state->padded, data, bytes);
     std::uint8_t *parsed = nullptr;
     int parsed_bytes = 0;
+    state->codec->color_primaries = AVCOL_PRI_UNSPECIFIED;
+    state->codec->color_trc = AVCOL_TRC_UNSPECIFIED;
+    state->codec->colorspace = AVCOL_SPC_UNSPECIFIED;
+    state->codec->color_range = AVCOL_RANGE_UNSPECIFIED;
     if (av_parser_parse2(state->parser, state->codec, &parsed, &parsed_bytes, state->padded,
                          static_cast<int>(bytes), AV_NOPTS_VALUE, AV_NOPTS_VALUE, 0) < 0 ||
         !parsed_bytes)
+        return result;
+    result.color = {static_cast<uint32_t>(state->codec->color_primaries),
+                    static_cast<uint32_t>(state->codec->color_trc),
+                    static_cast<uint32_t>(state->codec->colorspace),
+                    static_cast<uint32_t>(state->codec->color_range)};
+    if (state->codec->codec_id != AV_CODEC_ID_H264)
         return result;
     const auto structure = state->parser->picture_structure;
     const auto order = state->parser->field_order;
@@ -94,10 +108,11 @@ int iptv_field_decode(iptv_field_parser_t *state, const void *data, size_t bytes
                       size_t output_bytes, uint32_t pitch, uint32_t surface_height, uint32_t width,
                       uint32_t height)
 {
-    if (!state || !output || (bytes && !data) || bytes > 8u * 1024u * 1024u || !width || !height ||
-        width > 1920 || height > 1088 || (width & 1u) || (height & 1u) || pitch < width ||
-        pitch > 2048 || (pitch & 1u) || surface_height < height || surface_height > 1088 ||
-        (surface_height & 1u) || output_bytes < static_cast<size_t>(pitch) * surface_height * 3 / 2)
+    if (!state || state->codec->codec_id != AV_CODEC_ID_H264 || !output || (bytes && !data) ||
+        bytes > 8u * 1024u * 1024u || !width || !height || width > 1920 || height > 1088 ||
+        (width & 1u) || (height & 1u) || pitch < width || pitch > 2048 || (pitch & 1u) ||
+        surface_height < height || surface_height > 1088 || (surface_height & 1u) ||
+        output_bytes < static_cast<size_t>(pitch) * surface_height * 3 / 2)
         return AVERROR(EINVAL);
     if (!state->decoder)
     {

@@ -323,6 +323,7 @@ void SaveReceipt(const char *channel_name, std::uint64_t duration_ms, int result
         "decoder_output_picture_count=%u\ndecoder_output_codec=%u\n"
         "decoder_output_width=%u\ndecoder_output_height=%u\ndecoder_output_pitch=%u\n"
         "decoder_frame_accepted=%u\nsoftware_video=%u\nsoftware_video_trigger=%d\n"
+        "color_primaries=%u\ncolor_transfer=%u\ncolor_matrix=%u\ncolor_range=%u\nhdr_output=%u\n"
         "buffered_video_access_units=%llu\ndrained_video_frames=%llu\n"
         "dropped_delayed_frames=%llu\ndecoder_flushes=%llu\n"
         "drain_flush_limit_hits=%llu\npending_video_timestamps=%u\n"
@@ -371,7 +372,8 @@ void SaveReceipt(const char *channel_name, std::uint64_t duration_ms, int result
         native.decoder_output_error, native.decoder_output_picture_count,
         native.decoder_output_codec, native.decoder_output_width, native.decoder_output_height,
         native.decoder_output_pitch, native.decoder_frame_accepted, native.software_video,
-        native.software_video_trigger,
+        native.software_video_trigger, native.color.primaries, native.color.transfer,
+        native.color.matrix, native.color.range, native.hdr_output,
         static_cast<unsigned long long>(native.buffered_video_access_units),
         static_cast<unsigned long long>(native.drained_video_frames),
         static_cast<unsigned long long>(native.dropped_delayed_frames),
@@ -472,60 +474,64 @@ void SaveReceipt(const char *channel_name, std::uint64_t duration_ms, int result
                     const unsigned char c = static_cast<unsigned char>(channel_name[i]);
                     std::fputc(c < 32 || c == 127 ? ' ' : c, probe);
                 }
-            std::fprintf(
-                probe,
-                "\nduration_ms=%llu\nresult=%d\nstream_result=%d\nnative_result=%d\n"
-                "native_error=0x%08x\ncodec=%u\nprofile=%u\nlevel=%u\n"
-                "resolution=%ux%u\nbit_depth=%u\nsource_fps_x100=%u\nbitrate_kbps=%u\n"
-                "audio_stream_type=0x%02x\naudio_pid=%u\naudio_frames=%llu\n"
-                "first_other_stream_type=0x%02x\nfirst_rap_hevc_parameter_mask=0x%x\n"
-                "stream_audio_disabled=%u\nstream_audio_warning=%s\n"
-                "native_audio_disabled=%u\nnative_audio_result=%d\n"
-                "video_access_units=%llu\nlast_video_access_unit_bytes=%llu\n"
-                "continuity_errors=%llu\ndropped_payloads=%llu\n"
-                "decoder_output_valid=%u\ndecoder_output_error=%u\n"
-                "decoder_frame_accepted=%u\nsoftware_video=%u\nsoftware_video_trigger=%d\n"
-                "decoded_frames=%llu\npresented_frames=%llu\n"
-                "present_gap_max_us=%llu\npresent_gaps_over_250ms=%llu\n"
-                "present_gaps_over_500ms=%llu\ndecode_max_us=%llu\npresent_max_us=%llu\n"
-                "video_queue_max_frames=%u\nvideo_queue_underruns=%llu\n"
-                "audio_queue_underruns=%llu\npacing_resets=%llu\n"
-                "pacing_late_frames=%llu\ndropped_late_frames=%llu\n"
-                "direct_bytes=%llu\ndirect_reads=%llu\ndirect_reconnects=%u\n"
-                "direct_read_errors=%u\ndirect_end=%s\n",
-                static_cast<unsigned long long>(duration_ms), result, stream.last_result,
-                native.last_result, static_cast<unsigned>(native.last_native_result),
-                stream.format.video_codec, stream.format.video_profile, stream.format.video_level,
-                stream.format.visible_width, stream.format.visible_height,
-                stream.format.video_bit_depth, native.actual_frame_rate_x100, native.bitrate_kbps,
-                stream.format.audio_stream_type, stream.format.audio_pid,
-                static_cast<unsigned long long>(stream.audio_frames),
-                stream.first_other_stream_type, stream.first_rap_hevc_parameter_mask,
-                stream.audio_disabled, stream.audio_warning, native.audio_disabled,
-                native.last_audio_result,
-                static_cast<unsigned long long>(stream.video_access_units),
-                static_cast<unsigned long long>(native.last_video_access_unit_bytes),
-                static_cast<unsigned long long>(stream.continuity_errors),
-                static_cast<unsigned long long>(stream.dropped_payloads),
-                native.decoder_output_valid, native.decoder_output_error,
-                native.decoder_frame_accepted, native.software_video, native.software_video_trigger,
-                static_cast<unsigned long long>(native.decoded_frames),
-                static_cast<unsigned long long>(native.presented_frames),
-                static_cast<unsigned long long>(native.present_gap_max_us),
-                static_cast<unsigned long long>(native.present_gaps_over_250ms),
-                static_cast<unsigned long long>(native.present_gaps_over_500ms),
-                static_cast<unsigned long long>(native.decode_max_us),
-                static_cast<unsigned long long>(native.present_max_us),
-                native.video_queue_max_frames,
-                static_cast<unsigned long long>(native.video_queue_underruns),
-                static_cast<unsigned long long>(native.audio_queue_underruns),
-                static_cast<unsigned long long>(native.pacing_resets),
-                static_cast<unsigned long long>(native.pacing_late_frames),
-                static_cast<unsigned long long>(native.dropped_late_video_frames),
-                static_cast<unsigned long long>(gDirectDiagnostics.bytes),
-                static_cast<unsigned long long>(gDirectDiagnostics.reads),
-                gDirectDiagnostics.reconnects, gDirectDiagnostics.read_errors,
-                DirectEndName(gDirectDiagnostics.end));
+            std::fprintf(probe,
+                         "\nduration_ms=%llu\nresult=%d\nstream_result=%d\nnative_result=%d\n"
+                         "native_error=0x%08x\ncodec=%u\nprofile=%u\nlevel=%u\n"
+                         "resolution=%ux%u\nbit_depth=%u\nsource_fps_x100=%u\nbitrate_kbps=%u\n"
+                         "audio_stream_type=0x%02x\naudio_pid=%u\naudio_frames=%llu\n"
+                         "first_other_stream_type=0x%02x\nfirst_rap_hevc_parameter_mask=0x%x\n"
+                         "stream_audio_disabled=%u\nstream_audio_warning=%s\n"
+                         "native_audio_disabled=%u\nnative_audio_result=%d\n"
+                         "video_access_units=%llu\nlast_video_access_unit_bytes=%llu\n"
+                         "continuity_errors=%llu\ndropped_payloads=%llu\n"
+                         "decoder_output_valid=%u\ndecoder_output_error=%u\n"
+                         "decoder_frame_accepted=%u\nsoftware_video=%u\nsoftware_video_trigger=%d\n"
+                         "color_primaries=%u\ncolor_transfer=%u\ncolor_matrix=%u\ncolor_range=%"
+                         "u\nhdr_output=%u\n"
+                         "decoded_frames=%llu\npresented_frames=%llu\n"
+                         "present_gap_max_us=%llu\npresent_gaps_over_250ms=%llu\n"
+                         "present_gaps_over_500ms=%llu\ndecode_max_us=%llu\npresent_max_us=%llu\n"
+                         "video_queue_max_frames=%u\nvideo_queue_underruns=%llu\n"
+                         "audio_queue_underruns=%llu\npacing_resets=%llu\n"
+                         "pacing_late_frames=%llu\ndropped_late_frames=%llu\n"
+                         "direct_bytes=%llu\ndirect_reads=%llu\ndirect_reconnects=%u\n"
+                         "direct_read_errors=%u\ndirect_end=%s\n",
+                         static_cast<unsigned long long>(duration_ms), result, stream.last_result,
+                         native.last_result, static_cast<unsigned>(native.last_native_result),
+                         stream.format.video_codec, stream.format.video_profile,
+                         stream.format.video_level, stream.format.visible_width,
+                         stream.format.visible_height, stream.format.video_bit_depth,
+                         native.actual_frame_rate_x100, native.bitrate_kbps,
+                         stream.format.audio_stream_type, stream.format.audio_pid,
+                         static_cast<unsigned long long>(stream.audio_frames),
+                         stream.first_other_stream_type, stream.first_rap_hevc_parameter_mask,
+                         stream.audio_disabled, stream.audio_warning, native.audio_disabled,
+                         native.last_audio_result,
+                         static_cast<unsigned long long>(stream.video_access_units),
+                         static_cast<unsigned long long>(native.last_video_access_unit_bytes),
+                         static_cast<unsigned long long>(stream.continuity_errors),
+                         static_cast<unsigned long long>(stream.dropped_payloads),
+                         native.decoder_output_valid, native.decoder_output_error,
+                         native.decoder_frame_accepted, native.software_video,
+                         native.software_video_trigger, native.color.primaries,
+                         native.color.transfer, native.color.matrix, native.color.range,
+                         native.hdr_output, static_cast<unsigned long long>(native.decoded_frames),
+                         static_cast<unsigned long long>(native.presented_frames),
+                         static_cast<unsigned long long>(native.present_gap_max_us),
+                         static_cast<unsigned long long>(native.present_gaps_over_250ms),
+                         static_cast<unsigned long long>(native.present_gaps_over_500ms),
+                         static_cast<unsigned long long>(native.decode_max_us),
+                         static_cast<unsigned long long>(native.present_max_us),
+                         native.video_queue_max_frames,
+                         static_cast<unsigned long long>(native.video_queue_underruns),
+                         static_cast<unsigned long long>(native.audio_queue_underruns),
+                         static_cast<unsigned long long>(native.pacing_resets),
+                         static_cast<unsigned long long>(native.pacing_late_frames),
+                         static_cast<unsigned long long>(native.dropped_late_video_frames),
+                         static_cast<unsigned long long>(gDirectDiagnostics.bytes),
+                         static_cast<unsigned long long>(gDirectDiagnostics.reads),
+                         gDirectDiagnostics.reconnects, gDirectDiagnostics.read_errors,
+                         DirectEndName(gDirectDiagnostics.end));
             std::fputs("samples=elapsed_ms,presented,late,gaps_over_40ms,max_gap_us,"
                        "decode_max_us,present_max_us,video_queue_frames\n",
                        probe);

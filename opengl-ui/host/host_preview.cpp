@@ -45,8 +45,8 @@ void preview(const PlayRequest &, const iptv::http::RequestControl &control,
         for (unsigned y = 0; y < 54; ++y)
             for (unsigned x = 0; x < 96; ++x)
                 nv12[y * 96 + x] = static_cast<std::uint8_t>(32 + (x + y + frame) % 190);
-        const iptv_native_picture_t p{nv12.data(), nv12.size(), 96, 54,
-                                      96,          54,          8,  std::uint64_t(frame) * 20000};
+        const iptv_native_picture_t p{
+            nv12.data(), nv12.size(), 96, 54, 96, 54, 8, std::uint64_t(frame) * 20000, {}};
         picture(context, &p);
         ++frame;
         sleep_ms(20);

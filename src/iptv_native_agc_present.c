@@ -26,6 +26,7 @@
 #define DIRECT_MEMORY_TYPE 12
 #define MAP_PROTECTION 0x33
 #define VIDEO_OUT_PIXEL_FORMAT_SDR UINT64_C(0x8000000000000000)
+#define VIDEO_OUT_PIXEL_FORMAT_HDR UINT64_C(0x8100070400000000)
 #define PRESENT_WAIT_VBLANKS 120u
 #define LOADING_PITCH 1920u
 #define LOADING_SURFACE_HEIGHT 1088u
@@ -75,6 +76,12 @@ typedef struct video_attribute
     uint8_t reserved[80];
 } video_attribute_t;
 
+typedef struct video_output_status
+{
+    uint32_t resolution, dynamic_range;
+    uint64_t refresh_rate, flags, reserved[3];
+} video_output_status_t;
+
 int64_t sceKernelGetDirectMemorySize(void);
 int32_t sceKernelAllocateDirectMemory(int64_t search_start, int64_t search_end, size_t length,
                                       size_t alignment, int memory_type,
@@ -101,6 +108,9 @@ int sceVideoOutUnregisterBuffers(int32_t handle, int32_t set_index);
 int sceVideoOutIsFlipPending(int32_t handle);
 int sceVideoOutWaitVblank(int32_t handle);
 int sceVideoOutGetFlipStatus(int32_t handle, void *status);
+int sceVideoOutGetOutputStatus(int32_t handle, video_output_status_t *status);
+int sceVideoOutSubmitChangeBufferAttribute2(int32_t handle, int32_t set_index,
+                                            const video_attribute_t *attribute, const void *option);
 
 int32_t sceAgcInit(void *state, uint32_t size);
 int32_t sceAgcCreateShader(void **shader, void *header, void *code);
@@ -159,6 +169,8 @@ typedef struct iptv_native_agc_presenter
     size_t framebuffer_pool_bytes;
     uint8_t ready;
     uint8_t main10;
+    uint8_t hdr;
+    uint8_t report_output;
     void *overlay_surface;
     int64_t overlay_start;
     size_t overlay_bytes;
@@ -177,6 +189,32 @@ static _Atomic int present_cancelled;
 static _Atomic int overlay_enabled = 1;
 static iptv_native_osd_t draw_osd;
 static void *osd_context;
+
+int iptv_native_agc_hdr_active(void)
+{
+    return presenter.ready && presenter.hdr;
+}
+
+/* Called only after the previous presentation completes. Retype the existing
+ * registered buffers; unregistering a displayed set can fail with RESOURCE_BUSY. */
+static int switch_output(int hdr)
+{
+    if (presenter.hdr == hdr)
+        return 0;
+    video_attribute_t attribute = {0};
+    sceVideoOutSetBufferAttribute2(&attribute,
+                                   hdr ? VIDEO_OUT_PIXEL_FORMAT_HDR : VIDEO_OUT_PIXEL_FORMAT_SDR, 0,
+                                   presenter.output_width, presenter.output_height, 0, 0, 0);
+    const int result =
+        sceVideoOutSubmitChangeBufferAttribute2(presenter.video, 0, &attribute, NULL);
+    fprintf(stderr, "[TV] HDR output requested=%d result=0x%08x\n", hdr, (unsigned)result);
+    if (!result)
+    {
+        presenter.hdr = (uint8_t)hdr;
+        presenter.report_output = 1;
+    }
+    return result;
+}
 
 void iptv_native_agc_set_osd(iptv_native_osd_t draw, void *context)
 {
@@ -323,7 +361,8 @@ static const uint8_t *glyph_rows(char character)
 static void put_luma(uint8_t *luma, size_t index, uint8_t value, uint32_t component_bytes)
 {
     if (component_bytes == 2u)
-        ((uint16_t *)luma)[index] = (uint16_t)value << 2;
+        ((uint16_t *)luma)[index] =
+            presenter.hdr ? iptv_color_ui_luma(value) : (uint16_t)value << 2;
     else
         luma[index] = value;
 }
@@ -712,7 +751,7 @@ static int render_frame(int video, int buffer_index, void *target, uint8_t *memo
     cx[1].value &= 0xfc001fffu;
     cx[2].value = (cx[2].value & ~(0x7cu | 0x700u | 0x1800u | 0x10000000u | 0x10000u | 0x8000u |
                                    0x40000u | 0x4000u)) |
-                  0x28u | 0x8000u;
+                  ((presenter.hdr ? 9u : 10u) << 2) | 0x8000u;
     cx[3].value &= ~(0x7000u | 0x18000u);
     cx[4].value = (cx[4].value & ~(0x60u | 0x0cu | 0x00100200u | 0x80000u)) | 0x48u;
     cx[5].value = cx[6].value = cx[9].value = 0;
@@ -748,6 +787,14 @@ static int render_frame(int video, int buffer_index, void *target, uint8_t *memo
 
     memcpy(geometry_cb, geometry_constants, sizeof(geometry_constants));
     memcpy(pixel_cb, pixel_constants, sizeof(pixel_constants));
+    if (presenter.hdr)
+    {
+        // Preserve PQ after limited-range BT.2020 non-constant-luminance conversion.
+        ((uint32_t *)pixel_cb)[4] = float_bits(1.8814f);
+        ((uint32_t *)pixel_cb)[5] = float_bits(-.164553f);
+        ((uint32_t *)pixel_cb)[9] = float_bits(-.571353f);
+        ((uint32_t *)pixel_cb)[10] = float_bits(1.4746f);
+    }
     ((uint32_t *)pixel_cb)[12] = float_bits((float)visible_width);
     ((uint32_t *)pixel_cb)[13] = float_bits((float)visible_height);
     ((uint32_t *)pixel_cb)[14] = pitch;
@@ -1147,6 +1194,15 @@ int32_t iptv_native_agc_present_finish_frame(void)
             (int64_t)status[3] >= presenter.pending_marker)
         {
             presenter.pending_marker = 0;
+            if (presenter.report_output)
+            {
+                video_output_status_t output = {0};
+                const int result = sceVideoOutGetOutputStatus(presenter.video, &output);
+                fprintf(stderr,
+                        "[TV] HDR output readback result=0x%08x dynamic_range=%u flags=0x%llx\n",
+                        (unsigned)result, output.dynamic_range, (unsigned long long)output.flags);
+                presenter.report_output = 0;
+            }
             return 0;
         }
         sceVideoOutWaitVblank(presenter.video);
@@ -1222,12 +1278,15 @@ static int32_t present_nv12(const void *source, size_t source_bytes, uint32_t pi
             return result;
     }
 
+    result = switch_output(bit_depth == 10 && overlay && iptv_color_is_hdr10(overlay->color));
+    if (result)
+        return result;
     target = (uint8_t *)presenter.framebuffer + buffer_index * presenter.framebuffer_bytes;
     if (overlay)
     {
         const int osd_visible =
             draw_osd && draw_osd(osd_context, NULL, 0, pitch, surface_height, visible_width,
-                                 visible_height, bit_depth, overlay->pts_us);
+                                 visible_height, bit_depth, overlay->pts_us, presenter.hdr);
         if (overlay->field || overlay->cpu_written || osd_visible ||
             iptv_native_agc_overlay_enabled() || (!draw_osd && overlay->show_controls))
         {
@@ -1254,7 +1313,7 @@ static int32_t present_nv12(const void *source, size_t source_bytes, uint32_t pi
             if (osd_visible)
                 (void)draw_osd(osd_context, presenter.overlay_surface, source_bytes, pitch,
                                surface_height, visible_width, visible_height, bit_depth,
-                               overlay->pts_us);
+                               overlay->pts_us, presenter.hdr);
             flush_gpu_data(source, yuv_bytes);
         }
     }

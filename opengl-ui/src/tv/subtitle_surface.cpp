@@ -2,6 +2,7 @@
 // Copyright (C) 2026 BlackBearReloaded
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "tv/playback_osd.hpp"
+#include "iptv_color.h"
 #include <algorithm>
 #include <cstring>
 
@@ -9,11 +10,11 @@ namespace ptv
 {
 bool composite_subtitle_bitmaps(const iptv::SubtitleCue &cue, void *surface, std::size_t bytes,
                                 unsigned pitch, unsigned sh, unsigned vw, unsigned vh,
-                                unsigned depth)
+                                unsigned depth, bool hdr)
 {
-    if (!surface || (depth != 8 && depth != 10) || !vw || !vh || vw > pitch || vh > sh ||
-        pitch > 8192 || sh > 8192 || (pitch & 1u) || !cue.canvas_width || !cue.canvas_height ||
-        cue.canvas_width > 3840 || cue.canvas_height > 2160)
+    if (!surface || (depth != 8 && depth != 10) || (hdr && depth != 10) || !vw || !vh ||
+        vw > pitch || vh > sh || pitch > 8192 || sh > 8192 || (pitch & 1u) || !cue.canvas_width ||
+        !cue.canvas_height || cue.canvas_width > 3840 || cue.canvas_height > 2160)
         return false;
     const unsigned component = depth == 10 ? 2 : 1, scale = depth == 10 ? 4 : 1;
     const std::size_t y_bytes = static_cast<std::size_t>(pitch) * sh;
@@ -77,8 +78,14 @@ bool composite_subtitle_bitmaps(const iptv::SubtitleCue &cue, void *surface, std
                 if (!a)
                     continue;
                 const int r = (color >> 16) & 255, g = (color >> 8) & 255, b = color & 255;
-                const unsigned luma =
+                unsigned luma =
                     static_cast<unsigned>(16 + ((47 * r + 157 * g + 16 * b + 128) >> 8)) * scale;
+                if (hdr)
+                {
+                    std::uint16_t yuv[3];
+                    iptv_color_ui_yuv(r, g, b, yuv);
+                    luma = yuv[0];
+                }
                 const auto at = static_cast<std::size_t>(y) * pitch + x;
                 put(at, (get(at) * (255 - a) + luma * a + 127) / 255);
                 drawn = true;
@@ -97,16 +104,28 @@ bool composite_subtitle_bitmaps(const iptv::SubtitleCue &cue, void *surface, std
                         const unsigned a = color >> 24;
                         const int r = (color >> 16) & 255, g = (color >> 8) & 255, b = color & 255;
                         alpha += a;
-                        u += a * static_cast<unsigned>(std::clamp(
+                        if (hdr)
+                        {
+                            std::uint16_t yuv[3];
+                            iptv_color_ui_yuv(r, g, b, yuv);
+                            u += a * yuv[1];
+                            v += a * yuv[2];
+                        }
+                        else
+                        {
+                            u += a * scale *
+                                 static_cast<unsigned>(std::clamp(
                                      128 + ((-26 * r - 87 * g + 113 * b + 128) >> 8), 16, 240));
-                        v += a *
-                             static_cast<unsigned>(128 + ((112 * r - 102 * g - 10 * b + 128) >> 8));
+                            v += a * scale *
+                                 static_cast<unsigned>(128 +
+                                                       ((112 * r - 102 * g - 10 * b + 128) >> 8));
+                        }
                     }
                 if (alpha)
                 {
                     const auto at = y_bytes + static_cast<std::size_t>(y / 2) * pitch + x;
-                    put(at, (get(at) * (1020 - alpha) + u * scale + 510) / 1020);
-                    put(at + 1, (get(at + 1) * (1020 - alpha) + v * scale + 510) / 1020);
+                    put(at, (get(at) * (1020 - alpha) + u + 510) / 1020);
+                    put(at + 1, (get(at + 1) * (1020 - alpha) + v + 510) / 1020);
                 }
             }
     }

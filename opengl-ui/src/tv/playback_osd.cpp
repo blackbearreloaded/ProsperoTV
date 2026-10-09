@@ -6,6 +6,7 @@
 #include "tv/platform.hpp"
 #include "core/save_file.hpp"
 #include "iptv_input.h"
+#include "iptv_color.h"
 #include <algorithm>
 #include <cmath>
 #include <cstring>
@@ -69,11 +70,11 @@ void VideoPanel::text(const hui::gfx::Font &font, std::string_view value, float 
 }
 
 bool VideoPanel::composite(void *surface, std::size_t bytes, unsigned pitch, unsigned sh,
-                           unsigned vw, unsigned vh, unsigned depth) const
+                           unsigned vw, unsigned vh, unsigned depth, bool hdr) const
 {
-    if (!surface || (depth != 8 && depth != 10) || !vw || !vh || vw > pitch || vh > sh ||
-        pitch > 8192 || sh > 8192 || (pitch & 1u) || !width || !height || x > 1920 || y > 1080 ||
-        width > 1920 - x || height > 1080 - y ||
+    if (!surface || (depth != 8 && depth != 10) || (hdr && depth != 10) || !vw || !vh ||
+        vw > pitch || vh > sh || pitch > 8192 || sh > 8192 || (pitch & 1u) || !width || !height ||
+        x > 1920 || y > 1080 || width > 1920 - x || height > 1080 - y ||
         pixels.size() != static_cast<std::size_t>(width) * height)
         return false;
     const unsigned component = depth == 10 ? 2 : 1;
@@ -85,13 +86,14 @@ bool VideoPanel::composite(void *surface, std::size_t bytes, unsigned pitch, uns
     if (left == right || top == bottom)
         return false;
     auto *out = static_cast<std::uint8_t *>(surface);
-    const auto put = [&](std::size_t at, std::uint8_t value)
+    const auto put = [&](std::size_t at, std::uint8_t value, bool luma)
     {
         if (component == 1)
             out[at] = value;
         else
         {
-            const std::uint16_t word = static_cast<std::uint16_t>(value) << 2;
+            const std::uint16_t word =
+                hdr && luma ? iptv_color_ui_luma(value) : static_cast<std::uint16_t>(value) << 2;
             std::memcpy(out + at * 2, &word, sizeof(word));
         }
     };
@@ -100,12 +102,12 @@ bool VideoPanel::composite(void *surface, std::size_t bytes, unsigned pitch, uns
         const auto row = static_cast<std::size_t>((py - top) * height / (bottom - top)) * width;
         for (unsigned px = left; px < right; ++px)
             put(static_cast<std::size_t>(py) * pitch + px,
-                pixels[row + (px - left) * width / (right - left)]);
+                pixels[row + (px - left) * width / (right - left)], true);
     }
     // Neutral chroma for the panel, preserving all other video and row padding.
     for (unsigned py = top / 2; py < (bottom + 1) / 2; ++py)
         for (unsigned px = left & ~1u; px < ((right + 1) & ~1u); ++px)
-            put(y_size + static_cast<std::size_t>(py) * pitch + px, 128);
+            put(y_size + static_cast<std::size_t>(py) * pitch + px, 128, false);
     return true;
 }
 
@@ -565,7 +567,8 @@ void PlaybackOsd::paint_subtitles()
 
 bool PlaybackOsd::draw(void *surface, std::size_t bytes, unsigned pitch, unsigned sh, unsigned vw,
                        unsigned vh, unsigned depth, std::uint64_t now,
-                       const std::vector<std::shared_ptr<const iptv::SubtitleCue>> &subtitles)
+                       const std::vector<std::shared_ptr<const iptv::SubtitleCue>> &subtitles,
+                       bool hdr)
 {
     std::lock_guard lock(mutex_);
     if (!fonts_.regular.font)
@@ -594,18 +597,19 @@ bool PlaybackOsd::draw(void *surface, std::size_t bytes, unsigned pitch, unsigne
         }
         for (const auto &cue : subtitles)
             if (cue)
-                drawn =
-                    composite_subtitle_bitmaps(*cue, surface, bytes, pitch, sh, vw, vh, depth) ||
-                    drawn;
+                drawn = composite_subtitle_bitmaps(*cue, surface, bytes, pitch, sh, vw, vh, depth,
+                                                   hdr) ||
+                        drawn;
         if (subtitle_panel_.height)
         {
             subtitle_panel_.y =
                 (overlay ? (history_.available ? 660 : 740) : 1030) - subtitle_panel_.height;
-            drawn = subtitle_panel_.composite(surface, bytes, pitch, sh, vw, vh, depth) || drawn;
+            drawn =
+                subtitle_panel_.composite(surface, bytes, pitch, sh, vw, vh, depth, hdr) || drawn;
         }
     }
     if (overlay && dirty_)
         paint();
-    return (overlay && panel_.composite(surface, bytes, pitch, sh, vw, vh, depth)) || drawn;
+    return (overlay && panel_.composite(surface, bytes, pitch, sh, vw, vh, depth, hdr)) || drawn;
 }
 } // namespace ptv

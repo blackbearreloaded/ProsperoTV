@@ -30,8 +30,9 @@ bool preview_pixels(const iptv_native_picture_t &p, ImagePixels *pixels)
     {
         if (component == 1)
             return source[offset];
-        // P010 stores its ten bits in the high bits of each little-endian word.
-        return source[offset * 2 + 1];
+        // VideoDec2 returns low-aligned ten-bit words, unlike standard P010.
+        return ((unsigned(source[offset * 2]) | (unsigned(source[offset * 2 + 1]) << 8)) & 1023u) >>
+               2;
     };
     const auto byte = [](int value)
     { return static_cast<std::uint8_t>(std::clamp(value, 0, 255)); };
@@ -45,6 +46,14 @@ bool preview_pixels(const iptv_native_picture_t &p, ImagePixels *pixels)
             const std::size_t uv = luma + std::size_t(sy / 2) * p.pitch + (sx & ~1u);
             const int u = sample(uv) - 128, v = sample(uv + 1) - 128;
             auto *out = pixels->rgba.data() + (std::size_t(y) * pixels->width + x) * 4;
+            if (component == 2 && iptv_color_is_hdr10(p.color))
+            {
+                const float y = float(yy) / 219, cb = float(u) / 224, cr = float(v) / 224;
+                iptv_color_pq_to_srgb(y + 1.4746f * cr, y - .164553f * cb - .571353f * cr,
+                                      y + 1.8814f * cb, out);
+                out[3] = 255;
+                continue;
+            }
             // Broadcast HD uses limited-range BT.709; SD uses BT.601.
             const bool hd = p.width >= 1280 || p.height > 576;
             out[0] = byte((298 * yy + (hd ? 459 : 409) * v + 128) >> 8);

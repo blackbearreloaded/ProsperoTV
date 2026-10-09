@@ -1365,13 +1365,13 @@ int main()
             iptv_native_agc_set_osd(
                 [](void *context, void *surface, std::size_t bytes, std::uint32_t pitch,
                    std::uint32_t sh, std::uint32_t width, std::uint32_t height, std::uint32_t depth,
-                   std::uint64_t pts) -> int
+                   std::uint64_t pts, int hdr) -> int
                 {
                     const auto subtitles = iptv::player_subtitles().at(
                         pts <= INT64_MAX ? static_cast<std::int64_t>(pts) : -1);
                     return static_cast<ptv::PlaybackOsd *>(context)->draw(
                                surface, bytes, pitch, sh, width, height, depth,
-                               ptv::platform::monotonic_us(), subtitles)
+                               ptv::platform::monotonic_us(), subtitles, hdr != 0)
                                ? 1
                                : 0;
                 },

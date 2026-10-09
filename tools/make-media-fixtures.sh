@@ -166,4 +166,18 @@ for order in 0 1 2; do
         -t 1 -an "${field_options[@]}" -c:v libx264 -threads 2 -x264-params "$params" \
         -map 0:v -f tee "[f=h264]$output/fields-$order.h264|[f=mpegts]$output/fields-$order.ts"
 done
+for color in pq sdr full hlg unknown; do
+    signaling=(-color_primaries bt2020 -color_trc smpte2084 -colorspace bt2020nc -color_range tv)
+    vui=colorprim=9:transfer=16:colormatrix=9:range=limited
+    case "$color" in
+        sdr) signaling=(-color_primaries bt709 -color_trc bt709 -colorspace bt709 -color_range tv); vui=colorprim=1:transfer=1:colormatrix=1:range=limited ;;
+        full) signaling=(-color_primaries bt2020 -color_trc smpte2084 -colorspace bt2020nc -color_range pc); vui=colorprim=9:transfer=16:colormatrix=9:range=full ;;
+        hlg) signaling=(-color_primaries bt2020 -color_trc arib-std-b67 -colorspace bt2020nc -color_range tv); vui=colorprim=9:transfer=18:colormatrix=9:range=limited ;;
+        unknown) signaling=(); vui=colorprim=2:transfer=2:colormatrix=2 ;;
+    esac
+    ffmpeg -hide_banner -loglevel error -y -f lavfi -i testsrc2=size=160x96:rate=1 \
+        -frames:v 1 -pix_fmt yuv420p10le -c:v libx265 -threads 1 \
+        -x265-params "pools=1:frame-threads=1:log-level=error:repeat-headers=1:$vui" \
+        "${signaling[@]}" -f hevc "$output/color-$color.hevc"
+done
 printf '%s\n' "$stamp" > "$output/.complete"

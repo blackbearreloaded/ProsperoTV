@@ -1369,9 +1369,10 @@ int32_t iptv_native_backend_open(iptv_native_backend_t *backend,
         iptv_native_agc_present_set_cancelled(0);
 
     result = initialize_video(state);
-    if (result == 0 && config->codec == IPTV_NATIVE_CODEC_H264)
+    if (result == 0 &&
+        (config->codec == IPTV_NATIVE_CODEC_H264 || config->codec == IPTV_NATIVE_CODEC_HEVC))
     {
-        state->field_parser = iptv_field_parser_create();
+        state->field_parser = iptv_field_parser_create(config->codec);
         if (!state->field_parser)
             result = -12;
     }
@@ -1665,13 +1666,14 @@ static int32_t present_video_output(backend_state_t *state, const videodec2_fram
             presentation_pts_us,
             field_count > 1 ? 1 + ((fields.first - 1 + field_index) & 1u) : 0,
             state->telemetry.software_video,
+            fields.color,
         };
         if (state->config.picture)
         {
             const iptv_native_picture_t picture = {
                 output->buffer,          (size_t)output->buffer_size, output->pitch,
                 output->height,          state->config.visible_width, state->config.visible_height,
-                state->config.bit_depth, presentation_pts_us};
+                state->config.bit_depth, presentation_pts_us,         fields.color};
             state->config.picture(state->config.picture_context, &picture);
             result = 0;
         }
@@ -1691,10 +1693,12 @@ static int32_t present_video_output(backend_state_t *state, const videodec2_fram
         if (result != 0)
             goto failed;
         state->pending_present_pts_us = presentation_pts_us;
+        state->telemetry.color = fields.color;
+        state->telemetry.hdr_output = !state->config.picture && iptv_native_agc_hdr_active();
         state->pause_picture = (iptv_native_picture_t){
             output->buffer,          (size_t)output->buffer_size, output->pitch,
             output->height,          state->config.visible_width, state->config.visible_height,
-            state->config.bit_depth, presentation_pts_us};
+            state->config.bit_depth, presentation_pts_us,         fields.color};
         state->pause_field = overlay.field;
         state->pending_present_source = output->buffer;
         state->pending_present_from_drain = (uint8_t)(from_drain != 0);
@@ -1986,7 +1990,8 @@ static int32_t pause_video(backend_state_t *state)
             const iptv_native_video_overlay_t overlay = {
                 state->config.codec,    picture->width,      picture->height,
                 state->frame_rate_x100, state->bitrate_kbps, 0,
-                picture->pts_us,        state->pause_field,  state->telemetry.software_video};
+                picture->pts_us,        state->pause_field,  state->telemetry.software_video,
+                picture->color};
             result = iptv_native_agc_present_yuv_deferred(
                 picture->data, picture->bytes, picture->pitch, picture->surface_height,
                 picture->width, picture->height, picture->bit_depth, &overlay);
