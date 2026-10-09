@@ -5,6 +5,7 @@
 #include "tv/vod_screen.hpp"
 #include "tv/category_path.hpp"
 #include "tv/draw.hpp"
+#include <chrono>
 #include <algorithm>
 #include <map>
 
@@ -166,10 +167,37 @@ void VodScreen::handle(const InputFrame &input, ui::Feedback &feedback)
         --view.vod_focus;
     if (input.nav == Direction::down)
         ++view.vod_focus;
-    if (input.is_pressed(Action::jump_prev))
-        view.vod_focus -= kRows;
-    if (input.is_pressed(Action::jump_next))
-        view.vod_focus += kRows;
+    // L2 and R2 turn a page; held, they keep turning: after 0.4 s every
+    // 0.12 s, after 1.6 s every 0.07 s, then two, four and eight pages a turn
+    // (a provider's "all movies" is tens of thousands of rows).
+    {
+        const double now =
+            std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch())
+                .count();
+        const int pressed = input.is_pressed(Action::jump_next)   ? 1
+                            : input.is_pressed(Action::jump_prev) ? -1
+                                                                  : 0;
+        const int held = input.is_held(Action::jump_next)   ? 1
+                         : input.is_held(Action::jump_prev) ? -1
+                                                            : 0;
+        int pages = 0;
+        if (pressed != 0)
+        {
+            page_dir_ = pressed;
+            page_started_ = now;
+            page_due_ = 0.40;
+            pages = pressed;
+        }
+        else if (held == 0 || held != page_dir_)
+            page_dir_ = 0;
+        else if (now - page_started_ >= page_due_)
+        {
+            const double hold = now - page_started_;
+            page_due_ += hold >= 1.6 ? 0.07 : 0.12;
+            pages = held * (hold >= 7.0 ? 8 : hold >= 5.0 ? 4 : hold >= 3.0 ? 2 : 1);
+        }
+        view.vod_focus += pages * kRows;
+    }
     view.vod_focus = std::clamp(view.vod_focus, 0, std::max(0, static_cast<int>(rows_.size()) - 1));
     if (old != view.vod_focus)
         feedback.play(audio::Cue::focus);

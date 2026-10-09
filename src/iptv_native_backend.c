@@ -64,6 +64,13 @@ unsigned iptv_native_get_volume(void)
 #define PACE_BACKWARD_TOLERANCE_US UINT64_C(100000)
 #define PACE_REBASE_LATE_US UINT64_C(50000)
 #define PACE_DROP_LATE_US UINT64_C(500000)
+// Pacing by the sound. A picture is on the screen about a frame after it is
+// handed over, so it is handed over that much before its sound. A picture
+// more than a tenth of a second behind its sound is left out, one in four
+// still shown, until the picture has caught up: at 60 pictures a second on a
+// 60 Hz screen, showing them "at once" gains nothing.
+#define PACE_SOUND_LEAD_US UINT64_C(40000)
+#define PACE_SOUND_BEHIND_US UINT64_C(100000)
 #define CONTROLS_OVERLAY_US UINT64_C(5000000)
 
 #define IPTV_NATIVE_E_ARGUMENT (-1000)
@@ -336,6 +343,14 @@ typedef struct backend_state
     _Atomic int audio_worker_discard;
     _Atomic int audio_worker_result;
     _Atomic int audio_sync_pending;
+    // The sound's clock: the timestamp of the audio frame last handed to the
+    // output, and when. The picture is paced against it (pace_before_present).
+    _Atomic uint64_t audio_clock_pts_us;
+    _Atomic uint64_t audio_clock_time_us;
+    _Atomic uint32_t audio_clock_generation;
+    uint64_t av_report_us;
+    int64_t av_offset_min_us;
+    int64_t av_offset_max_us;
     video_queue_item_t *video_queue;
     void *video_thread;
     _Atomic uint32_t video_queue_read;
@@ -379,6 +394,7 @@ typedef struct backend_state
     uint8_t drain_started;
     uint8_t video_drained;
     uint8_t pace_active;
+    uint8_t pace_dropped_in_a_row;
     uint32_t video_generation;
     _Atomic uint32_t audio_generation;
 } backend_state_t;
@@ -1078,6 +1094,24 @@ static int32_t disable_audio_internal(backend_state_t *state, int32_t result)
     return cleanup_result;
 }
 
+// Where the sound is now, as a stream timestamp. False while there is no
+// sound to follow: none in the stream, not started or realigning, paused,
+// starved, or from before a seek.
+static int audio_clock_now(const backend_state_t *state, uint64_t now, uint64_t *pts_us)
+{
+    const uint64_t at = atomic_load_explicit(&state->audio_clock_time_us, memory_order_acquire);
+    const uint64_t pts = atomic_load(&state->audio_clock_pts_us);
+    if (!at || pts == UINT64_MAX || now < at || now - at > UINT64_C(250000) ||
+        atomic_load(&state->audio_sync_pending) || atomic_load(&state->paused) ||
+        atomic_load(&state->audio_clock_generation) != state->video_generation)
+        return 0;
+    *pts_us = pts + (now - at);
+    return 1;
+}
+
+// The diagnostic log, every five seconds: how far the picture was from the sound.
+static void trace_av_offset(backend_state_t *state, uint64_t pts_us, uint64_t now);
+
 static int32_t pace_before_present(backend_state_t *state, uint64_t pts_us, int *drop_frame)
 {
     uint64_t now = monotonic_us();
@@ -1089,6 +1123,64 @@ static int32_t pace_before_present(backend_state_t *state, uint64_t pts_us, int 
     *drop_frame = 0;
     if (pts_us == UINT64_MAX)
         return 0;
+
+    // With sound, the sound is the clock. A picture is shown when the sound
+    // reaches its timestamp: early pictures wait, late ones are shown at once
+    // so the picture catches up, and one that is far behind is left out.
+    // The wall-clock pace below let every late picture move its base, so each
+    // hiccup (the first is the output opening when a channel starts) left the
+    // sound further ahead for good: 0.8 to 2 seconds, measured on a console.
+    uint64_t sound;
+    if (audio_clock_now(state, now, &sound))
+    {
+        sound += PACE_SOUND_LEAD_US;
+        state->pace_last_pts_us = pts_us;
+        if (pts_us <= sound)
+        {
+            const uint64_t late = sound - pts_us;
+            state->pace_active = 0; // without sound again, the wall-clock pace starts afresh
+            if (late >= PACE_BACKWARD_TOLERANCE_US)
+            {
+                ++state->telemetry.pacing_late_frames;
+                if (late > state->telemetry.pacing_max_late_us)
+                    state->telemetry.pacing_max_late_us = late;
+            }
+            // Behind: leave pictures out to catch up, but show one in four so
+            // a decoder that cannot keep up still shows something.
+            if (late >= PACE_SOUND_BEHIND_US && ++state->pace_dropped_in_a_row < 4u)
+            {
+                *drop_frame = 1;
+                ++state->telemetry.dropped_late_video_frames;
+            }
+            else
+                state->pace_dropped_in_a_row = 0;
+            return 0;
+        }
+        state->pace_dropped_in_a_row = 0;
+        uint64_t wait = pts_us - sound;
+        if (wait > PACE_MAX_WAIT_US)
+            wait = PACE_MAX_WAIT_US; // a jump in the timestamps; the next picture asks again
+        ++state->telemetry.pacing_waits;
+        const uint64_t until = now + wait;
+        while (now < until)
+        {
+            const uint64_t remaining = until - now;
+            if (atomic_load_explicit(&state->stop_requested, memory_order_relaxed) ||
+                (state->config.picture_cancelled &&
+                 state->config.picture_cancelled(state->config.picture_context)))
+                return IPTV_NATIVE_E_CANCELLED;
+            const int32_t slept = sceKernelUsleep(
+                remaining > PACE_SLEEP_SLICE_US ? PACE_SLEEP_SLICE_US : (uint32_t)remaining);
+            if (slept < 0)
+                return slept;
+            now = monotonic_us();
+        }
+        // The wall-clock pace, should the sound stop, goes on from here.
+        state->pace_active = 1;
+        state->pace_base_pts_us = pts_us;
+        state->pace_base_clock_us = now;
+        return 0;
+    }
 
     if (!state->pace_active || pts_us < state->pace_base_pts_us ||
         pts_us + PACE_BACKWARD_TOLERANCE_US < state->pace_last_pts_us ||
@@ -1447,6 +1539,7 @@ static int32_t complete_pending_presentation(backend_state_t *state)
     atomic_store_explicit(&state->presented_generation, state->video_generation,
                           memory_order_release);
     rate_now = monotonic_us();
+    trace_av_offset(state, state->pending_present_pts_us, rate_now);
     if (state->last_present_monotonic_us != 0)
     {
         elapsed = rate_now - state->last_present_monotonic_us;
@@ -1997,6 +2090,39 @@ static void trace_playback_buffer(const backend_state_t *state, const char *even
              (unsigned)(atomic_load(&state->video_queue_bytes) / 1024u), audio_write - audio_read,
              (unsigned long long)(gate && now >= gate ? (now - gate) / 1000u : 0));
     tv_diag_line(line);
+}
+
+static void trace_av_offset(backend_state_t *state, uint64_t pts_us, uint64_t now)
+{
+    uint64_t sound;
+    if (pts_us == UINT64_MAX || !audio_clock_now(state, now, &sound))
+        return;
+    const int64_t offset = (int64_t)(pts_us - sound); // above zero: the picture is ahead
+    if (!state->av_report_us)
+    {
+        state->av_report_us = now;
+        state->av_offset_min_us = state->av_offset_max_us = offset;
+    }
+    if (offset < state->av_offset_min_us)
+        state->av_offset_min_us = offset;
+    if (offset > state->av_offset_max_us)
+        state->av_offset_max_us = offset;
+    if (now - state->av_report_us < UINT64_C(5000000))
+        return;
+    if (tv_diag_enabled())
+    {
+        char line[160];
+        snprintf(
+            line, sizeof(line),
+            "[player] picture against sound: %lld to %lld ms (below zero: the sound is ahead); "
+            "late frames %llu, pace restarts %llu",
+            (long long)(state->av_offset_min_us / 1000),
+            (long long)(state->av_offset_max_us / 1000),
+            (unsigned long long)state->telemetry.pacing_late_frames,
+            (unsigned long long)state->telemetry.pacing_resets);
+        tv_diag_line(line);
+    }
+    state->av_report_us = 0;
 }
 
 static void restart_playback_buffer(backend_state_t *state)
@@ -2606,6 +2732,15 @@ static void *audio_worker_entry(void *argument)
             atomic_store(&state->audio_sync_pending, 0);
         }
         const int32_t result = decode_audio_frame(state, item->data, item->bytes, item->pts_us);
+        if (result == 0 && item->pts_us != UINT64_MAX)
+        {
+            // The output takes a frame as fast as it plays it, so this moment
+            // is, within a frame, when its first sample is heard.
+            atomic_store(&state->audio_clock_generation, state->audio_generation);
+            atomic_store(&state->audio_clock_pts_us, item->pts_us);
+            atomic_store_explicit(&state->audio_clock_time_us, monotonic_us(),
+                                  memory_order_release);
+        }
         atomic_store_explicit(&state->audio_queue_read, read + 1u, memory_order_release);
         had_data = 1;
         empty_reported = 0;

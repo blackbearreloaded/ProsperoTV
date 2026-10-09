@@ -42,5 +42,8 @@ class VodScreen
     std::vector<Row> rows_;
     unsigned revision_ = ~0u, model_revision_ = ~0u;
     int top_ = 0;
+    // A held L2 or R2 keeps turning pages, faster the longer it is held.
+    int page_dir_ = 0;
+    double page_started_ = 0.0, page_due_ = 0.0;
 };
 } // namespace ptv

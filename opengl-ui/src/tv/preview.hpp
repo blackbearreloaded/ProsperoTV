@@ -51,7 +51,7 @@ class LivePreview
     }
     void set_audio(bool audible)
     {
-        audio_.requested.store(multiview_ && audible);
+        audio_.requested.store(audible);
     }
     bool audio_active() const
     {

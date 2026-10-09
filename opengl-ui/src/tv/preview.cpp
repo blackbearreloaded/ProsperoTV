@@ -138,6 +138,10 @@ void LivePreview::update(std::optional<PlayRequest> request, float dt)
         done_.store(false);
         ready_.store(false);
         audio_.failed.store(false);
+        // The preview in the large television is heard as well as seen; in a
+        // mosaic the screen says which tile has the sound.
+        if (!multiview_)
+            audio_.requested.store(true);
         thread_ = platform::thread_start(work, this, 2u * 1024u * 1024u, "ptv-preview");
     }
 }
@@ -183,7 +187,7 @@ void *LivePreview::work(void *self)
                 p.ready_.store(true);
             }
         },
-        &receiver, p.multiview_ ? &p.audio_ : nullptr);
+        &receiver, &p.audio_);
     p.done_.store(true);
     return nullptr;
 }
