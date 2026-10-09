@@ -21,7 +21,6 @@ PACBREW_INCLUDE_PATHS ?=
 PACBREW_STATIC_ARCHIVES ?=
 PS5_HOST ?=
 FTP_PORT ?= 2121
-DEPLOY_FORMAT ?= folder
 PS5_FTP_USER ?= anonymous
 PS5_FTP_PASSWORD ?= codex
 DEPLOY_DRY_RUN ?= 0
@@ -38,7 +37,7 @@ HOST_TEST_LIBS ?= -lsqlite3
 GTEST_ARGS ?=
 export APP_DEFINITIONS APP_CXXFLAGS APP_INCLUDE_PATHS APP_STATIC_ARCHIVES APP_IMPORT_STUBS APP_RUNTIME_MODULES
 export PACBREW_PACKAGES PACBREW_INCLUDE_PATHS PACBREW_STATIC_ARCHIVES
-export PS5_HOST FTP_PORT DEPLOY_FORMAT PS5_FTP_USER PS5_FTP_PASSWORD DEPLOY_DRY_RUN
+export PS5_HOST FTP_PORT PS5_FTP_USER PS5_FTP_PASSWORD DEPLOY_DRY_RUN
 export TITLE_ID APP_NAME APP_CATEGORY CONTENT_SUFFIX
 
 RUNTIME := runtime/libc.prx
@@ -58,7 +57,7 @@ PACBREW_STATIC_ARCHIVES += lib/libsqlite3.a
 HOST_UNIT_TEST := build/tests/iptv_core_tests
 HOST_ELEVATION_TEST := build/tests/elevation_client_test
 
-.PHONY: all app build init doctor test test-deps test-unit test-integration libc deps pacbrew pacbrew-list assets-check format format-check tidy lint check ffpkg deploy undeploy clean distclean help
+.PHONY: all app build init doctor test test-deps test-unit test-integration libc deps pacbrew pacbrew-list assets-check format format-check tidy lint check deploy undeploy clean distclean help
 
 all: app
 build: app
@@ -162,12 +161,8 @@ app: $(RUNTIME)
 	@printf '%s\n' '==> [app] Compiling, linking, signing, and assembling the app folder'
 	@bash tools/build.sh Folder
 
-ffpkg: $(RUNTIME)
-	@printf '%s\n' '==> [ffpkg] Building the app folder and UFS2 image'
-	@bash tools/build.sh Ffpkg
-
 deploy:
-	@printf '%s\n' '==> [deploy] Building and publishing the selected app output over FTP'
+	@printf '%s\n' '==> [deploy] Building and publishing the app folder over FTP'
 	@bash tools/deploy.sh
 
 undeploy:
@@ -220,12 +215,11 @@ help:
 	  'make tidy            Run the shared Clang static-analysis policy' \
 	  'make lint            Run format, tidy, metadata, and shell checks' \
 	  'make check           Run lint and build the skeleton app' \
-	  'make ffpkg           Build the folder and UFS2 .ffpkg image' \
 	  'make deploy PS5_HOST=<address>  Build and FTP-deploy the app folder' \
 	  'make undeploy PS5_HOST=<address>  Remove this title from /data/homebrew' \
 	  'Build variables:     APP_DEFINITIONS, APP_INCLUDE_PATHS, APP_STATIC_ARCHIVES, APP_RUNTIME_MODULES' \
 	  'PacBrew variables:   PACBREW_PACKAGES, PACBREW_INCLUDE_PATHS, PACBREW_STATIC_ARCHIVES' \
-	  'Deploy variables:    FTP_PORT=2121, DEPLOY_FORMAT=folder|ffpkg, DEPLOY_DRY_RUN=0|1' \
+	  'Deploy variables:    FTP_PORT=2121, DEPLOY_DRY_RUN=0|1' \
 	  'Local defaults:      Copy .env.example to the ignored .env file' \
 	  'make clean           Remove build/, dist/, and generated libc.prx' \
 	  'make distclean       Also remove the ignored .deps/ cache'

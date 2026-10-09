@@ -8,12 +8,11 @@
 set -euo pipefail
 
 root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
-format=${1:-Folder}
-format=${format,,}
-case "$format" in folder|ffpkg) ;; *)
-    echo "usage: tools/build.sh [Folder|Ffpkg]" >&2
+# The app folder is the only output. "Folder" is still accepted from older callers.
+[[ $# -eq 0 || ($# -eq 1 && ${1,,} == folder) ]] || {
+    echo "usage: tools/build.sh [Folder]" >&2
     exit 2
-esac
+}
 # What a build that is not a release calls itself, such as a pull request's number and
 # commit. Checked before anything is built; written into the app folder further down.
 if [[ -n ${BUILD_LABEL:-} ]]; then
@@ -416,20 +415,4 @@ PY
 done
 "$tool" self --inspect --file "$app/eboot.bin"
 
-if [[ $format == ffpkg ]]; then
-    ufs2tool=$(bash "$root/tools/setup-packaging-dependencies.sh" ffpkg)
-    rm -f -- "$dist/$title_id.ffpkg"
-    "$ufs2tool" makefs -S 4096 -b 20% -t ffs \
-        -o version=2,bsize=32768,fsize=4096,minfree=0,softupdates=0,optimization=space \
-        "$dist/$title_id.ffpkg" "$app"
-    python3 - "$dist/$title_id.ffpkg" <<'PY'
-import struct, sys
-with open(sys.argv[1], "rb") as stream:
-    stream.seek(0x1055c)
-    if struct.unpack("<I", stream.read(4))[0] != 0x19540119:
-        raise SystemExit("FFPKG is missing the UFS2 superblock magic")
-PY
-fi
-
 printf 'Build complete.\nApp folder: %s\n' "$app"
-[[ $format != ffpkg ]] || printf 'FFPKG:     %s\n' "$dist/$title_id.ffpkg"

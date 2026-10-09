@@ -338,7 +338,7 @@ int main() {
         )
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn(f"/data/homebrew/{TITLE_ID}/", result.stdout)
-        # A compressed image left by an older version is still cleaned up.
+        # An image left by an older version is still cleaned up.
         self.assertIn(f"{TITLE_ID}.{{ffpkg,ffpfsc}}", result.stdout)
         self.assertIn("no network request was sent", result.stdout)
 
@@ -357,8 +357,10 @@ int main() {
             mock_make = mock_bin / "make"
             mock_make.write_text(
                 "#!/usr/bin/env bash\n"
-                "mkdir -p \"$MOCK_ROOT/dist\"\n"
-                "printf package > \"$MOCK_ROOT/dist/PPSA12345.ffpkg\"\n",
+                "printf '%s\\n' \"$*\" > \"$MOCK_ROOT/make-arguments\"\n"
+                "mkdir -p \"$MOCK_ROOT/dist/PPSA12345/sce_sys\"\n"
+                "printf eboot > \"$MOCK_ROOT/dist/PPSA12345/eboot.bin\"\n"
+                "printf param > \"$MOCK_ROOT/dist/PPSA12345/sce_sys/param.json\"\n",
                 encoding="utf-8",
             )
             mock_make.chmod(0o755)
@@ -367,7 +369,6 @@ int main() {
             environment.update(
                 PS5_HOST="192.0.2.1",
                 DEPLOY_DRY_RUN="1",
-                DEPLOY_FORMAT="ffpkg",
                 MOCK_ROOT=str(sandbox),
                 PATH=f"{mock_bin}{os.pathsep}{environment['PATH']}",
             )
@@ -380,8 +381,26 @@ int main() {
                 text=True,
             )
             self.assertEqual(result.returncode, 0, result.stderr)
-            self.assertIn("/data/homebrew/PPSA12345.ffpkg", result.stdout)
+            self.assertIn("/data/homebrew/PPSA12345/\n", result.stdout)
+            self.assertIn("Would publish 2 files", result.stdout)
             self.assertIn("no network request was sent", result.stdout)
+            built = sandbox / "make-arguments"
+            self.assertEqual(built.read_text(encoding="utf-8").split()[-1], "app")
+
+            # The folder is the only output: an image format is refused before any build.
+            built.unlink()
+            environment["DEPLOY_FORMAT"] = "ffpkg"
+            refused = subprocess.run(
+                ["bash", str(sandbox / "tools/deploy.sh")],
+                cwd=sandbox,
+                env=environment,
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(refused.returncode, 2, refused.stdout)
+            self.assertIn("DEPLOY_FORMAT", refused.stderr)
+            self.assertFalse(built.exists())
 
     def test_boilerplate_runtime_and_title_layout_are_preserved(self):
         manifest = (ROOT / "runtime/libc.prx.sha256").read_text(encoding="utf-8").split()
@@ -424,13 +443,24 @@ int main() {
         needed = ("contents: read", "id-token: write", "attestations: write")
         for permission in needed:
             self.assertIn(f"      {permission}\n", workflow)
-        # The compressed image is gone: no target, no script branch, no tooling.
+        # No image is built: no target, no build mode, no script branch, no tooling.
+        gone = ("ffpkg", "ffpfsc", "exfat", "ufs2tool", "mkpfs")
         for name in ("Makefile", "tools/build.sh", "build.ps1",
-                     "tools/setup-packaging-dependencies.sh"):
+                     ".github/workflows/tooling.yml"):
             text = (ROOT / name).read_text(encoding="utf-8").lower()
-            self.assertNotIn("ffpfsc", text, name)
-            self.assertNotIn("mkpfs", text, name)
-        self.assertFalse((ROOT / "tools/setup-mkpfs-tooling.ps1").exists())
+            for word in gone:
+                self.assertNotIn(word, text, name)
+        makefile = (ROOT / "Makefile").read_text(encoding="utf-8")
+        self.assertNotIn("\npackages:", makefile)
+        self.assertNotIn("DEPLOY_FORMAT", makefile)
+        self.assertNotIn("OutputFormat", (ROOT / "build.ps1").read_text(encoding="utf-8"))
+        for name in ("setup-packaging-dependencies.sh", "setup-ffpkg-tooling.ps1",
+                     "setup-mkpfs-tooling.ps1", "pack-exfat.py"):
+            self.assertFalse((ROOT / "tools" / name).exists(), name)
+        # A deploy builds and uploads the folder; it only deletes an old image.
+        deploy = (ROOT / "tools/deploy.sh").read_text(encoding="utf-8")
+        self.assertIn('make -C "$root" --no-print-directory app\n', deploy)
+        self.assertNotIn("$format", deploy)
 
     def test_release_job_never_replaces_published_files(self):
         workflow = (ROOT / ".github/workflows/tooling.yml").read_text(encoding="utf-8")

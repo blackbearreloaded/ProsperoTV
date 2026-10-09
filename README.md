@@ -217,7 +217,7 @@ sudo apt install clang-18 clang-format-18 clang-tidy-18 curl git lld-18 make \
 ```
 
 The build downloads, verifies, and caches the public PS5 Payload SDK, zlib,
-PacBrew's SQLite port, GoogleTest, and the selected packaging tools below the
+PacBrew's SQLite port, and GoogleTest below the
 ignored `.deps/` directory. No proprietary Sony SDK, firmware module,
 encryption key, or game asset is included or fetched.
 

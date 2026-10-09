@@ -15,9 +15,8 @@ and reliability.
 ProsperoTV builds on and acknowledges:
 
 - [PS5 Native App Boilerplate](https://github.com/blackbearreloaded/ps5-native-app-boilerplate),
-  [PS5 Payload SDK](https://github.com/ps5-payload-dev/sdk),
-  [PacBrew](https://github.com/ps5-payload-dev/pacbrew-repo), and
-  [UFS2Tool](https://github.com/SvenGDK/UFS2Tool).
+  [PS5 Payload SDK](https://github.com/ps5-payload-dev/sdk), and
+  [PacBrew](https://github.com/ps5-payload-dev/pacbrew-repo).
 - [iptv-org/iptv](https://github.com/iptv-org/iptv) for the public channel
   catalog and metadata.
 - [ProsperoRadio](https://github.com/blackbearreloaded/ProsperoRadio) as the
@@ -129,14 +128,6 @@ release `v0.40.2`, verifies its published SHA-256, and extracts only the
 replace the pinned SDK or install files globally. PacBrew recipes and every
 linked third-party library retain their upstream licenses; applications must
 review those terms before redistribution.
-
-## Optional UFS2Tool dependency
-
-When `.ffpkg` output is requested, the platform bootstrapper fetches
-[SvenGDK/UFS2Tool](https://github.com/SvenGDK/UFS2Tool) at commit
-`b5307a60d5b4e3a68ba680e0e33cfadf05017c77` into the ignored
-`.deps/UFS2Tool` cache and builds it with the host .NET SDK. UFS2Tool is
-BSD-2-Clause software and is not distributed by this repository.
 
 ## Independently authored runtime shim
 

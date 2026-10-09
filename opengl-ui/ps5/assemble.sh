@@ -39,7 +39,7 @@ mkdir -p "$out"/{src,include,tools,vendor/ps5/sdk/stubs,assets/fonts,assets/audi
 cp -a "$kit/tooling" "$out/tooling"
 cp -a "$kit/runtime" "$out/runtime"
 for tool in build.sh build-host-tools.sh ninja-build.sh prepare-opengl.sh fetch-opengl-sdk.sh \
-    setup-native-dependencies.sh setup-pacbrew-dependencies.sh setup-packaging-dependencies.sh \
+    setup-native-dependencies.sh setup-pacbrew-dependencies.sh \
     rebuild-libc.sh validate-assets.sh; do
     cp "$kit/tools/$tool" "$out/tools/$tool"
 done
