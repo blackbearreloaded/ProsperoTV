@@ -211,6 +211,18 @@ int main() {
                             "-Xlinker", "--gc-sections", "-o", executable], cwd=ROOT, check=True)
             subprocess.run([executable], check=True, timeout=10)
 
+    def test_native_overlay_chroma_and_hdr_white(self):
+        with tempfile.TemporaryDirectory() as directory:
+            obj = str(Path(directory) / "overlay.o")
+            executable = str(Path(directory) / "overlay")
+            flags = ["-O1", "-g", "-ffunction-sections", "-fdata-sections",
+                     "-fsanitize=address,undefined", "-fno-omit-frame-pointer", "-Iinclude", "-Isrc"]
+            subprocess.run(["clang", "-std=gnu11", *flags, "-DIPTV_NATIVE_OVERLAY_TEST",
+                            "-c", "src/iptv_native_agc_present.c", "-o", obj], cwd=ROOT, check=True)
+            subprocess.run(["clang++", "-std=c++20", *flags, obj, "src/iptv_color.cpp",
+                            "-Wl,--gc-sections", "-o", executable], cwd=ROOT, check=True)
+            subprocess.run([executable], check=True, timeout=10)
+
     def test_http_receive_block_is_configured_on_template(self):
         http = (ROOT / "src/iptv_http.cpp").read_text()
         init = http.split("Status NetworkInit()", 1)[1].split("void NetworkShutdown()", 1)[0]
@@ -568,11 +580,10 @@ int main() {
             backend.index("result = iptv_native_agc_present_yuv_deferred("),
         )
 
-    def test_4k_hevc_reserves_six_decoder_picture_buffers(self):
+    def test_hevc_reserves_six_decoder_picture_buffers_at_every_resolution(self):
         backend = (ROOT / "src/iptv_native_backend.c").read_text(encoding="utf-8")
         self.assertIn(
-            "state->config.codec == IPTV_NATIVE_CODEC_HEVC && "
-            "state->mode->decoder_max_width >= 3840u) "
+            "state->config.codec == IPTV_NATIVE_CODEC_HEVC) "
             "decoder_config.max_dpb_frames = 6;",
             " ".join(backend.split()),
         )

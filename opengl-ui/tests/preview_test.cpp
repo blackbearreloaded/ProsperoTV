@@ -19,8 +19,8 @@ TEST(PreviewPixels, HdrPreviewMapsBlackPaperWhiteAndHighlightsToSdr)
         samples[y * 4 + 2] = 723; // About 1000 nits.
         samples[y * 4 + 3] = 940; // PQ peak.
     }
-    iptv_native_picture_t picture{samples.data(), samples.size() * 2, 4, 4, 4, 4, 10, 0,
-                                  {9, 16, 9, 1}};
+    iptv_native_picture_t picture{samples.data(),   samples.size() * 2, 4, 4, 4, 4, 10, 0,
+                                  {9, 16, 9, 1, {}}};
     ptv::ImagePixels pixels;
     ASSERT_TRUE(ptv::preview_pixels(picture, &pixels));
     EXPECT_EQ(pixels.rgba[0], 0);

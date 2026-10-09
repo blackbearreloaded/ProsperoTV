@@ -17,7 +17,7 @@ and relevant checks work.
 | Sleep timer | Stop playback at a selected deadline | Implemented; 134 UI sanitizer tests and PS5 build pass; console case pending |
 | Live pause/rewind | Pause and replay several minutes of the current live channel | Implemented for TS/HLS and direct VP9 WebM; 119 core tests, media/subtitle checks, PS5 build and native controls/expiry/format-change cases pass; native caption visibility and subjective sync remain acceptance checks |
 | Deinterlacing | Preserve field-rate motion on interlaced broadcast video | Implemented with parsed field order and spatial bob; 120 core and 25 media/field sanitizer checks and PS5 build pass; native 1080i controls, uninterrupted 50-field/s playback and separate-field PAFF camera acceptance pass |
-| HDR | Preserve HDR metadata and output HDR on compatible displays | In progress: HEVC color snapshots, HDR10 output selection, 203-nit UI/captions and SDR previews implemented; 26 media and 148 UI sanitizer tests pass; native output, transitions and display acceptance pending |
+| HDR | Preserve HDR metadata and output HDR on compatible displays | In progress: HEVC color snapshots, HDR10 output selection, 203-nit UI/captions and SDR previews implemented; 26 media and 148 UI sanitizer tests pass; native 1080p HDR10 output/readback and preview pass; transitions and display acceptance pending |
 | Multiview | Two or four simultaneous channels, within measured decoder limits | Pending |
 | Parental controls | PIN-protected adult categories and kids-only mode | Implemented; 132 UI sanitizer tests, 73 core tests and PS5 build pass; console case pending |
 | Profiles | Separate sources, favorites and history by signed-in console user | Implemented; isolation/migration sanitizer tests, PS5 build and console startup pass |
@@ -44,7 +44,7 @@ The [public HDR research](https://github.com/blackbearreloaded/ps5-hardware-vide
 documents the surface contract and limits of Remote Play color verification;
 [EVO Player](https://github.com/sainsaji/EVO-PLAYER-PS5) provides the public
 buffer-attribute transition reference. Native chart/transition/4K acceptance,
-mastering metadata, HLG, and unsupported-display fallback remain pending.
+HLG and unsupported-display fallback remain pending. Static mastering display and content light metadata now follow presentation timestamps and appear in receipts; forwarding custom mastering data to HDMI is unverified.
 
 ## Live pause and rewind foundations
 
@@ -535,7 +535,7 @@ work. These changes have not been installed on a console.
 Native baseline acceptance (2026-10-08): candidate `2a46313`, disposable title
 `PPSA88266`, passed 12-second playback of synthetic TS, MP4, Matroska and
 external-rendition HLS on the verified-idle console `.30`. Each produced
-260â€“281 video frames and 524â€“563 decoded audio frames, with requested stop,
+260–281 video frames and 524–563 decoded audio frames, with requested stop,
 clean native cleanup and healthy services after title exit. All 52 uploaded
 files matched the frozen package. Evidence: `results/roadmap/console-14/validation.json`.
 The generic runner flagged the settings label `hide_failed=0`; the scoped

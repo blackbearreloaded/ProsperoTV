@@ -323,7 +323,8 @@ void SaveReceipt(const char *channel_name, std::uint64_t duration_ms, int result
         "decoder_output_picture_count=%u\ndecoder_output_codec=%u\n"
         "decoder_output_width=%u\ndecoder_output_height=%u\ndecoder_output_pitch=%u\n"
         "decoder_frame_accepted=%u\nsoftware_video=%u\nsoftware_video_trigger=%d\n"
-        "color_primaries=%u\ncolor_transfer=%u\ncolor_matrix=%u\ncolor_range=%u\nhdr_output=%u\n"
+        "color_primaries=%u\ncolor_transfer=%u\ncolor_matrix=%u\ncolor_range=%u\nhdr_output=%"
+        "u\nhdr_metadata=%u\nhdr_mastering_peak=%u\nhdr_max_cll=%u\nhdr_max_fall=%u\n"
         "buffered_video_access_units=%llu\ndrained_video_frames=%llu\n"
         "dropped_delayed_frames=%llu\ndecoder_flushes=%llu\n"
         "drain_flush_limit_hits=%llu\npending_video_timestamps=%u\n"
@@ -373,7 +374,9 @@ void SaveReceipt(const char *channel_name, std::uint64_t duration_ms, int result
         native.decoder_output_codec, native.decoder_output_width, native.decoder_output_height,
         native.decoder_output_pitch, native.decoder_frame_accepted, native.software_video,
         native.software_video_trigger, native.color.primaries, native.color.transfer,
-        native.color.matrix, native.color.range, native.hdr_output,
+        native.color.matrix, native.color.range, native.hdr_output, native.color.hdr.flags,
+        native.color.hdr.max_luminance, unsigned(native.color.hdr.max_cll),
+        unsigned(native.color.hdr.max_fall),
         static_cast<unsigned long long>(native.buffered_video_access_units),
         static_cast<unsigned long long>(native.drained_video_frames),
         static_cast<unsigned long long>(native.dropped_delayed_frames),
@@ -487,7 +490,8 @@ void SaveReceipt(const char *channel_name, std::uint64_t duration_ms, int result
                          "decoder_output_valid=%u\ndecoder_output_error=%u\n"
                          "decoder_frame_accepted=%u\nsoftware_video=%u\nsoftware_video_trigger=%d\n"
                          "color_primaries=%u\ncolor_transfer=%u\ncolor_matrix=%u\ncolor_range=%"
-                         "u\nhdr_output=%u\n"
+                         "u\nhdr_output=%u\nhdr_metadata=%u\nhdr_mastering_peak=%u\nhdr_max_cll=%"
+                         "u\nhdr_max_fall=%u\n"
                          "decoded_frames=%llu\npresented_frames=%llu\n"
                          "present_gap_max_us=%llu\npresent_gaps_over_250ms=%llu\n"
                          "present_gaps_over_500ms=%llu\ndecode_max_us=%llu\npresent_max_us=%llu\n"
@@ -515,7 +519,9 @@ void SaveReceipt(const char *channel_name, std::uint64_t duration_ms, int result
                          native.decoder_frame_accepted, native.software_video,
                          native.software_video_trigger, native.color.primaries,
                          native.color.transfer, native.color.matrix, native.color.range,
-                         native.hdr_output, static_cast<unsigned long long>(native.decoded_frames),
+                         native.hdr_output, native.color.hdr.flags, native.color.hdr.max_luminance,
+                         unsigned(native.color.hdr.max_cll), unsigned(native.color.hdr.max_fall),
+                         static_cast<unsigned long long>(native.decoded_frames),
                          static_cast<unsigned long long>(native.presented_frames),
                          static_cast<unsigned long long>(native.present_gap_max_us),
                          static_cast<unsigned long long>(native.present_gaps_over_250ms),

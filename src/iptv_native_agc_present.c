@@ -136,6 +136,9 @@ uint32_t sceAgcDriverWaitUntilSafeForRendering(uint32_t **command, uint32_t pack
 #define IPTV_NATIVE_AGC_ASSET_ROOT "assets/private/"
 #endif
 
+#ifdef IPTV_NATIVE_OVERLAY_TEST
+#define EMBED_ASSET(symbol, path) extern const uint8_t symbol##_start[], symbol##_end[]
+#else
 #define EMBED_ASSET(symbol, path)                                                                  \
     __asm__(".section .rodata\n"                                                                   \
             ".global " #symbol "_start\n" #symbol "_start:\n"                                      \
@@ -144,6 +147,7 @@ uint32_t sceAgcDriverWaitUntilSafeForRendering(uint32_t **command, uint32_t pack
             ".text\n");                                                                            \
     extern const uint8_t symbol##_start[];                                                         \
     extern const uint8_t symbol##_end[]
+#endif
 
 EMBED_ASSET(iptv_agc_geometry_header, "geometry.header.bin");
 EMBED_ASSET(iptv_agc_geometry_code, "geometry.text.bin");
@@ -516,6 +520,28 @@ static void draw_disc(uint8_t *luma, uint32_t pitch, uint32_t width, uint32_t he
                 luma[(size_t)(center_y + y) * pitch + (uint32_t)(center_x + x)] = value;
 }
 
+static void fill_video_panel(uint8_t *source, uint32_t pitch, uint32_t surface_height,
+                             uint32_t visible_height, uint32_t x, uint32_t y, uint32_t width,
+                             uint32_t height, uint32_t component_bytes)
+{
+    const uint32_t bottom = height < visible_height - y ? y + height : visible_height;
+    for (uint32_t row = y; row < bottom; ++row)
+        fill_luma(source, (size_t)row * pitch + x, width, 32, component_bytes);
+    /* A neutral panel needs neutral chroma too. Retaining saturated video UV
+     * would tint text and can turn its bounded HDR white into a bright primary. */
+    const uint32_t left = x & ~1u, right = (x + width + 1u) & ~1u;
+    const size_t chroma = (size_t)pitch * surface_height;
+    for (uint32_t row = y / 2; row < (bottom + 1u) / 2u; ++row)
+        for (uint32_t column = left; column < right; ++column)
+        {
+            const size_t at = chroma + (size_t)row * pitch + column;
+            if (component_bytes == 2)
+                ((uint16_t *)source)[at] = 512;
+            else
+                source[at] = 128;
+        }
+}
+
 static void draw_video_overlay(void *source, size_t source_bytes, uint32_t pitch,
                                uint32_t surface_height, uint32_t visible_width,
                                uint32_t visible_height, const iptv_native_video_overlay_t *overlay,
@@ -554,8 +580,8 @@ static void draw_video_overlay(void *source, size_t source_bytes, uint32_t pitch
             width = (uint32_t)bytes * 6u * scale + 12u;
             if (width > visible_width - x)
                 width = visible_width - x;
-            for (uint32_t row = y; row < y + height && row < visible_height; ++row)
-                fill_luma(luma, (size_t)row * pitch + x, width, 32, component_bytes);
+            fill_video_panel(luma, pitch, surface_height, visible_height, x, y, width, height,
+                             component_bytes);
             draw_text(luma, pitch, visible_width, visible_height, text, x + 6u, y + 6u, scale, 235,
                       component_bytes);
             flush_gpu_data(
@@ -573,8 +599,8 @@ static void draw_video_overlay(void *source, size_t source_bytes, uint32_t pitch
         const uint32_t y = visible_height - (7u * scale + 34u);
         const uint32_t height = 7u * scale + 22u;
         const uint32_t clipped_width = width < visible_width ? width : visible_width;
-        for (uint32_t row = y; row < y + height && row < visible_height; ++row)
-            fill_luma(luma, (size_t)row * pitch + x, clipped_width, 32, component_bytes);
+        fill_video_panel(luma, pitch, surface_height, visible_height, x, y, clipped_width, height,
+                         component_bytes);
         draw_text(luma, pitch, visible_width, visible_height, help, x + 12u, y + 11u, scale, 235,
                   component_bytes);
         flush_gpu_data(luma + ((size_t)y * pitch + x) * component_bytes,
@@ -1380,3 +1406,44 @@ int32_t iptv_native_agc_present_shutdown(void)
     atomic_store_explicit(&present_cancelled, 0, memory_order_relaxed);
     return result;
 }
+
+#ifdef IPTV_NATIVE_OVERLAY_TEST
+#include <assert.h>
+int main(void)
+{
+    enum
+    {
+        pitch = 672,
+        height = 368,
+        width = 640,
+        visible_height = 360
+    };
+    uint16_t source[pitch * height * 3 / 2];
+    const iptv_native_video_overlay_t overlay = {
+        .codec = 2, .width = width, .height = visible_height, .show_controls = 1};
+    for (unsigned component = 1; component <= 2; ++component)
+    {
+        memset(source, 0x5a, sizeof(source));
+        presenter.hdr = component == 2;
+        draw_video_overlay(source, sizeof(source), pitch, height, width, visible_height, &overlay,
+                           component);
+        const size_t uv = (size_t)pitch * height + 8 * pitch + 16;
+        assert(component == 2 ? source[uv] == 512 : ((uint8_t *)source)[uv] == 128);
+        for (unsigned row = 0; row < height * 3 / 2; ++row)
+            for (unsigned col = width * component; col < pitch * component; ++col)
+                assert(((uint8_t *)source)[row * pitch * component + col] == 0x5a);
+        if (component == 2)
+        {
+            int white = 0;
+            for (unsigned y = 16; y < 42; ++y)
+                for (unsigned x = 16; x < 100; ++x)
+                {
+                    assert(source[y * pitch + x] <= 575);
+                    white |= source[y * pitch + x] >= 570;
+                }
+            assert(white);
+        }
+    }
+    return 0;
+}
+#endif

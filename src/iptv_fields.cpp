@@ -10,6 +10,7 @@ extern "C"
 {
 #include <libavcodec/avcodec.h>
 #include <libavutil/mem.h>
+#include <libavutil/mastering_display_metadata.h>
 }
 
 struct iptv_field_parser
@@ -76,7 +77,45 @@ iptv_field_info_t iptv_field_parse(iptv_field_parser_t *state, const void *data,
     result.color = {static_cast<uint32_t>(state->codec->color_primaries),
                     static_cast<uint32_t>(state->codec->color_trc),
                     static_cast<uint32_t>(state->codec->colorspace),
-                    static_cast<uint32_t>(state->codec->color_range)};
+                    static_cast<uint32_t>(state->codec->color_range),
+                    {}};
+    const auto side = [&](AVPacketSideDataType type)
+    {
+        return av_packet_side_data_get(state->codec->coded_side_data,
+                                       state->codec->nb_coded_side_data, type);
+    };
+    if (const auto *sd = side(AV_PKT_DATA_MASTERING_DISPLAY_METADATA);
+        sd && sd->size >= sizeof(AVMasteringDisplayMetadata))
+    {
+        const auto &m = *reinterpret_cast<const AVMasteringDisplayMetadata *>(sd->data);
+        const auto coordinate = [](AVRational v)
+        { return static_cast<uint16_t>(std::clamp(av_q2d(v) * 50000, 0.0, 50000.0) + .5); };
+        if (m.has_primaries && m.has_luminance && m.min_luminance.den > 0 &&
+            m.max_luminance.den > 0 && av_q2d(m.min_luminance) >= 0 &&
+            av_q2d(m.max_luminance) > av_q2d(m.min_luminance) && av_q2d(m.max_luminance) <= 10000)
+        {
+            auto &hdr = result.color.hdr;
+            hdr.flags |= 1;
+            for (unsigned c = 0; c < 3; ++c)
+                for (unsigned xy = 0; xy < 2; ++xy)
+                    hdr.primaries[c][xy] = coordinate(m.display_primaries[c][xy]);
+            for (unsigned xy = 0; xy < 2; ++xy)
+                hdr.white[xy] = coordinate(m.white_point[xy]);
+            hdr.min_luminance = static_cast<uint32_t>(av_q2d(m.min_luminance) * 10000 + .5);
+            hdr.max_luminance = static_cast<uint32_t>(av_q2d(m.max_luminance) * 10000 + .5);
+        }
+    }
+    if (const auto *sd = side(AV_PKT_DATA_CONTENT_LIGHT_LEVEL);
+        sd && sd->size >= sizeof(AVContentLightMetadata))
+    {
+        const auto &m = *reinterpret_cast<const AVContentLightMetadata *>(sd->data);
+        if (m.MaxCLL <= 65535 && m.MaxFALL <= 65535)
+        {
+            result.color.hdr.flags |= 2;
+            result.color.hdr.max_cll = static_cast<uint16_t>(m.MaxCLL);
+            result.color.hdr.max_fall = static_cast<uint16_t>(m.MaxFALL);
+        }
+    }
     if (state->codec->codec_id != AV_CODEC_ID_H264)
         return result;
     const auto structure = state->parser->picture_structure;

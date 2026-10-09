@@ -175,6 +175,9 @@ for color in pq sdr full hlg unknown; do
         hlg) signaling=(-color_primaries bt2020 -color_trc arib-std-b67 -colorspace bt2020nc -color_range tv); vui=colorprim=9:transfer=18:colormatrix=9:range=limited ;;
         unknown) signaling=(); vui=colorprim=2:transfer=2:colormatrix=2 ;;
     esac
+    if [[ $color == pq ]]; then
+        vui+=":master-display=G(13250,34500)B(7500,3000)R(34000,16000)WP(15635,16450)L(10000000,50):max-cll=1000,400"
+    fi
     ffmpeg -hide_banner -loglevel error -y -f lavfi -i testsrc2=size=160x96:rate=1 \
         -frames:v 1 -pix_fmt yuv420p10le -c:v libx265 -threads 1 \
         -x265-params "pools=1:frame-threads=1:log-level=error:repeat-headers=1:$vui" \

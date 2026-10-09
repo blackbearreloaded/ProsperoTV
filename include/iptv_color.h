@@ -4,12 +4,22 @@
 #pragma once
 #include <stdint.h>
 
+typedef struct iptv_hdr_metadata
+{
+    uint32_t flags;           /* 1: mastering display, 2: content light levels. */
+    uint16_t primaries[3][2]; /* RGB order, in units of 1/50000. */
+    uint16_t white[2];
+    uint32_t min_luminance, max_luminance; /* Units of 1/10000 cd/m2. */
+    uint16_t max_cll, max_fall;            /* cd/m2; zero means unknown. */
+} iptv_hdr_metadata_t;
+
 typedef struct iptv_color_info
 {
     uint32_t primaries; /* H.273 values; 2 means unspecified. */
     uint32_t transfer;
     uint32_t matrix;
     uint32_t range; /* 0: unspecified, 1: limited, 2: full. */
+    iptv_hdr_metadata_t hdr;
 } iptv_color_info_t;
 
 static inline int iptv_color_is_hdr10(iptv_color_info_t color)
