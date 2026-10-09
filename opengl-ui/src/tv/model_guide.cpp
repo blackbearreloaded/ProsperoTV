@@ -177,6 +177,11 @@ bool Model::play_programme(unsigned index, const Programme &programme)
     play_request_.urls = {url};
     play_request_.user_agent = channel.http_user_agent;
     play_request_.referrer = channel.http_referrer;
+    if (active_source_ == iptv::SourceKind::Tvheadend)
+    {
+        play_request_.authorization = local_tv_authorization(local_source_);
+        play_request_.credential_origin = local_source_.url;
+    }
     play_request_.record_channel_result = false;
     play_requested_ = true;
     return true;

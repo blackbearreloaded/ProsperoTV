@@ -19,6 +19,7 @@
 #include "iptv_ime.h"
 #include "iptv_native_backend.h"
 #include "iptv_player.h"
+#include "iptv_native_agc_present.h"
 #include "iptv_remote.h"
 #include "iptv_store.h"
 #include "platform/ps5/audio_out.hpp"
@@ -37,6 +38,7 @@
 #include "tv_update.hpp"
 #include "tv/platform.hpp"
 #include "tv/stream_sniff.hpp"
+#include "tv/playback_osd.hpp"
 
 #include <GL/glcorearb.h>
 
@@ -334,7 +336,7 @@ bool run_menu(ptv::Model &model, ptv::Settings *settings, const LastPlayback &la
               ptv::PlayRequest *request, tv_dev::Script &script, const std::string &notice,
               std::string *storage_result)
 {
-    *request = {};
+    bool queued = !request->urls.empty();
     ++g_menu_sessions;
     const std::int64_t opened = sys::monotonic_us();
     say("[TV] menu open session=%llu", static_cast<unsigned long long>(g_menu_sessions));
@@ -614,7 +616,10 @@ bool run_menu(ptv::Model &model, ptv::Settings *settings, const LastPlayback &la
                     storage.done.store(true, std::memory_order_release);
                 }
             }
-            chosen = !app.storage_busy() && !resolving_portal && model.take_play_request(request);
+            chosen = !app.storage_busy() && !resolving_portal &&
+                     (queued || model.take_play_request(request));
+            if (chosen)
+                queued = false;
             if (chosen)
                 app.stop_preview();
             if (chosen && !request->portal_command.empty())
@@ -1244,12 +1249,22 @@ int main()
     tv::start_update_check();
     LastPlayback last;
     std::string menu_notice;
+    std::optional<ptv::PlayRequest> next_channel;
     for (;;)
     {
         ptv::Model &model = *owned_model;
         ptv::PlayRequest request;
+        const bool switching = next_channel.has_value();
+        if (switching)
+        {
+            request = std::move(*next_channel);
+            next_channel.reset();
+        }
         std::string storage_result;
-        if (!run_menu(model, &settings, last, &request, script, menu_notice, &storage_result))
+        // Portal switches use the existing cancellable create_link screen.
+        // Other channels go straight from one fully closed player to the next.
+        if ((!switching || !request.portal_command.empty()) &&
+            !run_menu(model, &settings, last, &request, script, menu_notice, &storage_result))
             sys::park();
         menu_notice.clear();
         if (!storage_result.empty())
@@ -1304,8 +1319,38 @@ int main()
             &favorite);
         // A scripted run plays each channel for a set time; the player stops it.
         tv::diag::flush();
+        ptv::PlaybackOsd controls(model, request);
+        const bool osd_ready = controls.load_fonts(tv::storage::app_file("assets/fonts"));
+        if (osd_ready)
+        {
+            iptv_player_set_controls(
+                [](void *context, int action) -> int {
+                    const int handled = static_cast<ptv::PlaybackOsd *>(context)->input(
+                        action, ptv::platform::monotonic_us());
+                    if (TV_DEV_SCRIPTS != 0 && action >= 0)
+                        say("[TV] playback control action=%d handled=%d", action, handled);
+                    return handled;
+                },
+                &controls);
+            iptv_native_agc_set_osd(
+                [](void *context, void *surface, std::size_t bytes, std::uint32_t pitch,
+                   std::uint32_t sh, std::uint32_t width, std::uint32_t height,
+                   std::uint32_t depth) -> int
+                {
+                    return static_cast<ptv::PlaybackOsd *>(context)->draw(
+                               surface, bytes, pitch, sh, width, height, depth,
+                               ptv::platform::monotonic_us())
+                               ? 1
+                               : 0;
+                },
+                &controls);
+        }
+        else
+            say("[TV] playback controls font could not be loaded");
         iptv_player_set_sleep_deadline(model.sleep_timer.deadline());
         const PlaybackOutcome outcome = play_candidates(request, script.watch_ms(), nullptr);
+        iptv_player_set_controls(nullptr, nullptr);
+        iptv_native_agc_set_osd(nullptr, nullptr);
         (void)model.check_sleep_timer();
         iptv_remote_set_playback_favorite(nullptr, nullptr);
         const long long seconds = (sys::monotonic_us() - started) / 1000000;
@@ -1370,6 +1415,14 @@ int main()
             last.channel_id = request.record_channel_result ? request.channel_id : std::string();
             last.channel_name = request.channel_name;
             last.attempts = outcome.attempts;
+        }
+        if (const auto selected = controls.selected_channel(); selected && outcome.result >= 0 &&
+                                                               !model.sleep_timer.sleeping() &&
+                                                               model.play(*selected))
+        {
+            ptv::PlayRequest next;
+            if (model.take_play_request(&next))
+                next_channel = std::move(next);
         }
         sceKernelUsleep(100000);
     }

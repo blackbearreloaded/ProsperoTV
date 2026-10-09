@@ -13,6 +13,11 @@ and relevant checks work.
 | Zapping | Next, previous and previously watched channel during playback | Pending |
 | Playback channel list | Select a channel from a list over the playing video | Pending |
 | Channel banner | Brief channel/guide banner on tune and on request | Pending |
+| Local TV sources | Add HDHomeRun and Tvheadend servers, browse and play their channels | Implemented; host checks and PS5 build pass, console case pending |
+| Phone source management | Add and edit saved playlists/accounts through the paired browser | Implemented; HTTP, persistence and mobile browser checks pass, console case pending |
+| Zapping | Next, previous and previously watched channel during playback | Implemented; 140 UI sanitizer tests and PS5 build pass; console case pending |
+| Playback channel list | Select a channel from a list over the playing video | Implemented; host input/render checks and PS5 build pass; console case pending |
+| Channel banner | Brief channel/guide banner on tune and on request | Implemented; mapped guide, timing and rendered image checks pass; console case pending |
 | Audio/subtitles | Select available language tracks and render subtitles | Pending |
 | Sleep timer | Stop playback at a selected deadline | Implemented; 134 UI sanitizer tests and PS5 build pass; console case pending |
 | Live pause/rewind | Pause and replay several minutes of the current live channel | Pending |
@@ -186,3 +191,51 @@ closed, and all development services remained healthy. The generic runner's two
 flags were `hide_failed` setting labels; the case validator checks the receipt
 and teardown separately. All 135 UI sanitizer tests also pass. Native parental
 PIN/IME and filesystem acceptance remain pending.
+
+## Playback navigation and banner
+
+Up/Down switches through the current filtered live list, wrapping at either end;
+L1/R1 offers the same previous/next actions.
+Square recalls the most recent other channel, including one outside the search,
+while respecting hidden categories and parental restrictions. Cross opens the
+channel list over the video; Up/Down moves the selection, Left/Right changes page,
+and Cross tunes. Circle closes the list before returning to the browser on a
+second press. VOD and catch-up do not accidentally switch to live channels.
+
+The channel banner appears for five seconds from the first picture. Triangle or
+Touchpad shows it again. Now/next uses the guide's mapped channel IDs and follows
+programme changes. The existing Touchpad + R1 statistics chord remains available.
+The app reuses its baked fonts and script fallbacks. Text is composited onto a
+separate presenter surface, preserving the decoder's reference pictures; bounds
+and padding are checked for both eight-bit and native low-bit Main10 surfaces.
+
+Channel switches wait for the previous player's full teardown. Ordinary streams
+open directly, while portal channels use the existing cancellable link resolver.
+The sleep deadline survives both paths. The host checks cover filtered wrap,
+history restrictions, list input, banner expiry, guide changes, Unicode font
+rasterization, invalid surfaces and untouched padding. The 140-test sanitizer
+suite passes, as does the PS5 build. Host render captures are retained locally as
+`results/roadmap/playback-banner.png` and `playback-list.png`. Controller behavior,
+compositor cost and uninterrupted teardown on hardware remain console acceptance
+criteria.
+
+- 2026-10-08 | Playback | 72c5141 | PPSA88261 / .30 | partial-pass: pairing, 45s HLS, list-open input, clean teardown | results/roadmap/console-07/validation.json | native navigation
+
+The first playback case installed and verified this candidate. The fixture server
+started late after a host process-launch error; the script then left focus above
+the channel grid. Pairing and a subsequent remote-selected channel worked, but
+the script's report had already been collected. The later case below verifies
+fixture health before launch and uses a timed remote sequence.
+
+- 2026-10-08 | PR13 | 2162453 | .30/PPSA88265 | pass: next/previous, Up/Down, list selection/close and teardown | results/roadmap/console-13 | physical last-channel and overlay checks
+
+All 141 UI sanitizer tests and the fresh PS5 build pass. The console case paired
+through the displayed code and exercised six native playback sessions, switching
+Alpha/Beta through next, previous, Up/Down and the playback list. Every session
+presented video, decoded audio and completed cleanup. Closing the list retained
+playback; the next Back returned to browsing. Installed hashes matched, the title
+closed and all development services remained healthy. The generic runner flagged
+only the `hide_failed` settings label; the case validator checks all six receipts
+and teardown. The phone's Favorite command has a different meaning from the
+controller's Square button, so physical last-channel recall, visual overlay
+capture and compositor-cost measurements remain unverified.
