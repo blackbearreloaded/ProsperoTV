@@ -184,6 +184,10 @@ int iptv_stream_start(iptv_stream_session_t *session);
 int iptv_stream_push(iptv_stream_session_t *session,
                      const void *data, size_t bytes);
 int iptv_stream_discontinuity(iptv_stream_session_t *session);
+/* Reset buffered transport for replay at an extended video-clock position.
+ * The timestamp comes from retained history, including its wrap epoch.
+ * Run on the stream owner's thread after interrupting blocked native submits. */
+int iptv_stream_reposition(iptv_stream_session_t *session, uint64_t pts_us);
 /* Like push(), these run on the stream owner's thread, not concurrently.
  * Returns the total available count, copying at most capacity entries. */
 size_t iptv_stream_audio_tracks(const iptv_stream_session_t *session,

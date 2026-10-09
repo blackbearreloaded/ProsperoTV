@@ -2251,6 +2251,22 @@ int iptv_stream_discontinuity(iptv_stream_session_t *session)
     return IPTV_STREAM_OK;
 }
 
+int iptv_stream_reposition(iptv_stream_session_t *session, uint64_t pts_us)
+{
+    if (pts_us == IPTV_STREAM_PTS_UNKNOWN)
+        return IPTV_STREAM_INVALID_ARGUMENT;
+    const int result = iptv_stream_discontinuity(session);
+    if (result != IPTV_STREAM_OK)
+        return result;
+    // History converts ticks to whole microseconds. Round back to the nearest
+    // tick so an exact wrap does not accidentally seed the preceding epoch.
+    const uint64_t ticks = (pts_us / 1000u) * 90u + ((pts_us % 1000u) * 90u + 500u) / 1000u;
+    get_impl(session)->video_time = {ticks % kPtsModulus, ticks - ticks % kPtsModulus, true};
+    session->telemetry.last_video_pts_us = IPTV_STREAM_PTS_UNKNOWN;
+    session->telemetry.last_audio_pts_us = IPTV_STREAM_PTS_UNKNOWN;
+    return IPTV_STREAM_OK;
+}
+
 int iptv_stream_stop(iptv_stream_session_t *session)
 {
     if (!valid_session(session) || !get_impl(session))

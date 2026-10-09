@@ -308,6 +308,7 @@ class AudioSelectionTest : public testing::Test
         backend.submit_audio = FakeAudio;
         backend.disable_audio = FakeDisableAudio;
         backend.select_audio = FakeSelectAudio;
+        backend.discontinuity = FakeDiscontinuity;
         backend.drain = FakeDrain;
         backend.close = FakeClose;
         backend.subtitle_tracks =
@@ -593,6 +594,37 @@ TEST_F(SubtitleStreamTest, CaptionsShareTheVideoEpochOnBothSidesOfClockWrap)
     EXPECT_EQ(fake.captions.back().pts, usec(wrap - 45000));
     ASSERT_EQ(packet(0x121, 1, true, pes(90000)), 0);
     EXPECT_EQ(fake.captions.back().pts, usec(wrap + 90000));
+}
+
+TEST_F(SubtitleStreamTest, RepositionRestoresVideoAudioAndSubtitleClockEpochs)
+{
+    ASSERT_EQ(subtitles({{0x120, 1, 1, "eng", 0x10}}, true), 0);
+    const auto wrap = UINT64_C(1) << 33;
+    const auto usec = [](std::uint64_t ticks)
+    { return ticks / 90 * 1000 + ticks % 90 * 1000 / 90; };
+    // Move in both directions, including exactly at a wrap and a non-integral
+    // microsecond tick. All three streams must retain the history's epoch.
+    for (const auto ticks : {wrap + 90000, wrap - 90000, wrap, 2 * wrap + 1})
+    {
+        ASSERT_EQ(iptv_stream_reposition(&session, usec(ticks)), IPTV_STREAM_OK);
+        auto video = StampedPacket(H264Packet(0, false), ticks & (wrap - 1));
+        ASSERT_EQ(iptv_stream_push(&session, video.data(), video.size()), 0);
+        const auto audio = StampedPacket(UnsupportedAacPacket(), (ticks - 45000) & (wrap - 1));
+        ASSERT_EQ(iptv_stream_push(&session, audio.data(), audio.size()), 0);
+        ASSERT_EQ(packet(0x120, 0, true, pes((ticks + 45000) & (wrap - 1))), 0);
+        // Transport synchronization requires three packets after repositioning.
+        EXPECT_EQ(session.telemetry.last_video_pts_us, usec(ticks));
+        EXPECT_EQ(session.telemetry.last_audio_pts_us, usec(ticks - 45000));
+        ASSERT_FALSE(fake.captions.empty());
+        EXPECT_EQ(fake.captions.back().pts, usec(ticks + 45000));
+    }
+    EXPECT_EQ(fake.opens, 1u);
+    EXPECT_EQ(fake.discontinuities, 4u);
+    EXPECT_EQ(fake.subtitle_resets, 4u);
+    EXPECT_EQ(iptv_stream_reposition(&session, IPTV_STREAM_PTS_UNKNOWN),
+              IPTV_STREAM_INVALID_ARGUMENT);
+    EXPECT_EQ(fake.discontinuities, 4u);
+    EXPECT_EQ(iptv_stream_reposition(nullptr, 0), IPTV_STREAM_INVALID_ARGUMENT);
 }
 
 TEST_F(AudioSelectionTest, ChangesOnlyAudioAndRemembersSelectionAcrossProviderReordering)

@@ -64,7 +64,12 @@ pass, including native full-queue cancellation and audio alignment checks.
 The final application-only PS5 cross-build also passes; its local executable
 SHA-256 is `4e769dcb7ba6cf7fb65accaf5e10d2e62174ccb4bd4c4260699048bb01fc0de0`.
 This checkpoint has not been packaged or installed on a console.
-Stream timestamp restoration, decoder parameter replay, subtitle history,
+The transport reposition API now restores the retained video's extended clock
+and resets parser buffers and subtitle timing. A regression replays forwards and
+backwards across two timestamp wraps, including an exact wrap, and checks the
+video, audio and subtitle timestamps without reopening the decoder. All 95 core
+tests pass under ASan/UBSan on the VOD-fixes baseline. Player calls to this API,
+decoder parameter replay, subtitle history,
 controls, watchdog handling and console acceptance remain to be implemented or
 validated before this roadmap item is complete.
 
