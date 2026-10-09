@@ -9,8 +9,10 @@
 #include "platform/ps5/system.hpp"
 #include "tv/app.hpp"
 
+#include "iptv_ime.h"
 #include "iptv_input.h"
 
+#include <cerrno>
 #include <dirent.h>
 
 #include <cstdarg>
@@ -114,20 +116,43 @@ bool Script::load(const std::string &request_path, const std::string &out_dir)
     if (handled == token_)
         return false;
     hui::save::write_atomic(handled_path, token_);
-    // The pictures and receipts of an earlier run must not pass for this one's.
-    if (DIR *folder = opendir(out_dir.c_str()))
+    // The pictures and receipts of an earlier run must not pass for this one's,
+    // nor fill the title's storage (a picture is 1.5 MB, and the sandbox holds
+    // about 300 MB). A title inside its sandbox may not list its own folder
+    // (opendir: EPERM on system software 12.70), so the names come from the
+    // list each run keeps, and receipts and the report by their known names.
     {
-        std::vector<std::string> stale;
-        while (const dirent *entry = readdir(folder))
+        std::size_t removed = 0;
+        // dev/clear.txt beside the request names more files to remove: the
+        // way to empty a folder filled before this list was kept.
+        std::string names, more;
+        (void)hui::save::read_file(out_dir + "/pictures.txt", &names, 64u * 1024u);
+        const std::size_t slash = request_path.rfind('/');
+        if (slash != std::string::npos &&
+            hui::save::read_file(request_path.substr(0, slash) + "/clear.txt", &more, 64u * 1024u))
+            names += "\n" + more;
+        if (!names.empty())
+            for (std::size_t from = 0; from < names.size();)
+            {
+                std::size_t to = names.find('\n', from);
+                if (to == std::string::npos)
+                    to = names.size();
+                std::string name = names.substr(from, to - from);
+                if (!name.empty() && name.back() == '\r')
+                    name.pop_back();
+                if (!name.empty() && name.find('/') == std::string::npos)
+                    removed += std::remove((out_dir + "/" + name).c_str()) == 0 ? 1u : 0u;
+                from = to + 1;
+            }
+        for (unsigned index = 1; index < 100; ++index)
         {
-            const std::string name = entry->d_name;
-            if ((name.size() > 4 && name.compare(name.size() - 4, 4, ".bmp") == 0) ||
-                name.rfind("receipt-", 0) == 0 || name == "report.txt")
-                stale.push_back(out_dir + "/" + name);
+            char name[32];
+            std::snprintf(name, sizeof(name), "/receipt-%02u.txt", index);
+            removed += std::remove((out_dir + name).c_str()) == 0 ? 1u : 0u;
         }
-        closedir(folder);
-        for (const std::string &path : stale)
-            std::remove(path.c_str());
+        removed += std::remove((out_dir + "/report.txt").c_str()) == 0 ? 1u : 0u;
+        std::remove((out_dir + "/pictures.txt").c_str());
+        note("earlier output: %zu files removed", removed);
     }
 
     out_dir_ = out_dir;
@@ -166,6 +191,12 @@ bool Script::load(const std::string &request_path, const std::string &out_dir)
         {
             step.kind = Kind::query;
             // The rest of the line is the text.
+            const std::size_t at = lines[i].find(word, std::strlen(verb));
+            step.text = lines[i].substr(at);
+        }
+        else if (what == "type" && fields >= 2)
+        {
+            step.kind = Kind::type;
             const std::size_t at = lines[i].find(word, std::strlen(verb));
             step.text = lines[i].substr(at);
         }
@@ -256,6 +287,12 @@ void Script::finish()
 
 void Script::capture_done(bool ok)
 {
+    if (ok)
+    {
+        // Kept for the next run to clear (see load()).
+        pictures_ += capture_.substr(capture_.rfind('/') + 1) + "\n";
+        hui::save::write_atomic(out_dir_ + "/pictures.txt", pictures_);
+    }
     note("shot %s %s", capture_.substr(capture_.rfind('/') + 1).c_str(), ok ? "saved" : "FAILED");
     capture_.clear();
 }
@@ -345,6 +382,12 @@ std::uint32_t Script::step(float dt, ptv::Model &model, const ptv::App &app)
         case Kind::query:
             model.set_query(step.text == "-" ? std::string_view() : std::string_view(step.text));
             note("query \"%s\": %u channels", model.query().c_str(), model.visible_count());
+            next();
+            break;
+        case Kind::type:
+            // What is typed is not written to the report: it may be a PIN.
+            note("type: %zu characters %s", step.text.size(),
+                 iptv_ime_script_answer(step.text.c_str()) ? "queued" : "NOT queued");
             next();
             break;
         case Kind::during:

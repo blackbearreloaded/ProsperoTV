@@ -787,8 +787,47 @@ out) and when it goes on, what each request for a part of a file cost, a read
 that waited more than a second, and every ten seconds how much of a file was
 read and how much of that time the network took.
 
-Not validated here, and still open: the phone remote and phone source
-management on this console (they need filesystem access, which these runs did
-not use; earlier cases cover them on `.30`), the parental PIN and folder names
-(the system keyboard), catch-up (this provider keeps no archive), USB backup
-with a physical drive, HDR on a display, and a second console user.
+### As the released app runs: filesystem access through Lapy
+
+The same build was then installed as the real title `PPSA99003` on the same
+console (scripted runs switched on at build time only, never committed), so
+that it ran with filesystem access through Lapy and kept its data under
+`/data/prosperotv/profiles/<user>`. Seven launches, each reported PASS.
+
+- The phone remote listens on port 8888 and answers. A client paired with the
+  code on the screen, read the saved sources, **added the account from the
+  phone**, and the list (12,907 channels, 4.9 MB) was downloaded in three
+  seconds. During playback the phone's keys paused and resumed, went thirty
+  seconds back and to live again, opened the tracks, changed to the next and
+  the previous channel, chose a channel from the list, added a favorite and set
+  the volume.
+- Parental controls, with the PIN answered by the script (`type`, which
+  stands in for the system keyboard): a PIN set and confirmed, a wrong PIN
+  refused, the right one unlocking; the adult category and its 170 channels
+  gone while locked; a category approved for kids and kids-only mode showing
+  exactly its 22 channels; the mode left and the PIN removed.
+- A favorite folder created, a channel put in it, the folder opened and
+  deleted; the guide and a film in this mode as well.
+
+Three more defects came out of these runs and are corrected:
+
+- **With no USB drive plugged in, backup offered "Drive: /mnt/usb0".** The
+  console keeps `/mnt/usb0` to `usb7` as empty folders; the app took a folder
+  for a drive and would have written the backup to the console's own storage
+  and reported it saved. A drive now has to be a mounted filesystem.
+- A favorite folder could be created but never deleted. Options deletes the
+  folder in focus; its channels stay favorites.
+- In kids-only mode with no category approved the list was empty and said
+  "This source has no channels of this kind". It now says that kids-only mode
+  is on and what a parent can do.
+
+Test tooling: `type <text>` answers the next keyboard prompt; a sandboxed
+title may not list its own folder on system software 12.70 (`opendir`: EPERM),
+so earlier pictures were never cleared and filled the title's 337 MB of
+storage: each run now keeps the list of its pictures and the next one removes
+them (`dev/clear.txt` names more).
+
+Still open, each needing a person or equipment: the system keyboard itself
+(the script answers in its place), a physical USB drive for backup, restore
+and the failure report, catch-up (this provider keeps no archive), HDR on a
+display, and a second console user.

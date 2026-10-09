@@ -9,6 +9,8 @@
 #include <SDL2/SDL.h>
 #include <stddef.h>
 #include <stdint.h>
+#include <stdio.h>
+#include <string.h>
 
 #define SCE_SYSMODULE_IME_DIALOG UINT16_C(0x0096)
 #define SCE_COMMON_DIALOG_ALREADY_INITIALIZED UINT32_C(0x80B80002)
@@ -283,6 +285,18 @@ static void start_requested(void)
     requested = false;
 }
 
+#define SCRIPT_ANSWERS 8U
+static char script_answers[SCRIPT_ANSWERS][IPTV_IME_BUFFER_BYTES];
+static unsigned script_answer_count;
+
+bool iptv_ime_script_answer(const char *text)
+{
+    if (text == NULL || script_answer_count == SCRIPT_ANSWERS)
+        return false;
+    snprintf(script_answers[script_answer_count++], sizeof(script_answers[0]), "%s", text);
+    return true;
+}
+
 bool iptv_ime_busy(void)
 {
     return active || requested;
@@ -290,6 +304,23 @@ bool iptv_ime_busy(void)
 
 void iptv_ime_poll(void)
 {
+    if (requested && script_answer_count != 0)
+    {
+        // A scripted run answers the prompt itself; the keyboard is not opened.
+        char text[IPTV_IME_BUFFER_BYTES];
+        snprintf(text, sizeof(text), "%s", script_answers[0]);
+        --script_answer_count;
+        memmove(script_answers[0], script_answers[1],
+                (size_t)script_answer_count * sizeof(script_answers[0]));
+        clear_sensitive(script_answers[script_answer_count], sizeof(script_answers[0]));
+        requested = false;
+        const iptv_ime_result_fn callback = result_callback;
+        if (callback != NULL)
+            callback(text, result_user_data);
+        clear_sensitive(text, sizeof(text));
+        clear_sensitive(initial_text, sizeof(initial_text));
+        return;
+    }
     if (requested && !iptv_input_pressed(IPTV_INPUT_CROSS))
         start_requested();
     if (!active)

@@ -247,6 +247,16 @@ bool read_archive(const std::string &path, Files &files)
 std::vector<std::string> usb_drives(const std::string &mount_root)
 {
     std::vector<std::string> result;
+#ifdef __PROSPERO__
+    // The console keeps /mnt/usb0 to usb7 as folders whether or not anything
+    // is plugged in. With nothing mounted a folder belongs to the same
+    // filesystem as the one that holds it: offering it as a drive would put
+    // a "backup" on the console's own storage and call it saved.
+    struct stat parent
+    {
+    };
+    const bool parent_known = stat(mount_root.empty() ? "/" : mount_root.c_str(), &parent) == 0;
+#endif
     for (unsigned i = 0; i < 8; ++i)
     {
         const auto path = mount_root + "/usb" + std::to_string(i);
@@ -255,8 +265,13 @@ std::vector<std::string> usb_drives(const std::string &mount_root)
         };
         // The actual operation checks read/write access and reports failures.
         // access() is not a reliable availability probe in the console sandbox.
-        if (lstat(path.c_str(), &status) == 0 && S_ISDIR(status.st_mode))
-            result.push_back(path);
+        if (lstat(path.c_str(), &status) != 0 || !S_ISDIR(status.st_mode))
+            continue;
+#ifdef __PROSPERO__
+        if (parent_known && status.st_dev == parent.st_dev)
+            continue;
+#endif
+        result.push_back(path);
     }
     return result;
 }

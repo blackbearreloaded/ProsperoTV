@@ -593,6 +593,15 @@ void BrowseScreen::update(float dt)
             empty_.body = tr("Press Square on any channel to keep it here.");
             empty_.action = tr("Browse Live TV");
         }
+        else if (model.parental().kids_only() && model.group() != Group::recent)
+        {
+            // Nothing the provider offers is marked for children, or approved
+            // by a parent: an empty app is not a broken one.
+            empty_.title = tr("Kids-only mode is on");
+            empty_.body = tr("No category is approved for kids yet. A parent can approve "
+                             "categories or leave kids-only mode in Settings.");
+            empty_.action.clear();
+        }
         else
         {
             empty_.title = tr("Nothing here yet");

@@ -31,6 +31,9 @@ extern "C"
     bool iptv_ime_busy(void);
     void iptv_ime_cancel(void);
     void iptv_ime_shutdown(void);
+    /* Scripted hardware tests: the text the next prompt is answered with, in place of the
+     * system keyboard. Up to eight wait in order; false when there is no room. */
+    bool iptv_ime_script_answer(const char *text);
 
 #ifdef __cplusplus
 }
