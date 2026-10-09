@@ -70,7 +70,7 @@ void VideoPanel::text(const hui::gfx::Font &font, std::string_view value, float 
 }
 
 bool VideoPanel::composite(void *surface, std::size_t bytes, unsigned pitch, unsigned sh,
-                           unsigned vw, unsigned vh, unsigned depth, bool hdr) const
+                           unsigned vw, unsigned vh, unsigned depth, unsigned hdr) const
 {
     if (!surface || (depth != 8 && depth != 10) || (hdr && depth != 10) || !vw || !vh ||
         vw > pitch || vh > sh || pitch > 8192 || sh > 8192 || (pitch & 1u) || !width || !height ||
@@ -92,8 +92,8 @@ bool VideoPanel::composite(void *surface, std::size_t bytes, unsigned pitch, uns
             out[at] = value;
         else
         {
-            const std::uint16_t word =
-                hdr && luma ? iptv_color_ui_luma(value) : static_cast<std::uint16_t>(value) << 2;
+            const std::uint16_t word = hdr && luma ? iptv_color_ui_luma(value, hdr == 2)
+                                                   : static_cast<std::uint16_t>(value) << 2;
             std::memcpy(out + at * 2, &word, sizeof(word));
         }
     };
@@ -234,7 +234,8 @@ std::optional<std::uint32_t> PlaybackOsd::take_subtitle_selection()
 void PlaybackOsd::set_live_state(const iptv_player_live_state_t &state)
 {
     std::lock_guard lock(mutex_);
-    const auto behind = [](const iptv_player_live_state_t &value) {
+    const auto behind = [](const iptv_player_live_state_t &value)
+    {
         return value.last_us > value.position_us ? (value.last_us - value.position_us) / 1000000
                                                  : 0;
     };
@@ -568,7 +569,7 @@ void PlaybackOsd::paint_subtitles()
 bool PlaybackOsd::draw(void *surface, std::size_t bytes, unsigned pitch, unsigned sh, unsigned vw,
                        unsigned vh, unsigned depth, std::uint64_t now,
                        const std::vector<std::shared_ptr<const iptv::SubtitleCue>> &subtitles,
-                       bool hdr)
+                       unsigned hdr)
 {
     std::lock_guard lock(mutex_);
     if (!fonts_.regular.font)

@@ -33,7 +33,7 @@ tests retain the workspace lock and sandbox-only test-title protocol.
 
 The pinned HEVC parser exports its existing VUI fields without decoding another
 copy of the picture. Color metadata follows each queued presentation timestamp,
-including pause redraws. Only limited-range BT.2020/PQ Main10 selects HDR10.
+including pause redraws. Limited-range BT.2020 PQ and HLG Main10 select HDR10.
 The presenter retypes its registered buffers between completed frames, uses a
 ten-bit output target and preserves PQ through the BT.2020 matrix. It records
 both the mode request and the platform's output-status readback.
@@ -43,8 +43,21 @@ reads native low-aligned ten-bit samples and uses a bounded SDR tone map.
 The [public HDR research](https://github.com/blackbearreloaded/ps5-hardware-video-decoding-research/blob/main/docs/hdr.md)
 documents the surface contract and limits of Remote Play color verification;
 [EVO Player](https://github.com/sainsaji/EVO-PLAYER-PS5) provides the public
-buffer-attribute transition reference. Native chart/transition/4K acceptance,
-HLG and unsupported-display fallback remain pending. Static mastering display and content light metadata now follow presentation timestamps and appear in receipts; forwarding custom mastering data to HDMI is unverified.
+buffer-attribute transition reference. HDMI display acceptance remains pending.
+Static mastering display and content light metadata now follow presentation
+timestamps and appear in receipts; forwarding custom mastering data to HDMI is
+unverified.
+
+HLG now converts to PQ on the GPU using the 1000-nit reference-display luminance
+OOTF in [ITU-R BT.2100-2, Table 5](https://www.itu.int/dms_pubrec/itu-r/rec/bt/R-REC-BT.2100-2-201807-S!!PDF-E.pdf).
+A rejected HDR output request retains SDR buffers and tone maps PQ/HLG with the
+same BT.2020-to-709 matrix and bounded shoulder used for previews. Caption and
+menu colors follow the source transfer function before conversion. Preview
+sampling retains all ten bits. The generated shader stays within the existing
+register allocation and has a reproducible LLVM assembly tool. Its register
+program passes 432 reference color/mode comparisons; 149 UI sanitizer tests,
+31 tooling checks (including rejected-output handling) and lint pass. Native
+shader/output acceptance is pending for this update.
 
 ## Live pause and rewind foundations
 

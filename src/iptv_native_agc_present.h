@@ -30,7 +30,9 @@ extern "C"
 
     /* Register only between foreground sessions; the player joins its workers
      * before it returns. A NULL surface queries visibility. A real surface is a
-     * presenter-owned copy, valid only during this call. Return 1 if drawn. */
+     * presenter-owned copy, valid only during this call. Return 1 if drawn.
+     * hdr describes the source encoding: 0=SDR, 1=PQ, 2=HLG, even when the
+     * output subsequently tone maps the composed surface to SDR. */
     typedef int (*iptv_native_osd_t)(void *context, void *surface, size_t bytes, uint32_t pitch,
                                      uint32_t surface_height, uint32_t width, uint32_t height,
                                      uint32_t depth, uint64_t pts_us, int hdr);
@@ -58,6 +60,8 @@ extern "C"
     void iptv_native_agc_present_set_cancelled(int cancelled);
     int32_t iptv_native_agc_present_shutdown(void);
     int iptv_native_agc_hdr_active(void);
+    /* Disposable-title scripts only: exercise SDR fallback and sample completed output. */
+    void iptv_native_agc_set_color_test(int force_sdr, int sample_output);
 
 #ifdef __cplusplus
 }

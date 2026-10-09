@@ -27,16 +27,23 @@ static inline int iptv_color_is_hdr10(iptv_color_info_t color)
     return color.primaries == 9 && color.transfer == 16 && color.matrix == 9 && color.range == 1;
 }
 
+static inline int iptv_color_is_hlg(iptv_color_info_t color)
+{
+    return color.primaries == 9 && color.transfer == 18 && color.matrix == 9 && color.range == 1;
+}
+
 #ifdef __cplusplus
 extern "C"
 {
 #endif
-    /* Convert sRGB UI colors to limited BT.2020/PQ at 203-nit reference white. */
-    void iptv_color_ui_yuv(uint8_t red, uint8_t green, uint8_t blue, uint16_t output[3]);
-    uint16_t iptv_color_ui_luma(uint8_t limited_sdr);
+    /* 203-nit sRGB UI colors in limited BT.2020: PQ or reference-display HLG. */
+    void iptv_color_ui_yuv(uint8_t red, uint8_t green, uint8_t blue, uint16_t output[3], int hlg);
+    uint16_t iptv_color_ui_luma(uint8_t limited_sdr, int hlg);
     /* Bounded SDR preview: linear BT.2020-to-709 conversion and a 203-nit Reinhard
      * shoulder. The full-screen HDR path preserves the original PQ signal. */
     void iptv_color_pq_to_srgb(float red, float green, float blue, uint8_t output[3]);
+    /* BT.2100 HLG at the 1000-nit reference display, including luminance OOTF. */
+    void iptv_color_hlg_to_srgb(float red, float green, float blue, uint8_t output[3]);
 #ifdef __cplusplus
 }
 #endif

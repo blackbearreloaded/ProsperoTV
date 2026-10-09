@@ -22,11 +22,11 @@ struct VideoPanel
               float size, float max_width, std::uint8_t ink = 235);
     bool composite(void *surface, std::size_t bytes, unsigned pitch, unsigned surface_height,
                    unsigned visible_width, unsigned visible_height, unsigned depth,
-                   bool hdr = false) const;
+                   unsigned hdr = false) const;
 };
 bool composite_subtitle_bitmaps(const iptv::SubtitleCue &cue, void *surface, std::size_t bytes,
                                 unsigned pitch, unsigned surface_height, unsigned visible_width,
-                                unsigned visible_height, unsigned depth, bool hdr = false);
+                                unsigned visible_height, unsigned depth, unsigned hdr = false);
 
 class PlaybackOsd
 {
@@ -48,7 +48,7 @@ class PlaybackOsd
     bool draw(void *surface, std::size_t bytes, unsigned pitch, unsigned surface_height,
               unsigned visible_width, unsigned visible_height, unsigned depth, std::uint64_t now,
               const std::vector<std::shared_ptr<const iptv::SubtitleCue>> &subtitles = {},
-              bool hdr = false);
+              unsigned hdr = false);
 
   private:
     void update_guide();

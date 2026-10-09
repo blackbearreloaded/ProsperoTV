@@ -9,6 +9,36 @@
 
 namespace
 {
+TEST(PreviewPixels, HlgUsesReferenceLuminanceAndRetainsTenBitSamples)
+{
+    std::vector<std::uint16_t> samples(4 * 4 * 3 / 2, 512);
+    const unsigned codes[] = {64, 502, 721, 940}; // Black, 50%, 75%, peak.
+    for (unsigned y = 0; y < 4; ++y)
+        for (unsigned x = 0; x < 4; ++x)
+            samples[y * 4 + x] = codes[x];
+    iptv_native_picture_t picture{samples.data(),   samples.size() * 2, 4, 4, 4, 4, 10, 0,
+                                  {9, 18, 9, 1, {}}};
+    ptv::ImagePixels pixels;
+    ASSERT_TRUE(ptv::preview_pixels(picture, &pixels));
+    const unsigned expected[] = {0, 124, 188, 235};
+    for (unsigned x = 0; x < 4; ++x)
+    {
+        EXPECT_NEAR(pixels.rgba[x * 4], expected[x], 1);
+        EXPECT_EQ(pixels.rgba[x * 4], pixels.rgba[x * 4 + 1]);
+        EXPECT_EQ(pixels.rgba[x * 4 + 1], pixels.rgba[x * 4 + 2]);
+    }
+    EXPECT_TRUE(iptv_color_is_hlg(picture.color));
+    samples[0] = 500;
+    samples[1] = 503; // Same eight-bit value, different ten-bit luminance.
+    ASSERT_TRUE(ptv::preview_pixels(picture, &pixels));
+    EXPECT_LT(pixels.rgba[0], pixels.rgba[4]);
+    picture.color.range = 2;
+    EXPECT_FALSE(iptv_color_is_hlg(picture.color));
+    picture.color.range = 1;
+    picture.color.primaries = 1;
+    EXPECT_FALSE(iptv_color_is_hlg(picture.color));
+}
+
 TEST(PreviewPixels, HdrPreviewMapsBlackPaperWhiteAndHighlightsToSdr)
 {
     std::vector<std::uint16_t> samples(4 * 4 * 3 / 2, 512);

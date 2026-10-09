@@ -11,12 +11,19 @@
 
 TEST(VideoPanel, HdrPaperWhiteAndCaptionAlphaKeepVideoAndPaddingIntact)
 {
-    EXPECT_EQ(iptv_color_ui_luma(16), 64);
-    EXPECT_NEAR(iptv_color_ui_luma(235), 573, 1);
+    EXPECT_EQ(iptv_color_ui_luma(16, 1), 64);
+    EXPECT_NEAR(iptv_color_ui_luma(235, 1), 721, 1);
+    std::uint16_t hlg_white[3];
+    iptv_color_ui_yuv(255, 255, 255, hlg_white, 1);
+    EXPECT_NEAR(hlg_white[0], 721, 1);
+    EXPECT_EQ(hlg_white[1], 512);
+    EXPECT_EQ(hlg_white[2], 512);
+    EXPECT_EQ(iptv_color_ui_luma(16, 0), 64);
+    EXPECT_NEAR(iptv_color_ui_luma(235, 0), 573, 1);
     for (unsigned i = 1; i < 256; ++i)
-        EXPECT_GE(iptv_color_ui_luma(i), iptv_color_ui_luma(i - 1));
+        EXPECT_GE(iptv_color_ui_luma(i, 0), iptv_color_ui_luma(i - 1, 0));
     std::uint16_t white[3];
-    iptv_color_ui_yuv(255, 255, 255, white);
+    iptv_color_ui_yuv(255, 255, 255, white, 0);
     EXPECT_NEAR(white[0], 573, 1);
     EXPECT_EQ(white[1], 512);
     EXPECT_EQ(white[2], 512);

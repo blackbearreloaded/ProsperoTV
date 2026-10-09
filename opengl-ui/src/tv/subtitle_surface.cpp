@@ -10,7 +10,7 @@ namespace ptv
 {
 bool composite_subtitle_bitmaps(const iptv::SubtitleCue &cue, void *surface, std::size_t bytes,
                                 unsigned pitch, unsigned sh, unsigned vw, unsigned vh,
-                                unsigned depth, bool hdr)
+                                unsigned depth, unsigned hdr)
 {
     if (!surface || (depth != 8 && depth != 10) || (hdr && depth != 10) || !vw || !vh ||
         vw > pitch || vh > sh || pitch > 8192 || sh > 8192 || (pitch & 1u) || !cue.canvas_width ||
@@ -83,7 +83,7 @@ bool composite_subtitle_bitmaps(const iptv::SubtitleCue &cue, void *surface, std
                 if (hdr)
                 {
                     std::uint16_t yuv[3];
-                    iptv_color_ui_yuv(r, g, b, yuv);
+                    iptv_color_ui_yuv(r, g, b, yuv, hdr == 2);
                     luma = yuv[0];
                 }
                 const auto at = static_cast<std::size_t>(y) * pitch + x;
@@ -107,7 +107,7 @@ bool composite_subtitle_bitmaps(const iptv::SubtitleCue &cue, void *surface, std
                         if (hdr)
                         {
                             std::uint16_t yuv[3];
-                            iptv_color_ui_yuv(r, g, b, yuv);
+                            iptv_color_ui_yuv(r, g, b, yuv, hdr == 2);
                             u += a * yuv[1];
                             v += a * yuv[2];
                         }
