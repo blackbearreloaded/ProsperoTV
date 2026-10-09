@@ -1667,7 +1667,12 @@ static int process_video(iptv_stream_session_t *session, impl_t *impl, bool flus
             const int inspect = inspect_video_nal(session, impl, impl->video_es.data + nal_at,
                                                   next - nal_at, &vcl, &first_slice, &aud, &prefix);
             if (inspect != IPTV_STREAM_OK)
+            {
+                if (inspect == IPTV_STREAM_REOPEN_REQUIRED)
+                    session->telemetry.reopen_pts_us =
+                        marker_at(&impl->video_markers, nal_at)->pts_us;
                 return inspect;
+            }
 
             size_t boundary = kNoOffset;
             if (seen_vcl && aud)
@@ -2420,6 +2425,7 @@ void iptv_stream_init(iptv_stream_session_t *session)
     session->telemetry.state = IPTV_STREAM_STATE_IDLE;
     session->telemetry.last_video_pts_us = IPTV_STREAM_PTS_UNKNOWN;
     session->telemetry.last_audio_pts_us = IPTV_STREAM_PTS_UNKNOWN;
+    session->telemetry.reopen_pts_us = IPTV_STREAM_PTS_UNKNOWN;
 }
 
 int iptv_stream_open(iptv_stream_session_t *session, const iptv_stream_config_t *config,
@@ -2471,6 +2477,7 @@ int iptv_stream_open(iptv_stream_session_t *session, const iptv_stream_config_t 
     session->telemetry.max_pes_bytes = impl->config.max_pes_bytes;
     session->telemetry.last_video_pts_us = IPTV_STREAM_PTS_UNKNOWN;
     session->telemetry.last_audio_pts_us = IPTV_STREAM_PTS_UNKNOWN;
+    session->telemetry.reopen_pts_us = IPTV_STREAM_PTS_UNKNOWN;
     return IPTV_STREAM_OK;
 }
 
@@ -2671,10 +2678,11 @@ int iptv_stream_reposition_from(iptv_stream_session_t *session, const iptv_strea
         if (parsed != IPTV_STREAM_OK)
             return parsed;
     }
-    if (source != session && !impl->backend_ever_opened)
+    if (restored_bytes)
     {
-        // Read the selected historical sets, not the download parser's latest
-        // dimensions. Reuse normal validation before opening a native decoder.
+        // Validate the selected historical sets even with an open decoder.
+        // Headerless replay must request the same reopen as an in-band change,
+        // rather than silently submitting incompatible settings to the backend.
         impl->video_sps = impl->video_pps = impl->video_vps = false;
         for (const auto &parameter : restored)
         {
@@ -2684,7 +2692,11 @@ int iptv_stream_reposition_from(iptv_stream_session_t *session, const iptv_strea
             const int parsed = inspect_video_nal(session, impl, parameter.data.get(),
                                                  parameter.size, &vcl, &first, &aud, &prefix);
             if (parsed != IPTV_STREAM_OK)
+            {
+                if (parsed == IPTV_STREAM_REOPEN_REQUIRED)
+                    session->telemetry.reopen_pts_us = pts_us;
                 return parsed;
+            }
         }
         session->telemetry.format = impl->format;
     }

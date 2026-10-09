@@ -197,6 +197,18 @@ std::optional<Timeshift::Position> Timeshift::seek(std::uint64_t target) const
     const auto *chosen = random && target - random->pts_us <= 10000000 ? random : fallback;
     return Position{chosen->offset, chosen->pts_us, generation_};
 }
+std::optional<Timeshift::Position> Timeshift::seek_next(std::uint64_t target) const
+{
+    std::lock_guard lock(mutex_);
+    const auto current = range_locked();
+    if (current.timed)
+        for (const auto &mark : marks_)
+            if (mark.pts_us >= target && mark.pts_us >= current.first_pts_us &&
+                mark.pts_us <= current.last_pts_us)
+                return Position{mark.offset, mark.pts_us, generation_};
+    return {};
+}
+
 void Timeshift::set_video_pid(std::uint32_t pid)
 {
     if (!pid || pid >= 0x1fff)

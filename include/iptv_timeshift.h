@@ -57,6 +57,9 @@ class Timeshift
     Read read(std::uint64_t offset, std::uint8_t *output, std::size_t capacity) const;
     Range range() const;
     std::optional<Position> seek(std::uint64_t pts_us) const;
+    // Resume a changed decoder setup without seeking back into the old format.
+    // No result until that point has complete retained configuration metadata.
+    std::optional<Position> seek_next(std::uint64_t pts_us) const;
     void set_video_pid(std::uint32_t pid);
     // A provider reconnect/discontinuity starts a new retained timeline.
     void discontinuity();

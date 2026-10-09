@@ -171,6 +171,7 @@ typedef struct iptv_stream_telemetry {
     int32_t last_cleanup_result;
     uint64_t last_video_pts_us;
     uint64_t last_audio_pts_us;
+    uint64_t reopen_pts_us; /* First changed setup's clock, or PTS_UNKNOWN. */
 } iptv_stream_telemetry_t;
 
 typedef struct iptv_stream_session {
@@ -201,7 +202,9 @@ int iptv_stream_reposition(iptv_stream_session_t *session, uint64_t pts_us);
  * provider timeline. Reject missing/expired/not-yet-scanned configurations
  * before resetting playback. The source is neither mutated nor retained.
  * Local configuration history restarts at the restored version; earlier
- * positions remain available only through the source's retained history. */
+ * positions remain available only through the source's retained history.
+ * Incompatible restored settings return REOPEN_REQUIRED; retry the retained
+ * position with a fresh playback session, never the incompatible backend. */
 int iptv_stream_reposition_from(iptv_stream_session_t *session, const iptv_stream_session_t *source,
                                 uint64_t pts_us);
 /* Earliest replay timestamp after bounded configuration history expires.

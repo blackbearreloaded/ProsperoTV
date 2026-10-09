@@ -189,6 +189,7 @@ void AppendPacket(std::vector<std::uint8_t> *bytes, const Packet &packet)
 struct FakeBackend
 {
     unsigned opens = 0;
+    unsigned opened_level = 0;
     unsigned videos = 0;
     unsigned audios = 0;
     unsigned disables = 0;
@@ -216,6 +217,7 @@ int FakeOpen(void *context, const iptv_stream_format_t *format)
 {
     auto *fake = static_cast<FakeBackend *>(context);
     ++fake->opens;
+    fake->opened_level = format->video_level;
     EXPECT_EQ(format->video_codec, IPTV_STREAM_VIDEO_H264);
     EXPECT_EQ(format->visible_width, 1920u);
     EXPECT_EQ(format->visible_height, 1080u);
@@ -968,9 +970,14 @@ TEST_F(AudioSelectionTest, RepositionRestoresMissingParametersOnlyOnTheFirstPict
     EXPECT_EQ(fake.discontinuities, 3u);
 }
 
-Packet ConfigurationPacket(unsigned counter, unsigned version, std::uint64_t second)
+Packet ConfigurationPacket(unsigned counter, unsigned version, std::uint64_t second,
+                           unsigned level = 42)
 {
     auto packet = H264Packet(counter & 15, true);
+    const auto sps = std::find(packet.begin() + 13, packet.end(), 0x67);
+    EXPECT_GE(std::distance(sps, packet.end()), 4);
+    if (std::distance(sps, packet.end()) >= 4)
+        sps[3] = static_cast<std::uint8_t>(level);
     const auto pps = std::find(packet.begin() + 13, packet.end(), 0x68);
     EXPECT_GE(std::distance(pps, packet.end()), 6);
     if (std::distance(pps, packet.end()) >= 6)
@@ -983,6 +990,59 @@ int FixturePpsVersion(const std::vector<std::uint8_t> &picture)
     const auto pps = std::find(picture.begin(), picture.end(), 0x68);
     EXPECT_GE(std::distance(pps, picture.end()), 6);
     return std::distance(pps, picture.end()) >= 6 ? pps[5] : -1;
+}
+
+TEST_F(AudioSelectionTest, HistoricalFormatChangeRequiresFreshBackend)
+{
+    iptv::Timeshift history(188 * 32);
+    ASSERT_TRUE(history.enable_replay());
+    const auto initial = StreamBytes(0x0f, ConfigurationPacket(0, 1, 1));
+    ASSERT_TRUE(history.append(initial.data(), initial.size()));
+    ASSERT_EQ(iptv_stream_push(&session, initial.data(), initial.size()), IPTV_STREAM_OK);
+    ASSERT_EQ(fake.opened_level, 42u);
+    const auto changed = ConfigurationPacket(1, 2, 2, 41);
+    ASSERT_TRUE(history.append(changed.data(), changed.size()));
+    for (unsigned second = 3; second <= 10; ++second)
+    {
+        const auto next = StampedPacket(H264Packet(second - 1, false), second * 90000);
+        ASSERT_TRUE(history.append(next.data(), next.size()));
+    }
+    const auto forward = history.seek_next(2000000);
+    ASSERT_TRUE(forward);
+    EXPECT_EQ(forward->pts_us, 2000000u);      // No five-second fallback into the old setup.
+    EXPECT_FALSE(history.seek_next(11000000)); // Wait for downloaded configuration metadata.
+    for (const unsigned target : {8u, 1u})
+    {
+        const auto position = history.seek(target * 1000000);
+        ASSERT_TRUE(position);
+        const auto videos = fake.videos;
+        ASSERT_EQ(history.reposition(&session, *position), IPTV_STREAM_REOPEN_REQUIRED);
+        EXPECT_EQ(session.telemetry.reopen_pts_us, position->pts_us);
+        EXPECT_EQ(fake.videos, videos); // Never submit the new setup to an incompatible decoder.
+        ASSERT_EQ(iptv_stream_cleanup(&session), IPTV_STREAM_OK);
+        SetUp();
+        ASSERT_EQ(history.reposition(&session, *position), IPTV_STREAM_OK);
+        for (unsigned i = 0; i < 3; ++i)
+        {
+            const auto picture =
+                StampedPacket(H264Packet(i, false), position->pts_us * 90 / 1000 + i * 90000);
+            ASSERT_EQ(iptv_stream_push(&session, picture.data(), picture.size()), IPTV_STREAM_OK);
+        }
+        EXPECT_EQ(fake.opened_level, target == 8 ? 41u : 42u);
+        EXPECT_GT(fake.videos, videos);
+    }
+    EXPECT_EQ(fake.opens, 3u);
+}
+
+TEST_F(AudioSelectionTest, InBandFormatChangeReportsItsOwnClockForHistoryRecovery)
+{
+    const auto first = StreamBytes(0x0f, ConfigurationPacket(0, 1, 1));
+    ASSERT_EQ(iptv_stream_push(&session, first.data(), first.size()), IPTV_STREAM_OK);
+    const auto changed = ConfigurationPacket(1, 2, 2, 41);
+    ASSERT_EQ(iptv_stream_push(&session, changed.data(), changed.size()),
+              IPTV_STREAM_REOPEN_REQUIRED);
+    EXPECT_EQ(session.telemetry.reopen_pts_us, 2000000u);
+    EXPECT_EQ(fake.opened_level, 42u);
 }
 
 TEST_F(SubtitleStreamTest, HistoryRestoresProgrammeTracksWithoutRetainedTables)

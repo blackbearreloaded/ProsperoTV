@@ -818,12 +818,21 @@ class StreamRunner
             stop_deadline_usec_ = now + static_cast<std::uint64_t>(milliseconds) * UINT64_C(1000);
     }
 
-    bool Start()
+    bool Start(bool keep_history = false)
     {
-        if (Close() != 0)
+        if (keep_history)
+        {
+            std::uint32_t selected = 0;
+            if (iptv_stream_audio_tracks(&session_, nullptr, 0, &selected))
+                history_audio_selection_ = selected;
+        }
+        if (Close(keep_history) != 0 ||
+            (keep_history && (!history_ || !history_reopen_ || PlaybackStopRequested())))
             return false;
+        const auto presented = keep_history ? PresentedFrames() : 0;
         if (iptv_native_backend_init(&adapter_.backend) != 0)
             return false;
+        presented_before_reopen_ = presented;
         adapter_.initialized = true;
         adapter_.poll_controls = [](void *self)
         { (void)static_cast<StreamRunner *>(self)->StopRequested(); };
@@ -888,6 +897,14 @@ class StreamRunner
         }
         active_ = true;
         mode_ = RunnerMode::transport_stream;
+        if (keep_history)
+        {
+            // A newer seek entered while the old decoder drained takes priority.
+            if (!history_request_)
+                history_request_ = history_reopen_;
+            history_reopen_.reset();
+            history_reopen_pts_.reset();
+        }
         if (!StartReadAhead())
         {
             Close();
@@ -900,6 +917,7 @@ class StreamRunner
     {
         if (Close() != 0)
             return false;
+        presented_before_reopen_ = 0;
         if (iptv_native_backend_init(&adapter_.backend) != 0)
             return false;
         adapter_.initialized = true;
@@ -929,13 +947,16 @@ class StreamRunner
         if (history_)
         {
             const int result = read_ahead_result_.load(std::memory_order_acquire);
-            if (result != IPTV_STREAM_OK)
+            if (result != IPTV_STREAM_OK && (result != IPTV_STREAM_REOPEN_REQUIRED ||
+                                             (!history_reopen_ && !history_reopen_pts_)))
                 return result;
             // Live input keeps arriving while the viewer is paused. The history
             // owns a copy; the demuxer never reads overwritten producer memory.
             if (!history_->append(static_cast<const std::uint8_t *>(data), bytes))
                 return IPTV_STREAM_BUFFER_LIMIT;
             read_ahead_write_.store(history_->range().end, std::memory_order_release);
+            if (result == IPTV_STREAM_REOPEN_REQUIRED && !RecoverHistory(true))
+                return result;
             return IPTV_STREAM_OK;
         }
 
@@ -976,8 +997,9 @@ class StreamRunner
         while (read_ahead_read_.load(std::memory_order_acquire) !=
                read_ahead_write_.load(std::memory_order_acquire))
         {
-            if (read_ahead_result_.load(std::memory_order_acquire) != IPTV_STREAM_OK ||
-                StopRequested())
+            if (StopRequested() ||
+                (read_ahead_result_.load(std::memory_order_acquire) != IPTV_STREAM_OK &&
+                 !RecoverHistory()))
             {
                 return false;
             }
@@ -1147,7 +1169,7 @@ class StreamRunner
 
     std::uint64_t PresentedFrames() const
     {
-        return iptv_native_backend_presented_frames(&adapter_.backend);
+        return presented_before_reopen_ + iptv_native_backend_presented_frames(&adapter_.backend);
     }
 
     int Finish()
@@ -1156,7 +1178,9 @@ class StreamRunner
             return IPTV_STREAM_INVALID_STATE;
         if (mode_ == RunnerMode::transport_stream)
         {
-            const int read_ahead_result = StopReadAhead(true);
+            int read_ahead_result = StopReadAhead(true, true);
+            while (read_ahead_result == IPTV_STREAM_REOPEN_REQUIRED && RecoverHistory())
+                read_ahead_result = StopReadAhead(true, true);
             if (read_ahead_result != IPTV_STREAM_OK)
                 return read_ahead_result;
             const int stop_result = iptv_stream_stop(&session_);
@@ -1189,12 +1213,12 @@ class StreamRunner
         return IPTV_STREAM_OK;
     }
 
-    int Close()
+    int Close(bool keep_history = false)
     {
         if (active_)
         {
             if (mode_ == RunnerMode::transport_stream)
-                (void)StopReadAhead(false);
+                (void)StopReadAhead(keep_history, keep_history);
 #if IPTV_PROBE
             // Preserve the last initialized attempt before cleanup/reconnect resets it.
             // Empty reconnects must not overwrite the decoder failure we need to diagnose.
@@ -1239,8 +1263,10 @@ class StreamRunner
         iptv_native_telemetry_t native{};
         if (NativeTelemetry(&native))
             RecordCleanupResult(native.cleanup_result);
-        gSubtitles.clear();
+        if (!keep_history)
         {
+            ResetHistory();
+            gSubtitles.clear();
             std::lock_guard lock(gLiveMutex);
             gLiveState = {};
             gLivePauseRequest = -1;
@@ -1249,7 +1275,8 @@ class StreamRunner
         {
             std::lock_guard lock(gAudioMutex);
             gAudioState = {};
-            gAudioMetadata.clear();
+            if (!keep_history)
+                gAudioMetadata.clear();
             gAudioAvailable = false;
             gAudioRequest.store(UINT32_MAX, std::memory_order_release);
         }
@@ -1275,6 +1302,34 @@ class StreamRunner
     }
 
   private:
+    void ResetHistory()
+    {
+        history_.reset();
+        history_request_.reset();
+        history_reopen_.reset();
+        history_reopen_pts_.reset();
+        history_audio_selection_.reset();
+        history_generation_ = 0;
+        paused_.store(false, std::memory_order_release);
+        history_expired_.store(false, std::memory_order_release);
+    }
+
+    bool RecoverHistory(bool allow_pending = false)
+    {
+        // Acquire the demuxer's result before inspecting its saved seek target.
+        // Start joins that worker and closes the old decoder on this owner thread.
+        if (read_ahead_result_.load(std::memory_order_acquire) != IPTV_STREAM_REOPEN_REQUIRED ||
+            !history_ || PlaybackStopRequested())
+            return false;
+        if (!history_reopen_ && history_reopen_pts_)
+        {
+            history_reopen_ = history_->seek_next(*history_reopen_pts_);
+            if (!history_reopen_)
+                return allow_pending; // Download may still be completing the changed picture.
+        }
+        return history_reopen_ && Start(true);
+    }
+
     void UpdateLiveControls()
     {
         if (!history_)
@@ -1377,8 +1432,17 @@ class StreamRunner
             }
             if (result != IPTV_STREAM_OK)
             {
+                if (result == IPTV_STREAM_REOPEN_REQUIRED)
+                    history_reopen_ = position;
                 read_ahead_result_.store(result, std::memory_order_release);
                 return false;
+            }
+            if (history_audio_selection_)
+            {
+                // Keep Off or an advertised PID. A removed PID falls back to
+                // the new programme's default rather than blocking video.
+                (void)iptv_stream_select_audio(&session_, *history_audio_selection_);
+                history_audio_selection_.reset();
             }
             if (same_timeline && position->pts_us <= INT64_MAX)
                 (void)gSubtitles.seek(static_cast<std::int64_t>(position->pts_us));
@@ -1402,7 +1466,7 @@ class StreamRunner
 
     bool StartReadAhead()
     {
-        if (live_)
+        if (live_ && !history_)
         {
             history_.reset(new (std::nothrow) iptv::Timeshift());
             if (history_ && (!history_->available() || !history_->enable_replay()))
@@ -1414,8 +1478,9 @@ class StreamRunner
             history_.reset();
             return false;
         }
-        read_ahead_read_.store(0, std::memory_order_relaxed);
-        read_ahead_write_.store(0, std::memory_order_relaxed);
+        const auto retained = history_ ? history_->range() : iptv::Timeshift::Range{};
+        read_ahead_read_.store(retained.begin, std::memory_order_relaxed);
+        read_ahead_write_.store(retained.end, std::memory_order_relaxed);
         read_ahead_result_.store(IPTV_STREAM_OK, std::memory_order_relaxed);
         read_ahead_stop_.store(false, std::memory_order_relaxed);
         read_ahead_finished_.store(false, std::memory_order_relaxed);
@@ -1480,6 +1545,9 @@ class StreamRunner
             const int result = iptv_stream_push(&session_, read_ahead_buffer_ + offset, chunk);
             if (result != IPTV_STREAM_OK)
             {
+                if (history_ && result == IPTV_STREAM_REOPEN_REQUIRED &&
+                    session_.telemetry.reopen_pts_us != IPTV_STREAM_PTS_UNKNOWN)
+                    history_reopen_pts_ = session_.telemetry.reopen_pts_us;
                 read_ahead_result_.store(result, std::memory_order_release);
                 break;
             }
@@ -1497,7 +1565,7 @@ class StreamRunner
         read_ahead_done_.store(true, std::memory_order_release);
     }
 
-    int StopReadAhead(bool drain)
+    int StopReadAhead(bool drain, bool keep_history = false)
     {
         if (!read_ahead_thread_)
             return read_ahead_result_.load(std::memory_order_acquire);
@@ -1523,11 +1591,9 @@ class StreamRunner
         read_ahead_thread_ = nullptr;
         delete[] read_ahead_buffer_;
         read_ahead_buffer_ = nullptr;
-        history_.reset();
-        history_request_.reset();
-        history_generation_ = 0;
-        paused_.store(false, std::memory_order_release);
-        history_expired_.store(false, std::memory_order_release);
+        if (!keep_history || (!history_reopen_ && !history_reopen_pts_) ||
+            read_ahead_result_.load(std::memory_order_acquire) != IPTV_STREAM_REOPEN_REQUIRED)
+            ResetHistory();
         if (join_result != 0)
             return IPTV_STREAM_NATIVE_ERROR;
         return read_ahead_result_.load(std::memory_order_acquire);
@@ -1558,6 +1624,7 @@ class StreamRunner
     bool webm_finished_ = false;
     std::uint64_t stop_deadline_usec_ = 0;
     std::uint64_t player_cleanup_count_ = 0;
+    std::uint64_t presented_before_reopen_ = 0;
     int player_cleanup_result_ = 0;
     std::atomic<bool> playback_stop_requested_{false};
     bool overlay_chord_down_ = false;
@@ -1567,6 +1634,9 @@ class StreamRunner
     std::atomic<bool> paused_{false}, history_expired_{false};
     std::mutex history_request_mutex_;
     std::optional<iptv::Timeshift::Position> history_request_;
+    std::optional<iptv::Timeshift::Position> history_reopen_;
+    std::optional<std::uint64_t> history_reopen_pts_;
+    std::optional<std::uint32_t> history_audio_selection_;
     std::atomic<std::uint64_t> history_generation_{0};
     std::uint8_t *read_ahead_buffer_ = nullptr;
     void *read_ahead_thread_ = nullptr;
