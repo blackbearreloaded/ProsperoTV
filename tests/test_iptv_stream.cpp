@@ -409,6 +409,31 @@ class AudioSelectionTest : public testing::Test
     }
 };
 
+TEST_F(AudioSelectionTest, LargeSlicesWithoutDelimitersKeepTheirPictureBoundaries)
+{
+    ASSERT_EQ(pmt({{0x111, 0x0f, "eng", 0}}, true), IPTV_STREAM_OK);
+    std::vector<std::uint8_t> first_picture;
+    std::vector<std::uint8_t> last_picture;
+    for (unsigned i = 0; i < 3; ++i)
+    {
+        std::vector<std::uint8_t> nal{0, 0,    0,
+                                      1, 0x41, static_cast<std::uint8_t>(i == 1 ? 0x40 : 0x80)};
+        nal.resize(106, 0xaa); // Larger than the old 64-byte slice-header buffer.
+        if (i < 2)
+            first_picture.insert(first_picture.end(), nal.begin(), nal.end());
+        else
+            last_picture = nal;
+        const auto packet = PesPacket(0x110, i + 1, 0xe0, nal);
+        ASSERT_EQ(iptv_stream_push(&session, packet.data(), packet.size()), IPTV_STREAM_OK);
+    }
+    ASSERT_EQ(iptv_stream_stop(&session), IPTV_STREAM_OK);
+    ASSERT_EQ(fake.video_packets.size(), 3u); // Startup, two-slice picture, next picture.
+    const auto &combined = fake.video_packets[1];
+    ASSERT_GE(combined.size(), first_picture.size());
+    EXPECT_TRUE(std::equal(first_picture.rbegin(), first_picture.rend(), combined.rbegin()));
+    EXPECT_EQ(fake.video_packets[2], last_picture);
+}
+
 class SubtitleStreamTest : public AudioSelectionTest
 {
   protected:

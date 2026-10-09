@@ -1293,13 +1293,9 @@ static size_t find_start_code(const uint8_t *data, size_t bytes, size_t from, si
 
 static bool h264_first_slice(const uint8_t *nal, size_t bytes)
 {
-    uint8_t rbsp[64];
-    if (bytes < 2u)
-        return false;
-    const size_t count = make_rbsp(nal + 1u, bytes - 1u, rbsp, sizeof(rbsp));
-    bit_reader_t bits{rbsp, count * 8u, 0};
-    uint32_t first_mb = 1;
-    return count && read_ue(&bits, &first_mb) && first_mb == 0u;
+    // first_mb_in_slice is the first Exp-Golomb value: zero is exactly one
+    // leading 1 bit. Inspect that bit without copying an entire large slice.
+    return bytes >= 2u && (nal[1] & 0x80u) != 0;
 }
 
 static bool hevc_first_slice(const uint8_t *nal, size_t bytes)
