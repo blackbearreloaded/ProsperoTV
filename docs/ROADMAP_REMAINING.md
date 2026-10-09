@@ -124,8 +124,6 @@ both the mode request and the platform's output-status readback.
 
 Menus and bitmap/text captions use 203-nit reference white. The menu preview
 reads native low-aligned ten-bit samples and uses a bounded SDR tone map.
-The [public HDR research](https://github.com/blackbearreloaded/ps5-hardware-video-decoding-research/blob/main/docs/hdr.md)
-documents the surface contract and limits of Remote Play color verification;
 [EVO Player](https://github.com/sainsaji/EVO-PLAYER-PS5) provides the public
 buffer-attribute transition reference. HDMI display acceptance remains pending.
 Static mastering display and content light metadata now follow presentation
