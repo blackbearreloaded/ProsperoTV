@@ -167,6 +167,15 @@ audio and two video queue underruns occurred across transitions. Their impact,
 audio/subtitle synchronization, expiry, changing formats and 4K/HEVC history
 remain unverified. Evidence: `../psiptv/results/roadmap/console-33/result.json`.
 
+Native AAC now recreates its decoder when the audio timeline changes, matching
+the existing software-decoder reset. The ASan/UBSan state regression covers
+success, stale-buffer clearing, delete/create failures and software fallback;
+the PS5 application build passes. Case34 (f442b03, PPSA88276) confirms all four
+seek commands created fresh AAC contexts, with 1,957 presented pictures, 3,690
+decoded audio frames and clean teardown. Three audio/three video queue gaps
+remain; audible impact and A/V synchronization are not proven by these checks.
+Evidence: `../psiptv/results/roadmap/console-34/result.json`.
+
 - 2026-10-08 | rewind | 4c63161 | host/PS5 build | partial-pass: mapped history and clock replay | ../psiptv/results/roadmap/timeshift-clock-native-result.json | integrate foreground controls
 - 2026-10-08 | rewind | ec377c9 | host/PS5 build | partial-pass: foreground controls | ../psiptv/results/roadmap/timeshift-player-result.json | decoder/subtitle replay, native acceptance
 - 2026-10-08 | rewind | 7ef62d8 | host/PS5 build | partial-pass: parameter replay | ../psiptv/results/roadmap/timeshift-parameters-result.json | configuration versions, native acceptance
@@ -175,6 +184,7 @@ remain unverified. Evidence: `../psiptv/results/roadmap/console-33/result.json`.
 - 2026-10-08 | rewind | 289d250 | host/PS5 build | partial-pass: historical decoder setup | ../psiptv/results/roadmap/timeshift-config-result.json | forward scan and native acceptance
 - 2026-10-08 | rewind | 1c8e33e | host/PS5 build | partial-pass: forward configuration scan | ../psiptv/results/roadmap/timeshift-scan-result.json | native acceptance and remaining formats
 - 2026-10-08 | rewind | c6e6afb | .30 PPSA88275 | partial-pass: native pause/seek/live controls | ../psiptv/results/roadmap/console-33/result.json | sync, expiry and remaining formats
+- 2026-10-08 | rewind | f442b03 | .30 PPSA88276 | partial-pass: native AAC seek reset | ../psiptv/results/roadmap/console-34/result.json | timing, expiry and remaining formats
 
 ## Source additions
 
