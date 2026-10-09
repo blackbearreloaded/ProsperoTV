@@ -672,6 +672,7 @@ struct NativeAdapter
     iptv_native_backend_t backend{};
     bool initialized = false;
     bool opened = false;
+    bool preserve_subtitles = false;
     void (*poll_controls)(void *) = nullptr;
     void *controls_context = nullptr;
 };
@@ -752,7 +753,6 @@ int AdapterSelectAudio(void *context, std::uint32_t type)
 
 int AdapterDiscontinuity(void *context)
 {
-    gSubtitles.reset_timeline();
     auto *adapter = static_cast<NativeAdapter *>(context);
     return adapter && adapter->opened ? iptv_native_backend_discontinuity(&adapter->backend) : -1;
 }
@@ -859,7 +859,11 @@ class StreamRunner
                 (void)gSubtitles.push((track->pid << 16) | track->composition_page, bytes, count,
                                       static_cast<std::int64_t>(pts), 0);
         };
-        backend.subtitle_reset = [](void *) { gSubtitles.reset_timeline(); };
+        backend.subtitle_reset = [](void *self)
+        {
+            if (!static_cast<NativeAdapter *>(self)->preserve_subtitles)
+                gSubtitles.reset_timeline();
+        };
         backend.discontinuity = AdapterDiscontinuity;
         backend.drain = AdapterDrain;
         backend.close = AdapterClose;
@@ -1325,12 +1329,17 @@ class StreamRunner
         {
             paused_.store(false, std::memory_order_release);
             iptv_native_backend_request_reposition(&adapter_.backend);
+            const bool same_timeline = history_generation_ == position->generation;
+            adapter_.preserve_subtitles = same_timeline;
             const int result = iptv_stream_reposition(&session_, position->pts_us);
+            adapter_.preserve_subtitles = false;
             if (result != IPTV_STREAM_OK)
             {
                 read_ahead_result_.store(result, std::memory_order_release);
                 return false;
             }
+            if (same_timeline && position->pts_us <= INT64_MAX)
+                (void)gSubtitles.seek(static_cast<std::int64_t>(position->pts_us));
             read = position->offset;
             history_generation_ = position->generation;
             read_ahead_read_.store(read, std::memory_order_release);

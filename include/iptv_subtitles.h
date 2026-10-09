@@ -83,10 +83,13 @@ class Subtitles
     bool push(std::uint32_t id, const std::uint8_t *data, std::size_t bytes, std::int64_t pts_us,
               std::int64_t duration_us);
     std::vector<std::shared_ptr<const SubtitleCue>> at(std::int64_t video_pts_us);
+    // Rebuild selected decoder/cues from retained packets on a same-timeline seek.
+    bool seek(std::int64_t video_pts_us);
     void reset_timeline();
     void clear();
 
   private:
+    bool replay_locked();
     bool decode_locked(std::uint32_t id, const std::uint8_t *data, std::size_t bytes,
                        std::int64_t pts_us, std::int64_t duration_us);
     struct State;
