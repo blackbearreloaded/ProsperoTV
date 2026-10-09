@@ -42,7 +42,7 @@ constexpr Name kButtons[] = {
     {"l1", hui::pad_bits::kL1},           {"r1", hui::pad_bits::kR1},
     {"l2", hui::pad_bits::kL2},           {"r2", hui::pad_bits::kR2},
     {"options", hui::pad_bits::kOptions}, {"touchpad", hui::pad_bits::kTouchpad},
-    {"r3", hui::pad_bits::kR3},
+    {"l3", hui::pad_bits::kL3},           {"r3", hui::pad_bits::kR3},
 };
 
 std::uint32_t button(const std::string &name)

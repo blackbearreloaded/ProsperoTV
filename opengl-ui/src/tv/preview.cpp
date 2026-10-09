@@ -9,11 +9,12 @@
 
 namespace ptv
 {
-bool preview_pixels(const iptv_native_picture_t &p, ImagePixels *pixels)
+bool preview_pixels(const iptv_native_picture_t &p, ImagePixels *pixels, unsigned max_width)
 {
-    if (!pixels || !p.data || !p.width || !p.height || p.width > 3840 || p.height > 2160 ||
-        p.pitch < p.width || p.pitch > 4096 || (p.pitch & 1) || p.surface_height < p.height ||
-        p.surface_height > 2304 || (p.bit_depth != 8 && p.bit_depth != 10))
+    if (!max_width || max_width > 960 || !pixels || !p.data || !p.width || !p.height ||
+        p.width > 3840 || p.height > 2160 || p.pitch < p.width || p.pitch > 4096 || (p.pitch & 1) ||
+        p.surface_height < p.height || p.surface_height > 2304 ||
+        (p.bit_depth != 8 && p.bit_depth != 10))
         return false;
     const unsigned component = p.bit_depth == 10 ? 2 : 1;
     const std::size_t luma = std::size_t(p.pitch) * p.surface_height;
@@ -21,7 +22,8 @@ bool preview_pixels(const iptv_native_picture_t &p, ImagePixels *pixels)
         (luma + std::size_t(p.pitch) * ((p.surface_height + 1) / 2)) * component;
     if (p.bytes < needed)
         return false;
-    const float scale = std::min({1.0f, 640.0f / p.width, 360.0f / p.height});
+    const float scale =
+        std::min({1.0f, float(max_width) / p.width, (max_width * 9.0f / 16) / p.height});
     pixels->width = std::max(1, static_cast<int>(p.width * scale));
     pixels->height = std::max(1, static_cast<int>(p.height * scale));
     pixels->rgba.resize(std::size_t(pixels->width) * pixels->height * 4);
@@ -73,11 +75,12 @@ LivePreview::~LivePreview()
 {
     clear();
 }
-void LivePreview::configure(Upload upload, ImageCache::Release release)
+void LivePreview::configure(Upload upload, ImageCache::Release release, bool multiview)
 {
     clear();
     upload_ = std::move(upload);
     release_ = std::move(release);
+    multiview_ = multiview;
 }
 void LivePreview::release_texture()
 {
@@ -102,6 +105,8 @@ void LivePreview::update(std::optional<PlayRequest> request, float dt)
          (wanted_->channel_id != request->channel_id || wanted_->source_id != request->source_id ||
           wanted_->urls != request->urls || wanted_->user_agent != request->user_agent ||
           wanted_->referrer != request->referrer ||
+          wanted_->authorization != request->authorization ||
+          wanted_->credential_origin != request->credential_origin ||
           wanted_->portal_command != request->portal_command));
     if (changed)
     {
@@ -125,19 +130,20 @@ void LivePreview::update(std::optional<PlayRequest> request, float dt)
         ready_.store(false);
     }
     delay_ += std::max(0.0f, dt);
-    if (!thread_ && wanted_ && !attempted_ && delay_ >= 1.2f)
+    if (!thread_ && wanted_ && !attempted_ && delay_ >= (multiview_ ? 0.0f : 1.2f))
     {
         attempted_ = true;
         playing_ = *wanted_;
         stop_.store(false);
         done_.store(false);
         ready_.store(false);
+        audio_.failed.store(false);
         thread_ = platform::thread_start(work, this, 2u * 1024u * 1024u, "ptv-preview");
     }
 }
 void LivePreview::clear()
 {
-    stop_.store(true);
+    request_stop();
     if (thread_)
         platform::thread_join(thread_);
     thread_ = nullptr;
@@ -147,6 +153,8 @@ void LivePreview::clear()
     attempted_ = false;
     delay_ = 0;
     pending_ = {};
+    audio_.active.store(false);
+    audio_.failed.store(false);
     release_texture();
 }
 void *LivePreview::work(void *self)
@@ -167,15 +175,15 @@ void *LivePreview::work(void *self)
             auto &p = r.preview;
             const auto now = std::chrono::steady_clock::now();
             if (p.stop_.load() || p.ready_.load() ||
-                now - r.previous < std::chrono::milliseconds(80))
+                now - r.previous < std::chrono::milliseconds(p.multiview_ ? 33 : 80))
                 return;
-            if (preview_pixels(*picture, &p.pending_))
+            if (preview_pixels(*picture, &p.pending_, p.multiview_ ? 960 : 640))
             {
                 r.previous = now;
                 p.ready_.store(true);
             }
         },
-        &receiver);
+        &receiver, p.multiview_ ? &p.audio_ : nullptr);
     p.done_.store(true);
     return nullptr;
 }

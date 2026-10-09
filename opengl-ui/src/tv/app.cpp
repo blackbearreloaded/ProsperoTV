@@ -113,9 +113,9 @@ const char *source_label(iptv::SourceKind source)
 
 App::App(Model &model, const ui::Fonts &fonts, std::uint32_t glass_texture,
          const Settings &settings, std::string version)
-    : shared_(model, fonts, settings), browse_(shared_), sources_(shared_), vod_(shared_),
-      search_(shared_), library_sheet_(shared_), guide_sheet_(shared_), update_(shared_),
-      glass_texture_(glass_texture), version_(std::move(version))
+    : shared_(model, fonts, settings), multiview_(shared_), browse_(shared_), sources_(shared_),
+      vod_(shared_), search_(shared_), library_sheet_(shared_), guide_sheet_(shared_),
+      update_(shared_), glass_texture_(glass_texture), version_(std::move(version))
 {
     const ui::Theme &theme = shared_.theme;
 
@@ -473,7 +473,19 @@ void App::apply_settings()
 void App::handle_screen(const InputFrame &input, ui::Feedback &feedback)
 {
     Model &model = shared_.model;
-    if (browsing() && input.is_pressed(Action::r3))
+    if (multiview_.choosing() && (input.is_pressed(Action::back) || input.is_pressed(Action::l3)))
+    {
+        multiview_.cancel_choice();
+        return;
+    }
+    if (browsing() && input.is_pressed(Action::l3))
+    {
+        const auto channel = browse_.focused();
+        shared_.preview.clear();
+        multiview_.open(channel ? std::string(channel->id) : std::string());
+        return;
+    }
+    if (browsing() && !multiview_.choosing() && input.is_pressed(Action::r3))
     {
         const auto channel = browse_.focused();
         guide_sheet_.open(channel ? channel->id : std::string_view(), feedback);
@@ -491,6 +503,11 @@ void App::handle_screen(const InputFrame &input, ui::Feedback &feedback)
                                                            : 0;
     if (turn != 0)
     {
+        if (multiview_.choosing())
+        {
+            show_tab(tabs_.active() == kLive ? kFavorites : kLive, true);
+            return;
+        }
         if (tabs_.step(turn, input, feedback) == ui::Event::changed)
             tab_changed();
         return;
@@ -529,8 +546,16 @@ void App::handle_screen(const InputFrame &input, ui::Feedback &feedback)
     {
     case kLive:
     case kFavorites:
+        browse_.set_selection_mode(multiview_.choosing());
         switch (browse_.handle(input, feedback))
         {
+        case BrowseScreen::Result::selected:
+        {
+            const auto channel = browse_.focused();
+            if (!channel || !multiview_.choose(std::string(channel->id)))
+                shared_.toasts.push(ui::StatusKind::warning, "Channel unavailable or locked");
+            break;
+        }
         case BrowseScreen::Result::search:
             search_.open(feedback);
             break;
@@ -777,6 +802,10 @@ void App::step(const InputFrame &input, float dt, ui::Feedback &feedback)
             failure_seen_ = false;
         }
     }
+    else if (multiview_.is_open())
+    {
+        multiview_.handle(input, feedback);
+    }
     else if (search_.is_open())
     {
         search_.handle(input, feedback);
@@ -793,9 +822,10 @@ void App::step(const InputFrame &input, float dt, ui::Feedback &feedback)
     {
         handle_screen(input, feedback);
     }
-    if (intro_ < 0 && !update_.is_open() && !failure_.is_open() && !library_sheet_.is_open() &&
-        !guide_sheet_.is_open() && !search_.is_open() && !pairing_open_ &&
-        !storage_dialog_.is_open() && !was_pin_prompt && !model.pin_prompt())
+    browse_.set_selection_mode(multiview_.choosing());
+    if (intro_ < 0 && !multiview_.active() && !update_.is_open() && !failure_.is_open() &&
+        !library_sheet_.is_open() && !guide_sheet_.is_open() && !search_.is_open() &&
+        !pairing_open_ && !storage_dialog_.is_open() && !was_pin_prompt && !model.pin_prompt())
         model.resume_last(shared_.settings.resume_last && input.pressed == 0 &&
                           input.nav == Direction::none);
 
@@ -826,12 +856,14 @@ void App::step(const InputFrame &input, float dt, ui::Feedback &feedback)
 
     tabs_.update(dt);
     browse_.update(dt);
-    const bool preview_allowed = browsing() && shared_.settings.live_preview && intro_ < 0 &&
+    const bool preview_allowed = !multiview_.active() && browsing() &&
+                                 shared_.settings.live_preview && intro_ < 0 &&
                                  !update_.is_open() && !failure_.is_open() && !search_.is_open() &&
                                  !library_sheet_.is_open() && !guide_sheet_.is_open() &&
                                  !pairing_open_ && !storage_dialog_.is_open();
     const auto focused = preview_allowed ? browse_.focused() : std::nullopt;
     shared_.preview.update(focused ? model.preview_request(focused->id) : std::nullopt, dt);
+    multiview_.update(dt);
     if (tabs_.active() == kVod)
         vod_.update();
     shared_.images.update(browsing()               ? browse_.image_urls()
@@ -1152,7 +1184,7 @@ void App::draw_tuning(Frame &frame, const std::string &channel_id, float t,
 
 void App::draw_hints(ui::Canvas &canvas) const
 {
-    ui::Hint hints[8];
+    ui::Hint hints[9];
     int count = 0;
     switch (tabs_.active())
     {
@@ -1161,6 +1193,8 @@ void App::draw_hints(ui::Canvas &canvas) const
         count = browse_.hints(hints, 5);
         hints[count++] = {ui::Button::touchpad,
                           tabs_.active() == kFavorites ? "Folders" : "Categories"};
+        hints[count++] = {ui::Button::left_stick,
+                          multiview_.choosing() ? "Back to multiview" : "Multiview"};
         break;
     case kSources:
         count = sources_.hints(hints, 6);
@@ -1213,27 +1247,32 @@ void App::draw(Frame &frame) const
 
     // The screens: nothing here frosts anything, so no blurred copy is needed.
     ui::Canvas canvas{frame.scene, shared_.fonts, 0, shared_.clock};
-    draw_header(canvas);
-    switch (tabs_.active())
+    if (multiview_.is_open())
+        multiview_.draw(canvas);
+    else
     {
-    case kLive:
-    case kFavorites:
-        browse_.draw(canvas);
-        break;
-    case kSources:
-        sources_.draw(canvas);
-        break;
-    case kVod:
-        vod_.draw(canvas);
-        break;
-    case kSettings:
-        draw_settings(canvas);
-        break;
-    default:
-        draw_about(canvas);
-        break;
+        draw_header(canvas);
+        switch (tabs_.active())
+        {
+        case kLive:
+        case kFavorites:
+            browse_.draw(canvas);
+            break;
+        case kSources:
+            sources_.draw(canvas);
+            break;
+        case kVod:
+            vod_.draw(canvas);
+            break;
+        case kSettings:
+            draw_settings(canvas);
+            break;
+        default:
+            draw_about(canvas);
+            break;
+        }
+        draw_hints(canvas);
     }
-    draw_hints(canvas);
 
     // What floats: glass over the screens.
     ui::Canvas over{frame.overlay, shared_.fonts, glass_texture_, shared_.clock};

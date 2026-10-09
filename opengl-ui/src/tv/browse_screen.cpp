@@ -389,8 +389,13 @@ BrowseScreen::Result BrowseScreen::handle(const InputFrame &input, ui::Feedback 
     }
     if (event == ui::Event::moved)
         begin_swap(before);
-    if (event == ui::Event::activated && model.play(focused_index()))
-        return Result::play;
+    if (event == ui::Event::activated)
+    {
+        if (selection_mode_)
+            return Result::selected;
+        if (model.play(focused_index()))
+            return Result::play;
+    }
 
     if (input.is_pressed(Action::west))
     {
@@ -678,13 +683,14 @@ void BrowseScreen::draw_hero_text(ui::Canvas &canvas, const iptv::ChannelView &c
     // ---- what Cross and Square will do ----
     list.push_opacity(appear(4));
     const float cy = 402.0f + rise(4);
-    const float width = 16.0f + 40.0f + 14.0f + fonts.semibold.measure("Watch", 27.0f) + 34.0f;
+    const char *action = selection_mode_ ? "Choose" : "Watch";
+    const float width = 16.0f + 40.0f + 14.0f + fonts.semibold.measure(action, 27.0f) + 34.0f;
     const Rect pill{x, cy - 34.0f, width, 68.0f};
     list.shadow({pill.x, pill.y + 10.0f, pill.w, pill.h}, 34.0f, 24.0f, Color::rgb(0x000000, 0.4f));
     list.rounded_rect(pill, 34.0f, tone::cream);
     ui::draw_button(list, fonts, ui::GlyphStyle::dark(), ui::Button::cross, pill.x + 14.0f, cy,
                     40.0f);
-    ui::text(list, fonts.semibold, "Watch", pill.x + 70.0f, baseline_for(cy, 27.0f), 27.0f,
+    ui::text(list, fonts.semibold, action, pill.x + 70.0f, baseline_for(cy, 27.0f), 27.0f,
              tone::ink);
     const float star_x = pill.x + pill.w + 18.0f + 34.0f;
     list.circle(star_x, cy, 34.0f, kWhite.with_alpha(0.1f));
@@ -954,7 +960,7 @@ int BrowseScreen::hints(ui::Hint *out, int capacity) const
     }
     else if (focused())
     {
-        add({ui::Button::cross, "Watch"});
+        add({ui::Button::cross, selection_mode_ ? "Choose" : "Watch"});
         add({ui::Button::square, model.is_favorite(*focused()) ? "Unfavorite" : "Favorite"});
         add({ui::Button::l2, "Page", ui::Button::r2});
     }

@@ -22,9 +22,10 @@ class BrowseScreen
     enum class Result
     {
         none,
-        play,    // a channel was queued in the model
-        search,  // open the search sheet
-        go_live, // the favorites list is empty: go and find some
+        play,     // a channel was queued in the model
+        selected, // a channel was chosen for multiview; no foreground playback
+        search,   // open the search sheet
+        go_live,  // the favorites list is empty: go and find some
     };
 
     explicit BrowseScreen(Shared &shared);
@@ -50,6 +51,10 @@ class BrowseScreen
     bool showing_favorites() const
     {
         return favorites_;
+    }
+    void set_selection_mode(bool value)
+    {
+        selection_mode_ = value;
     }
     // The focus is on the letters at the right of the list.
     bool on_letters() const
@@ -88,6 +93,7 @@ class BrowseScreen
     ui::TabBar groups_;
     ui::EmptyState empty_;
     bool favorites_ = false;
+    bool selection_mode_ = false;
     Zone zone_ = Zone::grid;
     unsigned seen_revision_ = 0;
     bool keep_place_ = false; // the list is about to lose the focused channel: stay put

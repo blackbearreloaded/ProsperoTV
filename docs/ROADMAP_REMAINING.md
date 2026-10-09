@@ -18,7 +18,7 @@ and relevant checks work.
 | Live pause/rewind | Pause and replay several minutes of the current live channel | Implemented for TS/HLS and direct VP9 WebM; 119 core tests, media/subtitle checks, PS5 build and native controls/expiry/format-change cases pass; native caption visibility and subjective sync remain acceptance checks |
 | Deinterlacing | Preserve field-rate motion on interlaced broadcast video | Implemented with parsed field order and spatial bob; 120 core and 25 media/field sanitizer checks and PS5 build pass; native 1080i controls, uninterrupted 50-field/s playback and separate-field PAFF camera acceptance pass |
 | HDR | Preserve HDR metadata and output HDR on compatible displays | Implemented: HDR10/HLG output, GPU SDR fallback, per-picture color/mastering metadata, 203-nit UI and previews; native 4K color/transition/fallback cases 65/66 pass; physical HDMI and custom metadata forwarding unverified |
-| Multiview | Two or four simultaneous channels, within measured decoder limits | Pending |
+| Multiview | Two or four simultaneous channels, within measured decoder limits | Implemented UI and independent preview workers; host lifecycle/audio ownership checks pass; native simultaneous-decoder acceptance pending |
 | Parental controls | PIN-protected adult categories and kids-only mode | Implemented; 132 UI sanitizer tests, 73 core tests and PS5 build pass; console case pending |
 | Profiles | Separate sources, favorites and history by signed-in console user | Implemented; isolation/migration sanitizer tests, PS5 build and console startup pass |
 | Interface languages | Follow the console language for menus | Pending |
@@ -28,6 +28,18 @@ and relevant checks work.
 Completion also requires host checks, a PS5 build, bounded testing on an idle
 192.168.4.30 or 192.168.4.40, an updated deliverable, and a pull request. Console
 tests retain the workspace lock and sandbox-only test-title protocol.
+
+## Multiview acceptance in progress
+
+L3 in Live TV or Favorites opens two tiles. Triangle switches between two and
+four, Square selects a channel, the directional buttons change focus, R3 mutes,
+and Cross opens the selected channel full screen. Circle closes the mosaic.
+Each tile uses the existing bounded TS/HLS preview worker and scales its picture
+to at most 960 by 540. Audio follows focus, with a shared reservation covering
+both active and opening audio ports. All connections are cancelled before their
+workers are joined when leaving or handing off to full-screen playback.
+Channel selection observes the existing parental and sleep restrictions.
+Native decoder limits and sustained playback remain to be measured.
 
 ## HDR output and SDR fallback
 

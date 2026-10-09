@@ -212,6 +212,109 @@ class AppTest : public ::testing::Test
     int cues_ = 0;
 };
 
+TEST(MultiviewAudio, ReservesThePortBeforeItBecomesAudible)
+{
+    ptv::PreviewAudio first, second;
+    ASSERT_TRUE(first.claim());
+    EXPECT_FALSE(first.active.load());
+    EXPECT_FALSE(second.claim());
+    second.release(); // A waiting tile cannot release another tile's reservation.
+    EXPECT_FALSE(second.claim());
+    first.release();
+    EXPECT_TRUE(second.claim());
+    EXPECT_FALSE(first.claim());
+    second.release();
+}
+
+TEST_F(AppTest, MultiviewReleasesRemovedTilesAndSwitchesOneAudioOwner)
+{
+    host::set_preview(true);
+    ptv::Shared shared(*model_, font_set().fonts, {});
+    ptv::Multiview view(shared);
+    unsigned next_texture = 100, created = 0, released = 0;
+    view.configure(
+        [&](unsigned old, const ptv::ImagePixels &pixels)
+        {
+            EXPECT_LE(pixels.width, 960);
+            if (!old)
+                ++created;
+            return old ? old : next_texture++;
+        },
+        [&](unsigned) { ++released; });
+    view.open(std::string(model_->channel(0).id));
+    const auto button = [&](Action action)
+    {
+        hui::InputFrame input;
+        input.pressed = hui::action_bit(action);
+        view.handle(input, feedback_);
+    };
+    const auto direction = [&](Direction value)
+    {
+        hui::InputFrame input;
+        input.nav = value;
+        view.handle(input, feedback_);
+    };
+    const auto settle = [&]
+    {
+        for (int i = 0; i < 30; ++i)
+        {
+            view.update(kDt);
+            EXPECT_LE(view.audible_count(), 1u);
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        }
+    };
+    button(Action::north);
+    ASSERT_EQ(view.count(), 4u);
+    direction(Direction::right);
+    ASSERT_TRUE(view.choose(std::string(model_->channel(1).id)));
+    direction(Direction::down);
+    ASSERT_TRUE(view.choose(std::string(model_->channel(2).id)));
+    direction(Direction::left);
+    ASSERT_TRUE(view.choose(std::string(model_->channel(3).id)));
+    EXPECT_FALSE(view.choose("missing"));
+    settle();
+    EXPECT_EQ(host::preview_starts(), 4u);
+    EXPECT_EQ(created, 4u);
+    EXPECT_EQ(view.audible_count(), 1u);
+    for (const auto value : {Direction::right, Direction::up, Direction::left, Direction::down})
+    {
+        direction(value);
+        settle();
+        EXPECT_EQ(view.audible_count(), 1u);
+    }
+    button(Action::r3);
+    settle();
+    EXPECT_EQ(view.audible_count(), 0u);
+    button(Action::north);
+    settle();
+    EXPECT_EQ(host::preview_stops(), 2u);
+    EXPECT_EQ(view.count(), 2u);
+    EXPECT_TRUE(view.channel(2).empty());
+    view.stop();
+    EXPECT_EQ(host::preview_stops(), 4u);
+    EXPECT_EQ(released, created);
+    EXPECT_EQ(view.audible_count(), 0u);
+    host::set_preview(false);
+}
+
+TEST_F(AppTest, MultiviewChannelPickerDoesNotStartForegroundPlayback)
+{
+    host::set_preview(true);
+    app_->configure_preview([](unsigned old, const ptv::ImagePixels &) { return old ? old : 91u; },
+                            [](unsigned) {});
+    press(Action::l3);
+    press(Action::west);
+    press(Action::confirm);
+    ptv::PlayRequest request;
+    EXPECT_FALSE(model_->take_play_request(&request));
+    press(Action::confirm);
+    ASSERT_TRUE(model_->take_play_request(&request));
+    EXPECT_EQ(request.channel_id, model_->channel(0).id);
+    app_->stop_preview();
+    EXPECT_EQ(host::preview_starts(), host::preview_stops());
+    host::set_preview(false);
+}
+
 TEST_F(AppTest, OpensOnLiveTvWithTheWholeCatalog)
 {
     EXPECT_EQ(app_->tab(), 0);
