@@ -100,8 +100,18 @@ Text, language/Off selection, DVB bitmap replay and timed clearing pass in the
 between new provider timelines and subtitles downloaded ahead of demux still
 needs validation.
 
+Repeated seek requests now accumulate from the pending target until a picture
+from the new decoder timeline arrives. Old generations and frames discarded
+during reset cannot acknowledge that target. Controls and parser reposition
+share their existing owner mutex; pause/seek input is applied in event order,
+and a pause requested after a seek is preserved through the parser reset.
+The 99-test core sanitizer suite covers queued/in-flight targets, actual
+keyframe acknowledgement, moving retention bounds and arithmetic limits. The
+native queue-state host check and full-assembly PS5 application build also pass.
+Responsiveness and presentation timing still require console acceptance.
+
 This remains incomplete: configuration/timeline changes, direct WebM live
-playback, repeated seek requests and native pause/rewind/expiry, synchronization
+playback and native pause/rewind/expiry, synchronization
 and resource acceptance still need work. The earlier 146-test UI sanitizer suite,
 13 phone remote integration tests, native queue-state host check and PS5
 application build pass. The foreground changes
@@ -111,6 +121,7 @@ have not been packaged or installed on a console, and no timeshift PR is open.
 - 2026-10-08 | rewind | ec377c9 | host/PS5 build | partial-pass: foreground controls | ../psiptv/results/roadmap/timeshift-player-result.json | decoder/subtitle replay, native acceptance
 - 2026-10-08 | rewind | 7ef62d8 | host/PS5 build | partial-pass: parameter replay | ../psiptv/results/roadmap/timeshift-parameters-result.json | configuration versions, native acceptance
 - 2026-10-08 | rewind | 04eb912 | host/PS5 build | partial-pass: subtitle replay | ../psiptv/results/roadmap/timeshift-subtitles-result.json | timeline ordering, native acceptance
+- 2026-10-08 | rewind | b2bf8dd | host/PS5 build | partial-pass: seek/control ordering | ../psiptv/results/roadmap/timeshift-seek-controls-result.json | bounded native TS case
 
 ## Source additions
 
