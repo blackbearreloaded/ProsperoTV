@@ -188,9 +188,11 @@ H.264/HEVC replay test also passes under sanitizers, comparing decoded pixels
 across both local and independent-parser restoration.
 The application-only PS5 build passes at 8eb5e7e; no new console package was
 installed. Evidence: `../psiptv/results/roadmap/timeshift-download-result.json`.
-This API is not yet connected to StreamRunner's download loop. Producer/consumer
-ordering, provider generations and scan-boundary readiness must be integrated
-before the unread-expiry bug can be considered fixed in the application.
+StreamRunner now retains metadata on download (e0c3ec8), before transport bytes
+expire. Case35 validates native pause expiry/recovery and basic seeking. Historical
+settings also initialize a fresh parser after programme/codec headers expire
+(46a2196); 111 core and 21 real-media/subtitle sanitizer tests and the PS5 build
+pass. Native changing-format and timing acceptance remain open.
 
 - 2026-10-08 | rewind | 4c63161 | host/PS5 build | partial-pass: mapped history and clock replay | ../psiptv/results/roadmap/timeshift-clock-native-result.json | integrate foreground controls
 - 2026-10-08 | rewind | ec377c9 | host/PS5 build | partial-pass: foreground controls | ../psiptv/results/roadmap/timeshift-player-result.json | decoder/subtitle replay, native acceptance
@@ -530,3 +532,5 @@ This proves baseline playback only. Track selection, subtitle visibility and
 synchronization, switching latency and resource cost remain pending.
 
 - 2026-10-09 | rewind | e0c3ec8 | .30 PPSA88277 | partial-pass: download metadata, 330s expiry/recovery, seek/live, clean teardown | ../psiptv/results/roadmap/console-35/result.json | formats/sync
+
+- 2026-10-09 | rewind | 46a2196 | host/PS5 build | partial-pass: fresh parser restores expired programme/codec headers | ../psiptv/results/roadmap/timeshift-startup-result.json | native 4K/timing
