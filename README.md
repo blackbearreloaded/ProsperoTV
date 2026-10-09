@@ -54,17 +54,6 @@
 > runtime, FSELF tooling, tests, deployment flow, and release automation.
 
 > [!IMPORTANT]
-> **Video work is documented in [PS5 Hardware Video Decoding Research](https://github.com/blackbearreloaded/ps5-hardware-video-decoding-research).**
-> The companion repository records VideoDec2, H.264, HEVC, VP9, zero-copy AGC,
-> resolution, and performance findings that informed ProsperoTV's native video
-> pipeline.
-
-> [!IMPORTANT]
-> **Audio work is documented in [PS5 Audio Decoding Research](https://github.com/blackbearreloaded/ps5-audio-decoding-research).**
-> The companion repository records codec, AJM, hardware and firmware offload,
-> and output-path research that informed ProsperoTV's audio implementation.
-
-> [!IMPORTANT]
 > **Channel data comes from [iptv-org/iptv](https://github.com/iptv-org/iptv).**
 > ProsperoTV is an independent client. Neither this project nor iptv-org hosts
 > the listed streams, and channel availability can change without notice.
