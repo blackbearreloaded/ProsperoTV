@@ -52,6 +52,7 @@ unsigned iptv_native_get_volume(void)
 #define VIDEO_QUEUE_CAPACITY 512u
 #define VIDEO_QUEUE_MAX_BYTES (32u * 1024u * 1024u)
 #define PLAYBACK_BUFFER_US UINT64_C(2000000)
+#define DEMUX_BUFFER_US (PLAYBACK_BUFFER_US + UINT64_C(1000000))
 #define PLAYBACK_START_TIMEOUT_US UINT64_C(8000000)
 #define PLAYBACK_UNDERRUN_GRACE_US UINT64_C(250000)
 #define VIDEO_MODULE_ID 207u
@@ -1884,11 +1885,22 @@ static int32_t submit_coded_frame(backend_state_t *state, const void *coded_fram
     return present_video_output(state, &frame, &output, 1, 0);
 }
 
-static int media_span_ready(uint32_t count, uint64_t first, uint64_t last)
+static int media_span_ready(uint32_t count, uint64_t first, uint64_t last, uint64_t minimum)
 {
     // Reject missing/backward timestamps and large discontinuities as buffer duration.
-    return count > 1 && last >= first && last - first >= PLAYBACK_BUFFER_US &&
+    return count > 1 && last >= first && last - first >= minimum &&
            last - first < UINT64_C(60000000);
+}
+
+static int video_queue_at_time_limit(const backend_state_t *state, uint32_t read, uint32_t write)
+{
+    // Limit demux lead before playback starts too. Keep one second beyond the
+    // startup cushion for interleaved audio; downloads/history buffer upstream.
+    return write - read > 1 &&
+           media_span_ready(
+               write - read, atomic_load(&state->video_queue[read % VIDEO_QUEUE_CAPACITY].pts_us),
+               atomic_load(&state->video_queue[(write - 1u) % VIDEO_QUEUE_CAPACITY].pts_us),
+               DEMUX_BUFFER_US);
 }
 
 static int playback_queues_ready(const backend_state_t *state)
@@ -1914,7 +1926,8 @@ static int playback_queues_ready(const backend_state_t *state)
                           now - gate_started_us >= PLAYBACK_START_TIMEOUT_US;
     // Release on queue pressure too: the single demux producer may be blocked
     // before it can deliver the other track. Never wait for an impossible fill.
-    const int pressure = video_write - video_read >= VIDEO_QUEUE_CAPACITY - 1u ||
+    const int pressure = video_queue_at_time_limit(state, video_read, video_write) ||
+                         video_write - video_read >= VIDEO_QUEUE_CAPACITY - 1u ||
                          (current_audio && audio_write - audio_read >= AUDIO_QUEUE_CAPACITY - 1u) ||
                          atomic_load_explicit(&state->video_queue_bytes, memory_order_acquire) >=
                              VIDEO_QUEUE_MAX_BYTES - INPUT_SLOT_BYTES;
@@ -1925,7 +1938,8 @@ static int playback_queues_ready(const backend_state_t *state)
          media_span_ready(
              video_write - video_read,
              atomic_load(&state->video_queue[video_read % VIDEO_QUEUE_CAPACITY].pts_us),
-             atomic_load(&state->video_queue[(video_write - 1u) % VIDEO_QUEUE_CAPACITY].pts_us)));
+             atomic_load(&state->video_queue[(video_write - 1u) % VIDEO_QUEUE_CAPACITY].pts_us),
+             PLAYBACK_BUFFER_US));
     const uint32_t audio_rate = atomic_load(&state->audio_queue_sample_rate);
     const uint32_t audio_type = atomic_load(&state->audio_buffer_type);
     // AAC carries at least 1024 core samples; Layer II carries 1152 per frame.
@@ -2191,19 +2205,6 @@ static int32_t stop_video_worker(backend_state_t *state)
     return result;
 }
 
-static int video_queue_ahead(const backend_state_t *state, uint64_t pts, uint32_t queued)
-{
-    // Keep network/history buffering upstream. Queuing tens of seconds in the
-    // demuxer makes a new audio language wait that long for the displayed picture.
-    // An empty queue must still accept a timestamp jump or a decoder's next input.
-    if (!queued || !atomic_load_explicit(&state->playback_started, memory_order_acquire) ||
-        atomic_load(&state->presented_generation) != atomic_load(&state->stream_generation))
-        return 0;
-    const uint64_t shown = atomic_load_explicit(&state->presented_pts_us, memory_order_acquire);
-    return pts != UINT64_MAX && shown != UINT64_MAX && pts > shown &&
-           pts - shown > PLAYBACK_BUFFER_US;
-}
-
 static int32_t queue_coded_frame(backend_state_t *state, const void *coded_frame,
                                  size_t frame_bytes, uint64_t pts_us, int displayable)
 {
@@ -2230,8 +2231,7 @@ static int32_t queue_coded_frame(backend_state_t *state, const void *coded_frame
         read = atomic_load_explicit(&state->video_queue_read, memory_order_acquire);
         write = atomic_load_explicit(&state->video_queue_write, memory_order_relaxed);
         queued_bytes = atomic_load_explicit(&state->video_queue_bytes, memory_order_acquire);
-        if (write - read < VIDEO_QUEUE_CAPACITY &&
-            !video_queue_ahead(state, pts_us, write - read) &&
+        if (write - read < VIDEO_QUEUE_CAPACITY && !video_queue_at_time_limit(state, read, write) &&
             (queued_bytes == 0 || frame_bytes <= VIDEO_QUEUE_MAX_BYTES - queued_bytes))
             break;
         (void)sceKernelUsleep(1000u);
@@ -3282,29 +3282,13 @@ int main(void)
     assert(audio_sink_volume(&volume_sink) == 0 && test_volume_calls == 3);
     iptv_native_set_volume(200);
     assert(iptv_native_get_volume() == 100);
-    assert(!media_span_ready(1, 0, 2000000));
-    assert(!media_span_ready(60, 0, 1000000));
-    assert(media_span_ready(121, 0, 2000000));
-    assert(media_span_ready(51, 5000000, 7000000));
-    assert(!media_span_ready(60, 5000000, 1000000));
-    assert(!media_span_ready(60, 0, UINT64_C(100000000)));
+    assert(!media_span_ready(1, 0, 2000000, PLAYBACK_BUFFER_US));
+    assert(!media_span_ready(60, 0, 1000000, PLAYBACK_BUFFER_US));
+    assert(media_span_ready(121, 0, 2000000, PLAYBACK_BUFFER_US));
+    assert(media_span_ready(51, 5000000, 7000000, PLAYBACK_BUFFER_US));
+    assert(!media_span_ready(60, 5000000, 1000000, PLAYBACK_BUFFER_US));
+    assert(!media_span_ready(60, 0, UINT64_C(100000000), PLAYBACK_BUFFER_US));
     backend_state_t gate = {0};
-    atomic_store(&gate.presented_pts_us, 1000000);
-    assert(!video_queue_ahead(&gate, 3000001, 1)); // Startup still fills its two-second cushion.
-    atomic_store(&gate.playback_started, 1);
-    assert(!video_queue_ahead(&gate, 3000000, 1));
-    assert(video_queue_ahead(&gate, 3000001, 1));
-    assert(
-        !video_queue_ahead(&gate, 3000001, 0));   // A discontinuity cannot deadlock an empty queue.
-    assert(!video_queue_ahead(&gate, 999999, 1)); // Reordered pictures stay decodable.
-    assert(!video_queue_ahead(&gate, UINT64_MAX, 1));
-    atomic_store(&gate.presented_pts_us, UINT64_MAX);
-    assert(!video_queue_ahead(&gate, 3000001, 1));
-    atomic_store(&gate.presented_pts_us, 1000000);
-    atomic_store(&gate.stream_generation, 1);
-    assert(!video_queue_ahead(&gate, 3000001, 1)); // A seek first needs a picture on its new clock.
-    atomic_store(&gate.stream_generation, 0);
-    atomic_store(&gate.playback_started, 0);
     gate.video_queue = calloc(VIDEO_QUEUE_CAPACITY, sizeof(*gate.video_queue));
     gate.audio_queue = calloc(AUDIO_QUEUE_CAPACITY, sizeof(*gate.audio_queue));
     assert(gate.video_queue && gate.audio_queue);
@@ -3314,6 +3298,15 @@ int main(void)
     atomic_store(&gate.video_queue_write, 2);
     atomic_store(&gate.video_queue[1].pts_us, PLAYBACK_BUFFER_US);
     assert(!playback_queues_ready(&gate)); // Audio must also be buffered.
+    assert(!video_queue_at_time_limit(&gate, 0, 2));
+    atomic_store(&gate.video_queue[1].pts_us, DEMUX_BUFFER_US);
+    assert(video_queue_at_time_limit(&gate, 0, 2)); // Limit startup before playback begins.
+    assert(playback_queues_ready(&gate)); // Time pressure cannot deadlock underfilled audio.
+    assert(!video_queue_at_time_limit(&gate, 0, 0));
+    assert(!video_queue_at_time_limit(&gate, 0, 1));
+    atomic_store(&gate.video_queue[1].pts_us, UINT64_MAX);
+    assert(!video_queue_at_time_limit(&gate, 0, 2)); // Unknown clocks retain byte/frame limits.
+    atomic_store(&gate.video_queue[1].pts_us, PLAYBACK_BUFFER_US);
     atomic_store(&gate.audio_queue_sample_rate, 48000);
     atomic_store(&gate.audio_queue_write, 94);
     assert(playback_queues_ready(&gate));
