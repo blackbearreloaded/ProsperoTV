@@ -399,8 +399,10 @@ warning.
 - VP9 currently supports direct, video-only WebM Profile 0 streams. DASH,
   fragmented MP4, WebM audio, VP9 Profile 2, and general Matroska features are
   outside the supported path.
-- Interlaced H.264 (broadcast 1080i) plays with its two fields blended into
-  each frame: motion is smooth but slightly softer than a progressive channel.
+- Interlaced H.264 presents each field separately, preserving broadcast motion
+  at 50 or 60 fields per second. Spatial bob reduces vertical detail in each
+  field; it does not perform motion-adaptive reconstruction. Interlaced streams
+  rejected by the hardware decoder use bounded software decoding up to 1080i.
 - MPEG-TS playback supports H.264 and 8-bit/10-bit HEVC video. Main10 uses hardware
   decoding and GPU presentation to the SDR output; HDR output and HDR-to-SDR tone
   mapping are not implemented. The Main10 presentation path currently requires
@@ -489,8 +491,8 @@ The remaining ideas are not scheduled or promised.
 - **A sleep timer.** Closing the channel after a chosen time.
 - **Pausing live TV.** Stopping the picture and going back a few minutes in
   a channel that is being watched.
-- **Smoother interlaced pictures.** A deinterlacer that keeps the full motion
-  of broadcast channels, where today the two fields are blended.
+- [x] **Smoother interlaced pictures.** Presenting each broadcast field separately
+  to preserve its full motion.
 - **HDR.** Showing HDR channels as HDR; today they are shown in SDR.
 - **Several channels at once.** Two or four pictures side by side, for
   sport, if the console's decoder allows it.

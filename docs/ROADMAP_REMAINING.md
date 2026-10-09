@@ -16,7 +16,7 @@ and relevant checks work.
 | Audio/subtitles | Select available language tracks and render subtitles | Embedded/HLS audio and container/DVB/WebVTT subtitles implemented with host checks; live-provider and native acceptance pending |
 | Sleep timer | Stop playback at a selected deadline | Implemented; 134 UI sanitizer tests and PS5 build pass; console case pending |
 | Live pause/rewind | Pause and replay several minutes of the current live channel | Implemented for TS/HLS and direct VP9 WebM; 119 core tests, media/subtitle checks, PS5 build and native controls/expiry/format-change cases pass; native caption visibility and subjective sync remain acceptance checks |
-| Deinterlacing | Preserve field-rate motion on interlaced broadcast video | Pending |
+| Deinterlacing | Preserve field-rate motion on interlaced broadcast video | Implemented with parsed field order and spatial bob; 120 core and 25 media/field sanitizer checks and PS5 build pass; native 1080i controls, uninterrupted 50-field/s playback and separate-field PAFF camera acceptance pass |
 | HDR | Preserve HDR metadata and output HDR on compatible displays | Pending |
 | Multiview | Two or four simultaneous channels, within measured decoder limits | Pending |
 | Parental controls | PIN-protected adult categories and kids-only mode | Implemented; 132 UI sanitizer tests, 73 core tests and PS5 build pass; console case pending |
@@ -555,3 +555,17 @@ synchronization, switching latency and resource cost remain pending.
 - 2026-10-09 | rewind | 2a58893 | .30 PPSA88286 | pass: HLS clock reset, pause/seek/live; 22 media/13 remote checks | ../psiptv/results/roadmap/console-47/result.json | WebM/native captions
 
 - 2026-10-09 | rewind | 3545a66 | .30 PPSA88287 | pass: VP9 WebM pause/seek/live, 119 core sanitizer checks | ../psiptv/results/roadmap/console-48/result.json | field-rate deinterlacing
+
+- 2026-10-09 | fields | 750163a | .30 PPSA88288 | failed: first H264 picture rejected 0x811D0303; healthy teardown | ../psiptv/results/roadmap/console-49/result.json | framing/configuration
+
+- 2026-10-09 | fields | 827f30b | .30 PPSA88289 | failed: aligned height unchanged;3750 host frames identical | ../psiptv/results/roadmap/console-50/result.json | AVC profile ceiling
+
+- 2026-10-09 | fields | f133e47 | .30 PPSA88290 | failed: High-profile ceiling unchanged; healthy teardown | ../psiptv/results/roadmap/console-51/result.json | bounded software fallback
+
+- 2026-10-09 | fields | b8eeabb | .30 PPSA88291 | partial-pass: recovery,50fields/s,controls; stale seek frames need reset | ../psiptv/results/roadmap/console-52/result.json | reset/1080i
+
+- 2026-10-09 | fields | c32f6ff | .30 PPSA88292 | pass: bottom-first1080i pause/seek/live, decoder flush and clean teardown | ../psiptv/results/roadmap/console-53/result.json | steady pacing
+
+- 2026-10-09 | fields | c32f6ff | .30 PPSA88292 | pass: 3105 fields,50/s,no queue gaps,max40.1ms gap,healthy teardown | ../psiptv/results/roadmap/console-54/result.json | PAFF camera
+
+- 2026-10-09 | fields | 8ef56e1 | .30 PPSA88293 | pass: PAFF hardware495 pictures/989 fields,EOF,no queue gaps,healthy teardown | ../psiptv/results/roadmap/console-55/result.json | HDR

@@ -5,6 +5,7 @@
 
 #include "iptv_native_backend.h"
 #include "iptv_native_agc_present.h"
+#include "iptv_fields.h"
 #include "iptv_vp9_packet.h"
 #include "iptv_mp2.h"
 #include "iptv_audio_frame.h"
@@ -199,9 +200,7 @@ typedef struct native_video_mode
 } native_video_mode_t;
 
 static const native_video_mode_t video_modes[] = {
-    /* H.264 uses these rows for level and geometry limits. VideoDec2 receives
-     * the exact in-band profile below so interlaced Main streams are not
-     * opened as High-profile sessions. */
+    /* H.264 uses these rows for level and geometry limits. */
     {IPTV_NATIVE_CODEC_H264, 0, 1, IPTV_NATIVE_H264_PROFILE_HIGH, 41, 1280, 720},
     {IPTV_NATIVE_CODEC_H264, 0, 1, IPTV_NATIVE_H264_PROFILE_HIGH, 51, 1920, 1088},
     {IPTV_NATIVE_CODEC_H264, 0, 1, IPTV_NATIVE_H264_PROFILE_HIGH, 51, 2560, 1440},
@@ -236,8 +235,10 @@ typedef struct pending_pts
     {
         uint64_t pts_us;
         uint8_t displayable;
+        iptv_field_info_t fields;
     } values[PENDING_PTS_CAPACITY];
     uint32_t count;
+    iptv_field_info_t taken_fields;
 } pending_pts_t;
 
 _Static_assert(VIDEO_DRAIN_FLUSH_LIMIT >= PENDING_PTS_CAPACITY,
@@ -369,6 +370,10 @@ typedef struct backend_state
     uint64_t bitrate_window_bytes;
     uint32_t bitrate_kbps;
     pending_pts_t pending_pts;
+    iptv_field_parser_t *field_parser;
+    uint64_t extra_field_presentations;
+    uint64_t previous_picture_pts;
+    uint32_t pause_field;
     uint8_t drain_started;
     uint8_t video_drained;
     uint8_t pace_active;
@@ -553,6 +558,7 @@ static int pending_pts_push(pending_pts_t *pending, uint64_t pts_us, int display
         return 0;
     pending->values[pending->count].pts_us = pts_us;
     pending->values[pending->count].displayable = displayable != 0;
+    pending->values[pending->count].fields = (iptv_field_info_t){0};
     ++pending->count;
     return 1;
 }
@@ -575,6 +581,7 @@ static int pending_pts_take_smallest(pending_pts_t *pending, uint64_t *pts_us, i
     }
     *pts_us = pending->values[smallest].pts_us;
     *displayable = pending->values[smallest].displayable;
+    pending->taken_fields = pending->values[smallest].fields;
     --pending->count;
     pending->values[smallest] = pending->values[pending->count];
     return 1;
@@ -588,6 +595,7 @@ static int pending_pts_take_first(pending_pts_t *pending, uint64_t *pts_us, int 
         return 0;
     *pts_us = pending->values[0].pts_us;
     *displayable = pending->values[0].displayable;
+    pending->taken_fields = pending->values[0].fields;
     --pending->count;
     for (index = 0; index < pending->count; ++index)
         pending->values[index] = pending->values[index + 1u];
@@ -618,10 +626,12 @@ static int pending_pts_drop_second_field(pending_pts_t *pending)
     return pending_pts_take_smallest(pending, &pts_us, &displayable);
 }
 
-static int state_pending_push(backend_state_t *state, uint64_t pts_us, int displayable)
+static int state_pending_push(backend_state_t *state, uint64_t pts_us, int displayable,
+                              iptv_field_info_t fields)
 {
     if (!pending_pts_push(&state->pending_pts, pts_us, displayable))
         return 0;
+    state->pending_pts.values[state->pending_pts.count - 1].fields = fields;
     if (pts_us == UINT64_MAX)
         ++state->telemetry.unknown_video_timestamps;
     state->telemetry.pending_video_timestamps = state->pending_pts.count;
@@ -1297,6 +1307,7 @@ int32_t iptv_native_backend_init(iptv_native_backend_t *backend)
     state->state = IPTV_NATIVE_STATE_IDLE;
     state->audio_decoder = -1;
     state->audio_sink.handle = -1;
+    state->previous_picture_pts = UINT64_MAX;
     atomic_store_explicit(&state->stop_requested, 0, memory_order_relaxed);
     atomic_store_explicit(&state->stream_generation, 1u, memory_order_relaxed);
     state->video_generation = 1u;
@@ -1358,6 +1369,12 @@ int32_t iptv_native_backend_open(iptv_native_backend_t *backend,
         iptv_native_agc_present_set_cancelled(0);
 
     result = initialize_video(state);
+    if (result == 0 && config->codec == IPTV_NATIVE_CODEC_H264)
+    {
+        state->field_parser = iptv_field_parser_create();
+        if (!state->field_parser)
+            result = -12;
+    }
     if (result == 0)
         result = start_video_worker(state);
     if (result == 0 && state->config.enable_audio)
@@ -1571,7 +1588,17 @@ static int32_t present_video_output(backend_state_t *state, const videodec2_fram
         return IPTV_NATIVE_E_DECODER_OUTPUT;
     }
 
-    if (output->picture_count == 2)
+    iptv_field_info_t fields = state->pending_pts.taken_fields;
+    if (fields.first && !fields.duration_us && presentation_pts_us != UINT64_MAX &&
+        state->previous_picture_pts != UINT64_MAX &&
+        presentation_pts_us > state->previous_picture_pts)
+    {
+        const uint64_t step = presentation_pts_us - state->previous_picture_pts;
+        if (step >= 2000 && step <= 1000000)
+            fields.duration_us = (uint32_t)(step / 2);
+    }
+    state->previous_picture_pts = presentation_pts_us;
+    if (output->picture_count == 2 && (!fields.first || fields.field_picture))
     {
         (void)pending_pts_drop_second_field(&state->pending_pts);
         state->telemetry.pending_video_timestamps = state->pending_pts.count;
@@ -1589,76 +1616,95 @@ static int32_t present_video_output(backend_state_t *state, const videodec2_fram
             ++state->telemetry.drained_video_frames;
         return 0;
     }
-    result = pace_before_present(state, presentation_pts_us, &drop_frame);
-    if (result != 0)
-        goto failed;
-    if (drop_frame)
-        return 0;
-    result = complete_pending_presentation(state);
-    if (result != 0)
-        goto failed;
-
-    /* Before the clock below starts: the new interface's build places its
-     * own line between that clock and the next statement. */
-    if (state->config.bit_depth == 8 && (output->picture_count == 2 || g_force_field_blend))
+    const uint64_t first_pts_us = presentation_pts_us;
+    const uint32_t field_count =
+        !state->config.picture && state->config.bit_depth == 8 && fields.first &&
+                fields.duration_us && fields.count >= 2 && first_pts_us != UINT64_MAX &&
+                fields.count <= (UINT64_MAX - first_pts_us) / fields.duration_us
+            ? fields.count
+            : 1;
+    state->extra_field_presentations += field_count - 1;
+    for (uint32_t field_index = 0; field_index < field_count; ++field_index)
     {
-        const uint64_t blend_started = monotonic_us();
-        blend_fields(output);
-        elapsed = monotonic_us() - blend_started;
-        if (elapsed > state->telemetry.decode_max_us)
-            state->telemetry.decode_max_us = elapsed;
-    }
-    started = monotonic_us();
-    state->telemetry.last_present_source = (uintptr_t)output->buffer;
-    state->telemetry.zero_copy_pointer_match =
-        !state->config.picture &&
-        state->telemetry.last_decoder_output == state->telemetry.last_present_source;
-    rate_now = monotonic_us();
-    if (state->controls_started_us == 0)
-        state->controls_started_us = rate_now;
-    const iptv_native_video_overlay_t overlay = {
-        (uint32_t)state->config.codec, state->config.visible_width,
-        state->config.visible_height,  state->frame_rate_x100,
-        state->bitrate_kbps,           rate_now - state->controls_started_us < CONTROLS_OVERLAY_US,
-        presentation_pts_us,
-    };
-    if (state->config.picture)
-    {
-        const iptv_native_picture_t picture = {
-            output->buffer,          (size_t)output->buffer_size, output->pitch,
-            output->height,          state->config.visible_width, state->config.visible_height,
-            state->config.bit_depth, presentation_pts_us};
-        state->config.picture(state->config.picture_context, &picture);
-        result = 0;
-    }
-    else
-        result = iptv_native_agc_present_yuv_deferred(
-            output->buffer, (size_t)output->buffer_size, output->pitch, output->height,
-            state->config.visible_width, state->config.visible_height, state->config.bit_depth,
-            &overlay);
-    elapsed = monotonic_us() - started;
-    state->telemetry.present_total_us += elapsed;
-    if (elapsed > state->telemetry.present_max_us)
-        state->telemetry.present_max_us = elapsed;
-#if IPTV_PROBE
-    if (elapsed > state->probe_present_max_us)
-        state->probe_present_max_us = elapsed;
-#endif
-    if (result != 0)
-        goto failed;
-    state->pending_present_pts_us = presentation_pts_us;
-    state->pause_picture = (iptv_native_picture_t){
-        output->buffer,          (size_t)output->buffer_size, output->pitch,
-        output->height,          state->config.visible_width, state->config.visible_height,
-        state->config.bit_depth, presentation_pts_us};
-    state->pending_present_source = output->buffer;
-    state->pending_present_from_drain = (uint8_t)(from_drain != 0);
-    state->presentation_pending = 1;
-    if (state->telemetry.presented_frames == 0)
-    {
+        presentation_pts_us = first_pts_us + (uint64_t)field_index * fields.duration_us;
+        result = pace_before_present(state, presentation_pts_us, &drop_frame);
+        if (result != 0)
+            goto failed;
+        if (drop_frame)
+            continue;
         result = complete_pending_presentation(state);
         if (result != 0)
             goto failed;
+
+        /* Before the clock below starts: the new interface's build places its
+         * own line between that clock and the next statement. */
+        if (field_count == 1 && state->config.bit_depth == 8 &&
+            (output->picture_count == 2 || g_force_field_blend))
+        {
+            const uint64_t blend_started = monotonic_us();
+            blend_fields(output);
+            elapsed = monotonic_us() - blend_started;
+            if (elapsed > state->telemetry.decode_max_us)
+                state->telemetry.decode_max_us = elapsed;
+        }
+        started = monotonic_us();
+        state->telemetry.last_present_source = (uintptr_t)output->buffer;
+        state->telemetry.zero_copy_pointer_match =
+            !state->config.picture && !state->telemetry.software_video &&
+            state->telemetry.last_decoder_output == state->telemetry.last_present_source;
+        rate_now = monotonic_us();
+        if (state->controls_started_us == 0)
+            state->controls_started_us = rate_now;
+        const iptv_native_video_overlay_t overlay = {
+            (uint32_t)state->config.codec,
+            state->config.visible_width,
+            state->config.visible_height,
+            state->frame_rate_x100,
+            state->bitrate_kbps,
+            rate_now - state->controls_started_us < CONTROLS_OVERLAY_US,
+            presentation_pts_us,
+            field_count > 1 ? 1 + ((fields.first - 1 + field_index) & 1u) : 0,
+            state->telemetry.software_video,
+        };
+        if (state->config.picture)
+        {
+            const iptv_native_picture_t picture = {
+                output->buffer,          (size_t)output->buffer_size, output->pitch,
+                output->height,          state->config.visible_width, state->config.visible_height,
+                state->config.bit_depth, presentation_pts_us};
+            state->config.picture(state->config.picture_context, &picture);
+            result = 0;
+        }
+        else
+            result = iptv_native_agc_present_yuv_deferred(
+                output->buffer, (size_t)output->buffer_size, output->pitch, output->height,
+                state->config.visible_width, state->config.visible_height, state->config.bit_depth,
+                &overlay);
+        elapsed = monotonic_us() - started;
+        state->telemetry.present_total_us += elapsed;
+        if (elapsed > state->telemetry.present_max_us)
+            state->telemetry.present_max_us = elapsed;
+#if IPTV_PROBE
+        if (elapsed > state->probe_present_max_us)
+            state->probe_present_max_us = elapsed;
+#endif
+        if (result != 0)
+            goto failed;
+        state->pending_present_pts_us = presentation_pts_us;
+        state->pause_picture = (iptv_native_picture_t){
+            output->buffer,          (size_t)output->buffer_size, output->pitch,
+            output->height,          state->config.visible_width, state->config.visible_height,
+            state->config.bit_depth, presentation_pts_us};
+        state->pause_field = overlay.field;
+        state->pending_present_source = output->buffer;
+        state->pending_present_from_drain = (uint8_t)(from_drain != 0);
+        state->presentation_pending = 1;
+        if (state->telemetry.presented_frames == 0)
+        {
+            result = complete_pending_presentation(state);
+            if (result != 0)
+                goto failed;
+        }
     }
     return 0;
 
@@ -1673,6 +1719,34 @@ failed:
         state->telemetry.state = state->state;
     }
     return result;
+}
+
+static int32_t decode_software_frame(backend_state_t *state, const void *bytes, size_t count,
+                                     videodec2_frame_t *frame, videodec2_output_t *output)
+{
+    /* CPU writes must wait until the previous GPU read has completed. */
+    int32_t result = complete_pending_presentation(state);
+    if (result != 0)
+        return result;
+    const uint32_t pitch = state->config.coded_width;
+    result = iptv_field_decode(state->field_parser, bytes, count, frame->buffer, frame->buffer_size,
+                               pitch, state->config.coded_height, state->config.visible_width,
+                               state->config.visible_height);
+    if (result < 0)
+        return result;
+    frame->accepted = 1;
+    if (result != 0)
+    {
+        output->valid = 1;
+        output->picture_count = (uint32_t)result;
+        output->codec = state->mode->decoder_codec;
+        output->width = pitch;
+        output->height = state->config.coded_height;
+        output->pitch = output->pitch_bytes = pitch;
+        output->buffer = frame->buffer;
+        output->buffer_size = frame->buffer_size;
+    }
+    return 0;
 }
 
 static int32_t submit_coded_frame(backend_state_t *state, const void *coded_frame,
@@ -1738,8 +1812,28 @@ static int32_t submit_coded_frame(backend_state_t *state, const void *coded_fram
     frame.buffer_size = state->frame_slot_size;
     output.size = sizeof(output);
 
+    const iptv_field_info_t fields =
+        iptv_field_parse(state->field_parser, coded_frame, frame_bytes);
     started = monotonic_us();
-    result = sceVideodec2Decode(state->decoder, &input, &frame, &output);
+    if (state->telemetry.software_video)
+        result = decode_software_frame(state, coded_frame, frame_bytes, &frame, &output);
+    else
+    {
+        result = sceVideodec2Decode(state->decoder, &input, &frame, &output);
+        if ((uint32_t)result == UINT32_C(0x811d0303) && fields.first &&
+            state->telemetry.submitted_video_access_units == 0 &&
+            state->config.coded_width <= 1920 && state->config.coded_height <= 1088)
+        {
+            /* Valid broadcast pictures can be rejected by VideoDec2 before
+             * output. Use the bundled decoder, bounded to 1080i; retain the
+             * same field renderer, clocks, controls and ownership. */
+            state->telemetry.software_video_trigger = result;
+            state->telemetry.software_video = 1;
+            memset(&output, 0, sizeof(output));
+            output.size = sizeof(output);
+            result = decode_software_frame(state, coded_frame, frame_bytes, &frame, &output);
+        }
+    }
     elapsed = monotonic_us() - started;
     state->telemetry.decode_total_us += elapsed;
     if (elapsed > state->telemetry.decode_max_us)
@@ -1766,7 +1860,7 @@ static int32_t submit_coded_frame(backend_state_t *state, const void *coded_fram
         state->telemetry.state = state->state;
         return state->telemetry.last_result;
     }
-    if (!state_pending_push(state, pts_us, displayable))
+    if (!state_pending_push(state, pts_us, displayable, fields))
     {
         ++state->telemetry.decoder_errors;
         state->telemetry.last_result = IPTV_NATIVE_E_DECODER_OUTPUT;
@@ -1892,7 +1986,7 @@ static int32_t pause_video(backend_state_t *state)
             const iptv_native_video_overlay_t overlay = {
                 state->config.codec,    picture->width,      picture->height,
                 state->frame_rate_x100, state->bitrate_kbps, 0,
-                picture->pts_us};
+                picture->pts_us,        state->pause_field,  state->telemetry.software_video};
             result = iptv_native_agc_present_yuv_deferred(
                 picture->data, picture->bytes, picture->pitch, picture->surface_height,
                 picture->width, picture->height, picture->bit_depth, &overlay);
@@ -1991,7 +2085,12 @@ static void *video_worker_entry(void *argument)
                 atomic_store_explicit(&state->video_worker_result, completed, memory_order_release);
                 break;
             }
-            const int32_t reset = sceVideodec2Reset(state->decoder);
+            int32_t reset = 0;
+            if (state->telemetry.software_video)
+                iptv_field_decoder_reset(state->field_parser);
+            else
+                reset = sceVideodec2Reset(state->decoder);
+            state->previous_picture_pts = UINT64_MAX;
             if (reset != 0)
             {
                 atomic_store_explicit(&state->video_worker_result, reset, memory_order_release);
@@ -2798,7 +2897,9 @@ static int32_t drain_video(backend_state_t *state)
         frame.buffer_size = state->frame_slot_size;
         output.size = sizeof(output);
         started = monotonic_us();
-        result = sceVideodec2Flush(state->decoder, &frame, &output);
+        result = state->telemetry.software_video
+                     ? decode_software_frame(state, NULL, 0, &frame, &output)
+                     : sceVideodec2Flush(state->decoder, &frame, &output);
         elapsed = monotonic_us() - started;
         state->telemetry.decode_total_us += elapsed;
         if (elapsed > state->telemetry.decode_max_us)
@@ -2881,11 +2982,12 @@ int32_t iptv_native_backend_drain(iptv_native_backend_t *backend)
     result = state->config.picture ? 0 : iptv_native_agc_present_drain();
     if (first_result == 0 && result != 0)
         first_result = result;
-    if (first_result == 0 && state->telemetry.hardware_validated &&
+    if (first_result == 0 &&
+        (state->telemetry.hardware_validated || state->telemetry.software_video) &&
         state->telemetry.decoded_frames != 0 &&
         state->telemetry.presented_frames + state->telemetry.hidden_decoded_frames +
                 state->telemetry.dropped_late_video_frames ==
-            state->telemetry.decoded_frames &&
+            state->telemetry.decoded_frames + state->extra_field_presentations &&
         state->pending_pts.count == 0 && state->telemetry.decoder_errors == 0 &&
         (!state->config.enable_audio || state->telemetry.decoded_audio_frames != 0))
         state->telemetry.stream_acceptance_validated = 1;
@@ -2940,6 +3042,8 @@ int32_t iptv_native_backend_close(iptv_native_backend_t *backend)
     if (first_result == 0 && result != 0)
         first_result = result;
 
+    iptv_field_parser_destroy(state->field_parser);
+    state->field_parser = NULL;
     if (state->decoder)
     {
         result = sceVideodec2DeleteDecoder(state->decoder);
@@ -3250,14 +3354,20 @@ int main(void)
     assert(pending_pts_push(&pending, 120000, 1));
     assert(pending_pts_push(&pending, 40000, 1));
     assert(pending_pts_push(&pending, 80000, 1));
+    pending.values[0].fields = (iptv_field_info_t){1, 2, 20000, 0};
+    pending.values[1].fields = (iptv_field_info_t){2, 2, 16683, 0};
+    pending.values[2].fields = (iptv_field_info_t){1, 3, 20000, 0};
     assert(pending_pts_take_smallest(&pending, &pts_us, &displayable) && pts_us == 0 &&
            displayable);
+    assert(pending.taken_fields.first == 1 && pending.taken_fields.duration_us == 20000);
     assert(pending_pts_take_smallest(&pending, &pts_us, &displayable) && pts_us == 40000 &&
            displayable);
+    assert(pending.taken_fields.count == 3);
     assert(pending_pts_take_smallest(&pending, &pts_us, &displayable) && pts_us == 80000 &&
            displayable);
     assert(pending_pts_take_smallest(&pending, &pts_us, &displayable) && pts_us == 120000 &&
            displayable);
+    assert(pending.taken_fields.first == 2 && pending.taken_fields.duration_us == 16683);
     assert(pending.count == 0);
 
     assert(pending_pts_push(&pending, UINT64_MAX, 1));

@@ -130,6 +130,8 @@ extern "C"
         uint32_t decoder_output_height;
         uint32_t decoder_output_pitch;
         uint32_t decoder_frame_accepted;
+        uint32_t software_video;
+        int32_t software_video_trigger;
         uint64_t submitted_audio_frames;
         uint64_t decoded_audio_frames;
         uint64_t audio_output_grains;

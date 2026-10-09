@@ -150,4 +150,20 @@ ffmpeg -hide_banner -loglevel error -y -i "$output/many-subtitles-40.mkv" -map 0
 ffmpeg -hide_banner -loglevel error -y -f lavfi -i testsrc2=size=160x96:rate=10 -t 0.5 -c:v libx265 -x265-params pools=1:frame-threads=1:log-level=error -an "$output/hevc.mp4"
 ffmpeg -hide_banner -loglevel error -y -f lavfi -i testsrc2=size=160x96:rate=10 -t 0.5 -c:v libx265 -x265-params pools=1:frame-threads=1:log-level=error:sao=0 -an "$output/hevc-config.mp4"
 ffmpeg -hide_banner -loglevel error -y -f lavfi -i testsrc2=size=160x96:rate=10 -t 0.5 -c:v libx265 -x265-params pools=1:frame-threads=1:log-level=error:repeat-headers=1 -an "$output/hevc-inband.mkv"
+for order in 0 1 2; do
+    field_options=()
+    rate=25
+    if [[ $order != 0 ]]; then
+        rate=50
+        mode=interleave_top
+        dominance=tff
+        if [[ $order == 2 ]]; then mode=interleave_bottom; dominance=bff; fi
+        field_options=(-vf "tinterlace=$mode" -flags +ilme+ildct)
+    fi
+    params=aud=1:keyint=25
+    [[ $order == 0 ]] || params+=:$dominance=1
+    ffmpeg -hide_banner -loglevel error -y -f lavfi -i "testsrc2=size=160x96:rate=$rate" \
+        -t 1 -an "${field_options[@]}" -c:v libx264 -threads 2 -x264-params "$params" \
+        -map 0:v -f tee "[f=h264]$output/fields-$order.h264|[f=mpegts]$output/fields-$order.ts"
+done
 printf '%s\n' "$stamp" > "$output/.complete"
