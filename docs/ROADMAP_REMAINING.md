@@ -152,10 +152,20 @@ The synthetic playlist played for 155 seconds (3,797 presented pictures,
 available. The channel request used the reconnect flag to enable history;
 custom playlists intentionally do not reconnect automatically. Live requests
 now carry a separate flag, enabled for channel playback and disabled for movies
-and archived programmes. Native timeshift acceptance remains pending for this fix.
+and archived programmes.
 All 146 UI sanitizer tests and the PS5 application-only build pass. The request
 tests distinguish a playlist channel, a movie, a past programme and the currently
 airing programme. Evidence: `../psiptv/results/roadmap/timeshift-live-result.json`.
+
+Case33 (c6e6afb, PPSA88275) validates native custom-playlist pause/resume,
+cumulative rewind, forward seek and return to live. Presentation stayed fixed
+for a 20-second pause while history advanced, and remained within 0.72 seconds
+of the buffered live position after returning. The app returned to browsing and
+exited cleanly with healthy services. All 52 installed file hashes matched.
+The receipt has 1,985 presented frames and 3,741 decoded audio frames; three
+audio and two video queue underruns occurred across transitions. Their impact,
+audio/subtitle synchronization, expiry, changing formats and 4K/HEVC history
+remain unverified. Evidence: `../psiptv/results/roadmap/console-33/result.json`.
 
 - 2026-10-08 | rewind | 4c63161 | host/PS5 build | partial-pass: mapped history and clock replay | ../psiptv/results/roadmap/timeshift-clock-native-result.json | integrate foreground controls
 - 2026-10-08 | rewind | ec377c9 | host/PS5 build | partial-pass: foreground controls | ../psiptv/results/roadmap/timeshift-player-result.json | decoder/subtitle replay, native acceptance
@@ -164,6 +174,7 @@ airing programme. Evidence: `../psiptv/results/roadmap/timeshift-live-result.jso
 - 2026-10-08 | rewind | b2bf8dd | host/PS5 build | partial-pass: seek/control ordering | ../psiptv/results/roadmap/timeshift-seek-controls-result.json | bounded native TS case
 - 2026-10-08 | rewind | 289d250 | host/PS5 build | partial-pass: historical decoder setup | ../psiptv/results/roadmap/timeshift-config-result.json | forward scan and native acceptance
 - 2026-10-08 | rewind | 1c8e33e | host/PS5 build | partial-pass: forward configuration scan | ../psiptv/results/roadmap/timeshift-scan-result.json | native acceptance and remaining formats
+- 2026-10-08 | rewind | c6e6afb | .30 PPSA88275 | partial-pass: native pause/seek/live controls | ../psiptv/results/roadmap/console-33/result.json | sync, expiry and remaining formats
 
 ## Source additions
 
