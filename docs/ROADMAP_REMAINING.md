@@ -88,8 +88,8 @@ reset. The combined picture and setup must fit the existing access-unit limit.
 Real H.264 and HEVC regression fixtures remove the keyframe's headers, pass it
 through reposition, then decode it in a fresh host decoder and compare its pixels
 with the original. The 97-test core and 20-test media sanitizer suites and PS5
-application build pass. Configuration version changes within retained history
-still need handling and native decoder acceptance is pending.
+application build pass. Historical configuration retention is described below;
+native decoder acceptance is still pending.
 
 Same-timeline subtitle seeks now rebuild the selected decoder from retained raw
 packets. Retention covers the five-minute video window plus the maximum cue
@@ -110,18 +110,40 @@ keyframe acknowledgement, moving retention bounds and arithmetic limits. The
 native queue-state host check and full-assembly PS5 application build also pass.
 Responsiveness and presentation timing still require console acceptance.
 
-This remains incomplete: configuration/timeline changes, direct WebM live
+Decoder configuration snapshots now preserve parameter IDs across previously
+decoded history. They retain the five-minute window and its preceding setup,
+bounded by 256 snapshots and a 4 MiB payload/table budget. Expiry moves the
+transport seek boundary with the configuration boundary; a provider reset
+cannot apply the old timeline's boundary to new bytes. Snapshot allocation uses
+the native build's non-throwing path and failure expires optional history.
+Pictures now select their timestamp at the first VCL NAL, preventing delimiters
+left from the previous PES from assigning the previous picture's time.
+
+The configuration tests replay both directions across real H.264 and HEVC setup
+changes, strip in-band headers, and compare pixels decoded by fresh decoders.
+They also cover bounded retention, rejected expired seeks, untimed changes and
+provider resets. This applies to compatible decoder formats: resolution/profile
+changes still follow the existing reopen path. Jumping ahead into buffered bytes
+that have never been demuxed still needs a configuration scan before reposition.
+All 103 core and 21 media/subtitle sanitizer tests and the application-only PS5
+build pass at 289d250. No native configuration-replay acceptance is claimed.
+
+This remains incomplete: forward seeks into undecoded configuration changes,
+provider timeline/subtitle ordering, direct WebM live
 playback and native pause/rewind/expiry, synchronization
 and resource acceptance still need work. The earlier 146-test UI sanitizer suite,
 13 phone remote integration tests, native queue-state host check and PS5
 application build pass. The foreground changes
-have not been packaged or installed on a console, and no timeshift PR is open.
+have a frozen earlier test package (446ca92, PPSA88273), but case31 did not run
+because .30 was running PPSA99008. The configuration changes are not installed,
+and no timeshift PR is open.
 
 - 2026-10-08 | rewind | 4c63161 | host/PS5 build | partial-pass: mapped history and clock replay | ../psiptv/results/roadmap/timeshift-clock-native-result.json | integrate foreground controls
 - 2026-10-08 | rewind | ec377c9 | host/PS5 build | partial-pass: foreground controls | ../psiptv/results/roadmap/timeshift-player-result.json | decoder/subtitle replay, native acceptance
 - 2026-10-08 | rewind | 7ef62d8 | host/PS5 build | partial-pass: parameter replay | ../psiptv/results/roadmap/timeshift-parameters-result.json | configuration versions, native acceptance
 - 2026-10-08 | rewind | 04eb912 | host/PS5 build | partial-pass: subtitle replay | ../psiptv/results/roadmap/timeshift-subtitles-result.json | timeline ordering, native acceptance
 - 2026-10-08 | rewind | b2bf8dd | host/PS5 build | partial-pass: seek/control ordering | ../psiptv/results/roadmap/timeshift-seek-controls-result.json | bounded native TS case
+- 2026-10-08 | rewind | 289d250 | host/PS5 build | partial-pass: historical decoder setup | ../psiptv/results/roadmap/timeshift-config-result.json | forward scan and native acceptance
 
 ## Source additions
 
