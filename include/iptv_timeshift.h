@@ -59,8 +59,13 @@ class Timeshift
     void trim();
     void packet(const std::uint8_t *data, std::uint64_t offset);
     void copy(std::uint64_t offset, std::uint8_t *out, std::size_t bytes) const;
+    struct Unmap
+    {
+        std::size_t bytes;
+        void operator()(std::uint8_t *data) const;
+    };
     mutable std::mutex mutex_;
-    std::unique_ptr<std::uint8_t[]> storage_;
+    std::unique_ptr<std::uint8_t[], Unmap> storage_;
     std::size_t capacity_;
     std::uint64_t duration_, begin_ = 0, end_ = 0, scan_ = 0, generation_ = 0;
     std::uint32_t video_pid_ = 0, indexed_pid_ = 0;

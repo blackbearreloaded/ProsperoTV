@@ -44,6 +44,12 @@ decodable picture. Reads copy bytes while holding the history lock, preventing
 network writes from replacing data still being parsed. Expired positions are
 reported explicitly.
 
+History storage now uses its own bounded anonymous mapping instead of allocating
+512 MiB from the application's 512 MiB heap. Its lifetime remains scoped to the
+history owner, and allocation failure leaves it unavailable. All six existing
+history tests pass under ASan/UBSan with the mapped storage. Native build and
+foreground integration remain pending for this change.
+
 Native control primitives pause both workers, redraw the frozen picture for the
 overlay, and adjust video pacing on resume. Repositioning releases submissions
 blocked by full queues and discards packets from the previous playback
@@ -380,7 +386,7 @@ work. These changes have not been installed on a console.
 Native baseline acceptance (2026-10-08): candidate `2a46313`, disposable title
 `PPSA88266`, passed 12-second playback of synthetic TS, MP4, Matroska and
 external-rendition HLS on the verified-idle console `.30`. Each produced
-260–281 video frames and 524–563 decoded audio frames, with requested stop,
+260â€“281 video frames and 524â€“563 decoded audio frames, with requested stop,
 clean native cleanup and healthy services after title exit. All 52 uploaded
 files matched the frozen package. Evidence: `results/roadmap/console-14/validation.json`.
 The generic runner flagged the settings label `hide_failed=0`; the scoped

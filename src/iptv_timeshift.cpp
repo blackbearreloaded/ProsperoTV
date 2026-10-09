@@ -4,7 +4,7 @@
 #include "iptv_timeshift.h"
 #include <algorithm>
 #include <cstring>
-#include <new>
+#include <sys/mman.h>
 
 namespace iptv
 {
@@ -13,11 +13,21 @@ namespace
 constexpr std::size_t packet_bytes = 188;
 }
 Timeshift::Timeshift(std::size_t bytes, std::uint64_t duration_us)
-    : capacity_(bytes), duration_(duration_us)
+    : storage_(nullptr, Unmap{bytes}), capacity_(bytes), duration_(duration_us)
 {
     if (bytes >= 16 * packet_bytes && bytes <= max_bytes && duration_us &&
         duration_us <= max_duration_us)
-        storage_.reset(new (std::nothrow) std::uint8_t[bytes]);
+    {
+        // The history has its own bounded mapping. A full ring must not consume
+        // the application heap needed by catalogues and container indexes.
+        void *data = mmap(nullptr, bytes, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0);
+        if (data != MAP_FAILED)
+            storage_.reset(static_cast<std::uint8_t *>(data));
+    }
+}
+void Timeshift::Unmap::operator()(std::uint8_t *data) const
+{
+    (void)munmap(data, bytes);
 }
 void Timeshift::copy(std::uint64_t offset, std::uint8_t *out, std::size_t bytes) const
 {
