@@ -196,6 +196,7 @@ extern "C"
     /* Stream owner's thread only, serialized with submit_audio. Discard the old
      * audio queue and reopen only audio; zero type selects Off. */
     int32_t iptv_native_backend_select_audio(iptv_native_backend_t *backend, uint32_t stream_type);
+    int32_t iptv_native_backend_programme_boundary(iptv_native_backend_t *backend);
     int32_t iptv_native_backend_discontinuity(iptv_native_backend_t *backend);
     /* Control-thread requests while an opened backend remains alive; only
      * atomic state is touched. Reposition releases

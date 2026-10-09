@@ -127,6 +127,9 @@ typedef struct iptv_stream_backend {
     void (*subtitle_packet)(void *context, const iptv_stream_subtitle_track_t *track,
                             const uint8_t *data, size_t bytes, uint64_t pts_us);
     void (*subtitle_reset)(void *context);
+    /* Optional barrier before an automatic PMT change. Present queued media
+     * before replacing its tracks; seeks bypass this barrier. */
+    int (*programme_boundary)(void *context);
 } iptv_stream_backend_t;
 
 typedef struct iptv_stream_telemetry {

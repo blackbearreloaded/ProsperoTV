@@ -342,6 +342,7 @@ typedef struct backend_state
     _Atomic int video_worker_done;
     _Atomic int video_worker_result;
     _Atomic int playback_started;
+    _Atomic int programme_draining;
     _Atomic uint64_t playback_gate_started_us;
 
     uint64_t open_started_us;
@@ -1795,6 +1796,9 @@ static int media_span_ready(uint32_t count, uint64_t first, uint64_t last)
 
 static int playback_queues_ready(const backend_state_t *state)
 {
+    // A programme boundary has no more old input to fill a startup buffer.
+    if (atomic_load_explicit(&state->programme_draining, memory_order_acquire))
+        return 1;
     const uint32_t video_read =
         atomic_load_explicit(&state->video_queue_read, memory_order_acquire);
     const uint32_t video_write =
@@ -1926,7 +1930,8 @@ static void *video_worker_entry(void *argument)
             }
         }
         if (atomic_load_explicit(&state->playback_started, memory_order_acquire) &&
-            !atomic_load(&state->video_worker_stop) && !atomic_load(&state->stop_requested))
+            !atomic_load(&state->video_worker_stop) && !atomic_load(&state->stop_requested) &&
+            !atomic_load(&state->programme_draining))
         {
             const int empty =
                 atomic_load(&state->video_queue_read) == atomic_load(&state->video_queue_write) ||
@@ -1954,7 +1959,8 @@ static void *video_worker_entry(void *argument)
             if (atomic_load_explicit(&state->video_worker_stop, memory_order_acquire) ||
                 atomic_load_explicit(&state->stop_requested, memory_order_relaxed))
                 break;
-            if (had_data && !empty_reported && atomic_load(&state->playback_started))
+            if (had_data && !empty_reported && atomic_load(&state->playback_started) &&
+                !atomic_load(&state->programme_draining))
             {
                 ++state->telemetry.video_queue_underruns;
                 empty_reported = 1;
@@ -2366,7 +2372,8 @@ static void *audio_worker_entry(void *argument)
         {
             if (atomic_load_explicit(&state->audio_worker_stop, memory_order_acquire))
                 break;
-            if (had_data && !empty_reported && atomic_load(&state->playback_started))
+            if (had_data && !empty_reported && atomic_load(&state->playback_started) &&
+                !atomic_load(&state->programme_draining))
             {
                 ++state->telemetry.audio_queue_underruns;
                 empty_reported = 1;
@@ -2402,6 +2409,7 @@ static void *audio_worker_entry(void *argument)
             sync_started = 0;
         }
         if (!atomic_load_explicit(&state->playback_started, memory_order_acquire) &&
+            !atomic_load_explicit(&state->programme_draining, memory_order_acquire) &&
             !atomic_load_explicit(&state->audio_worker_stop, memory_order_acquire))
         {
             // Drain stale entries before waiting, so they cannot fill the queue
@@ -2602,6 +2610,43 @@ int32_t iptv_native_backend_disable_audio(iptv_native_backend_t *backend)
     if (!state->config.enable_audio)
         return 0;
     return disable_audio_internal(state, IPTV_NATIVE_E_AUDIO_FRAME);
+}
+
+int32_t iptv_native_backend_programme_boundary(iptv_native_backend_t *backend)
+{
+    backend_state_t *state = state_from(backend);
+    if (!state || state->magic != BACKEND_MAGIC)
+        return IPTV_NATIVE_E_ARGUMENT;
+    if (state->state != IPTV_NATIVE_STATE_OPEN || state->drain_started)
+        return IPTV_NATIVE_E_STATE;
+    int32_t result = 0;
+    uint64_t started = monotonic_us();
+    atomic_store_explicit(&state->programme_draining, 1, memory_order_release);
+    while (atomic_load(&state->video_queue_read) != atomic_load(&state->video_queue_write) ||
+           (atomic_load(&state->audio_buffer_type) &&
+            atomic_load(&state->audio_queue_read) != atomic_load(&state->audio_queue_write)))
+    {
+        // The main/control thread remains active while this demux thread waits.
+        // A seek or stop discards this boundary; a pause retains it until resume.
+        if (atomic_load(&state->discard_input) || atomic_load(&state->stop_requested))
+            break;
+        result = atomic_load(&state->video_worker_result);
+        if (!result && atomic_load(&state->audio_buffer_type))
+            result = atomic_load(&state->audio_worker_result);
+        if (result)
+            break;
+        const uint64_t now = monotonic_us();
+        if (atomic_load(&state->paused))
+            started = now;
+        else if (now - started > UINT64_C(30000000))
+        {
+            result = IPTV_NATIVE_E_STATE;
+            break;
+        }
+        (void)sceKernelUsleep(1000u);
+    }
+    atomic_store_explicit(&state->programme_draining, 0, memory_order_release);
+    return result;
 }
 
 int32_t iptv_native_backend_select_audio(iptv_native_backend_t *backend, uint32_t stream_type)
@@ -2954,6 +2999,8 @@ static int test_control_polls, test_join_calls;
 static int test_audio_creates, test_audio_deletes, test_audio_deleted_handle;
 static int test_audio_create_result = 51, test_audio_delete_result;
 static iptv_native_backend_t *test_reposition_on_sleep;
+static backend_state_t *test_programme_drain_on_sleep;
+static unsigned test_programme_drain_steps;
 int sceAudiodecCreateDecoder(sce_audiodec_ctrl_t *ctrl, uint32_t codec_type)
 {
     assert(codec_type == AUDIODEC_AAC);
@@ -2972,6 +3019,19 @@ int sceAudiodecDeleteDecoder(int handle)
 int sceKernelUsleep(uint32_t microseconds)
 {
     (void)microseconds;
+    if (test_programme_drain_on_sleep)
+    {
+        backend_state_t *state = test_programme_drain_on_sleep;
+        assert(atomic_load(&state->programme_draining));
+        assert(playback_queues_ready(state));
+        if (++test_programme_drain_steps == 1)
+            atomic_store(&state->video_queue_read, atomic_load(&state->video_queue_write));
+        else
+        {
+            atomic_store(&state->audio_queue_read, atomic_load(&state->audio_queue_write));
+            test_programme_drain_on_sleep = NULL;
+        }
+    }
     if (test_reposition_on_sleep)
     {
         iptv_native_backend_request_reposition(test_reposition_on_sleep);
@@ -3142,6 +3202,35 @@ int main(void)
     assert(!playback_queues_ready(&gate)); // Another seek invalidates the queued window.
     free(gate.audio_queue);
     free(gate.video_queue);
+    iptv_native_backend_t programme_backend;
+    assert(iptv_native_backend_init(&programme_backend) == 0);
+    backend_state_t *programme = state_from(&programme_backend);
+    programme->state = IPTV_NATIVE_STATE_OPEN;
+    atomic_store(&programme->video_queue_write, 2);
+    atomic_store(&programme->audio_queue_write, 3);
+    atomic_store(&programme->audio_buffer_type, 0x0f);
+    test_programme_drain_on_sleep = programme;
+    assert(iptv_native_backend_programme_boundary(&programme_backend) == 0);
+    assert(test_programme_drain_steps == 2); // Wait for both queues, not just video.
+    assert(!atomic_load(&programme->programme_draining));
+    atomic_store(&programme->paused, 1);
+    atomic_store(&programme->video_queue_write, 4);
+    test_reposition_on_sleep = &programme_backend;
+    assert(iptv_native_backend_programme_boundary(&programme_backend) == 0);
+    assert(atomic_load(&programme->video_queue_read) == 2); // Seek cancels a paused barrier.
+    assert(!atomic_load(&programme->programme_draining));
+    atomic_store(&programme->discard_input, 0);
+    atomic_store(&programme->video_worker_result, -7);
+    assert(iptv_native_backend_programme_boundary(&programme_backend) == -7);
+    assert(!atomic_load(&programme->programme_draining));
+    atomic_store(&programme->stop_requested, 1);
+    assert(iptv_native_backend_programme_boundary(&programme_backend) == 0);
+    atomic_store(&programme->stop_requested, 0);
+    atomic_store(&programme->video_worker_result, 0);
+    atomic_store(&programme->video_queue_read, 4);
+    atomic_store(&programme->audio_queue_write, 6);
+    atomic_store(&programme->audio_buffer_type, 0);
+    assert(iptv_native_backend_programme_boundary(&programme_backend) == 0);
     pending_pts_t pending = {0};
     uint64_t pts_us;
     int displayable;

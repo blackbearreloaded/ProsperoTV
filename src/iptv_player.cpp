@@ -865,6 +865,11 @@ class StreamRunner
                 gSubtitles.reset_timeline();
         };
         backend.discontinuity = AdapterDiscontinuity;
+        backend.programme_boundary = [](void *self)
+        {
+            auto *adapter = static_cast<NativeAdapter *>(self);
+            return iptv_native_backend_programme_boundary(&adapter->backend);
+        };
         backend.drain = AdapterDrain;
         backend.close = AdapterClose;
         backend.hardware_validated = 0;

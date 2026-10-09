@@ -939,7 +939,7 @@ static void update_subtitle_tracks(impl_t *impl, const iptv_stream_subtitle_trac
 }
 
 static int parse_pmt_section(iptv_stream_session_t *session, impl_t *impl, const uint8_t *section,
-                             size_t bytes)
+                             size_t bytes, bool programme_boundary = true)
 {
     if (bytes < 16u || bytes > kPsiBytes || section[0] != 0x02u || (section[1] & 0x80u) == 0 ||
         (section[5] & 1u) == 0 || crc32_mpeg(section, bytes) != 0 ||
@@ -1089,6 +1089,12 @@ static int parse_pmt_section(iptv_stream_session_t *session, impl_t *impl, const
     const bool same_video = impl->pmt_seen && same_video_program(&impl->format, &next);
     const bool same_audio = impl->pmt_seen && impl->format.audio_pid == next.audio_pid &&
                             impl->format.audio_stream_type == next.audio_stream_type;
+    if (programme_boundary && same_video && impl->backend_open && !impl->scanning &&
+        impl->backend.programme_boundary &&
+        (impl->programme.bytes != bytes ||
+         std::memcmp(impl->programme.data.data(), section, bytes) != 0) &&
+        impl->backend.programme_boundary(impl->backend.context) != 0)
+        return fail(session, IPTV_STREAM_NATIVE_ERROR, "programme playback boundary failed");
     if (impl->pmt_seen && !same_video)
     {
         if (impl->backend_ever_opened)
@@ -2660,7 +2666,8 @@ int iptv_stream_reposition_from(iptv_stream_session_t *session, const iptv_strea
             impl->format.pmt_pid = history->format.pmt_pid;
             impl->pat_seen = history->pat_seen;
         }
-        const int parsed = parse_pmt_section(session, impl, programme.data.data(), programme.bytes);
+        const int parsed =
+            parse_pmt_section(session, impl, programme.data.data(), programme.bytes, false);
         if (parsed != IPTV_STREAM_OK)
             return parsed;
     }

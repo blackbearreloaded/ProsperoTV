@@ -197,6 +197,8 @@ struct FakeBackend
     unsigned closes = 0;
     int drain_result = 0;
     int select_result = 0;
+    unsigned programme_boundaries = 0;
+    int boundary_result = 0;
     std::vector<std::uint32_t> audio_selections;
     std::vector<std::vector<std::uint8_t>> video_packets;
     std::vector<iptv_stream_subtitle_track_t> subtitle_tracks;
@@ -334,6 +336,12 @@ class AudioSelectionTest : public testing::Test
         backend.submit_audio = FakeAudio;
         backend.disable_audio = FakeDisableAudio;
         backend.select_audio = FakeSelectAudio;
+        backend.programme_boundary = [](void *ctx)
+        {
+            auto &state = *static_cast<FakeBackend *>(ctx);
+            ++state.programme_boundaries;
+            return state.boundary_result;
+        };
         backend.discontinuity = FakeDiscontinuity;
         backend.drain = FakeDrain;
         backend.close = FakeClose;
@@ -1044,6 +1052,25 @@ TEST_F(SubtitleStreamTest, HistoryRestoresProgrammeTracksWithoutRetainedTables)
     ASSERT_EQ(history.reposition(&session, *retained), IPTV_STREAM_OK);
     EXPECT_EQ(session.telemetry.format.audio_pid, 0u);
     EXPECT_EQ(fake.subtitle_tracks[0].pid, 0x130u);
+    EXPECT_EQ(fake.programme_boundaries, 0u); // Seeks must not wait on paused old queues.
+}
+
+TEST_F(AudioSelectionTest, AutomaticProgrammeChangeWaitsBeforeReplacingTracks)
+{
+    ASSERT_EQ(pmt({{0x111, 0x0f, "eng", 0}}, true), IPTV_STREAM_OK);
+    const auto video = H264Packet(0, true);
+    ASSERT_EQ(iptv_stream_push(&session, video.data(), video.size()), IPTV_STREAM_OK);
+    ASSERT_EQ(fake.opens, 1u);
+    ASSERT_EQ(pmt({{0x111, 0x0f, "eng", 0}}), IPTV_STREAM_OK);
+    EXPECT_EQ(fake.programme_boundaries, 0u);
+    ASSERT_EQ(pmt({{0x113, 0x0f, "fra", 0}}), IPTV_STREAM_OK);
+    EXPECT_EQ(fake.programme_boundaries, 1u);
+    const auto selections = fake.audio_selections.size();
+    fake.boundary_result = -1;
+    EXPECT_EQ(pmt({{0x114, 0x0f, "jpn", 0}}), IPTV_STREAM_NATIVE_ERROR);
+    EXPECT_EQ(fake.programme_boundaries, 2u);
+    EXPECT_EQ(fake.audio_selections.size(), selections);
+    EXPECT_EQ(session.telemetry.format.audio_pid, 0x113u);
 }
 
 TEST_F(AudioSelectionTest, DownloadConfigurationSurvivesUnreadTransportExpiry)
