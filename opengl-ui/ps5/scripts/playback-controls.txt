@@ -1,0 +1,46 @@
+# What the buttons do while a channel plays, pressed by the script ("during"):
+# the banner, pause and resume, back thirty seconds and to live again, the
+# track panel, the channel list, the next and the previous channel, the
+# channel watched before, and leaving. Then five quick changes of channel,
+# two seconds apart, each before the one before has shown a picture.
+# Needs the built-in list (or any list where "news" finds several channels).
+wait 8
+until catalog 600
+wait 2
+query news
+wait 2
+status
+watch 200
+during 12 triangle
+during 18 pause
+during 28 pause
+during 34 left
+during 44 live
+during 50 options
+during 53 options
+during 58 cross
+during 61 down
+during 63 cross
+during 80 r1
+during 95 l1
+during 110 square
+during 125 circle
+press cross
+until menu 400
+wait 3
+status
+shot 01-after-controls
+watch 200
+during 2 r1
+during 4 r1
+during 6 r1
+during 8 r1
+during 10 r1
+during 25 circle
+press cross
+until menu 400
+wait 3
+status
+shot 02-after-quick-changes
+query -
+quit 40

@@ -110,6 +110,19 @@ __asm__(".weak ZSTD_trace_decompress_begin\n"
 #include <new>
 #include <time.h>
 
+// The interface build's network layer lets the playing thread be asked, while
+// it waits for a connection or for bytes, whether the viewer has left. Absent
+// (a null address) where the system's own HTTP library is used.
+// Here it does nothing; the interface build's network layer defines the real one.
+extern "C" __attribute__((weak)) void tv_http_set_interrupt(bool (*asked)(void *), void *context)
+{
+    (void)asked;
+    (void)context;
+}
+// The interface build's diagnostic log (iptv_native_backend.c holds the stand-ins).
+extern "C" int tv_diag_enabled(void);
+extern "C" void tv_diag_line(const char *line);
+
 extern "C" int sceKernelSendNotificationRequest(std::uint32_t device, void *request,
                                                 std::size_t size, int blocking);
 extern "C" int sceKernelUsleep(std::uint32_t microseconds);
@@ -1130,6 +1143,14 @@ class StreamRunner
         std::lock_guard control_lock(control_mutex_);
         if (playback_stop_requested_)
             return true;
+        // A file's demuxer asks before every packet and every read: thousands
+        // of times a second for a 4K film. Reading the controller and ticking
+        // the on-screen controls that often held a 25 Mbit/s film to a third
+        // of its speed. 125 times a second is as often as either can change.
+        const std::uint64_t asked_usec = MonotonicUsec();
+        if (controls_asked_usec_ && asked_usec - controls_asked_usec_ < kControlsPollUsec)
+            return false;
+        controls_asked_usec_ = asked_usec;
         UpdateLiveControls();
         const auto sleep_deadline = gSleepDeadlineUsec.load(std::memory_order_relaxed);
         if (stop_deadline_usec_ || sleep_deadline)
@@ -1138,6 +1159,7 @@ class StreamRunner
             if ((stop_deadline_usec_ && now >= stop_deadline_usec_) ||
                 (sleep_deadline && now >= sleep_deadline))
             {
+                test_window_ended_ = stop_deadline_usec_ && now >= stop_deadline_usec_;
                 playback_stop_requested_ = true;
                 if (adapter_.initialized)
                     iptv_native_backend_request_stop(&adapter_.backend);
@@ -1345,6 +1367,11 @@ class StreamRunner
     int PlayerCleanupResult() const
     {
         return player_cleanup_result_;
+    }
+    // The time a scripted run gave the channel ran out (a button did not stop it).
+    bool TestWindowEnded() const
+    {
+        return test_window_ended_;
     }
     bool PlaybackStopRequested() const
     {
@@ -1700,6 +1727,9 @@ class StreamRunner
     std::uint64_t presented_before_reopen_ = 0;
     int player_cleanup_result_ = 0;
     std::atomic<bool> playback_stop_requested_{false};
+    std::atomic<bool> test_window_ended_{false};
+    static constexpr std::uint64_t kControlsPollUsec = 8000u;
+    std::uint64_t controls_asked_usec_ = 0; // under control_mutex_
     bool overlay_chord_down_ = false;
     std::mutex control_mutex_;
     bool live_ = false;
@@ -2309,15 +2339,33 @@ int RunContainer(const char *url, StreamRunner *runner, const iptv::http::Reques
         std::int64_t position = 0, size = -1;
         std::int64_t end = -1;
         const std::string *manifest = nullptr;
+        std::uint64_t window_started_usec = 0, window_bytes = 0, window_reads = 0,
+                      window_network_usec = 0;
         ~File()
         {
             iptv::http::CloseStream(&request);
         }
+        // A file is read through requests that start where the demuxer asks:
+        // the log says where each one starts and how long it took to answer,
+        // and names a read that waited more than a second.
+        static void trace(const char *what, std::int64_t at, std::uint64_t started)
+        {
+            if (!tv_diag_enabled())
+                return;
+            char line[160];
+            std::snprintf(line, sizeof(line), "[player] file %s at %lld: %llu ms", what,
+                          static_cast<long long>(at),
+                          static_cast<unsigned long long>((MonotonicUsec() - started) / 1000u));
+            tv_diag_line(line);
+        }
         bool open()
         {
             headers.byte_offset = position || end >= 0 ? position : -1;
-            if (iptv::http::OpenStream(url.c_str(), "*/*", &request, &headers) !=
-                iptv::http::Status::ok)
+            const std::uint64_t started = MonotonicUsec();
+            const bool opened = iptv::http::OpenStream(url.c_str(), "*/*", &request, &headers) ==
+                                iptv::http::Status::ok;
+            trace(opened ? "request opened" : "request FAILED", position, started);
+            if (!opened)
                 return false;
             size = request.size;
             return true;
@@ -2342,10 +2390,38 @@ int RunContainer(const char *url, StreamRunner *runner, const iptv::http::Reques
             }
             if (end >= 0)
                 bytes = static_cast<int>(std::min<std::int64_t>(bytes, end - position));
+            const std::uint64_t started = MonotonicUsec();
             const int count =
                 iptv::http::ReadStream(&request, buffer, static_cast<std::size_t>(bytes));
+            const std::uint64_t ended = MonotonicUsec();
+            if (ended - started >= 1000000u)
+                trace(count > 0 ? "read waited" : "read waited and FAILED", position, started);
             if (count > 0)
                 position += count;
+            // Every ten seconds: what was read, and how much of that time went
+            // to the network. The rest is the demuxer and the player.
+            ++window_reads;
+            window_bytes += count > 0 ? static_cast<std::uint64_t>(count) : 0u;
+            window_network_usec += ended - started;
+            if (!window_started_usec)
+                window_started_usec = started;
+            else if (ended - window_started_usec >= 10000000u)
+            {
+                if (tv_diag_enabled())
+                {
+                    char line[160];
+                    std::snprintf(
+                        line, sizeof(line),
+                        "[player] file read %llu KB in %llu ms (%llu reads, network %llu ms)",
+                        static_cast<unsigned long long>(window_bytes / 1024u),
+                        static_cast<unsigned long long>((ended - window_started_usec) / 1000u),
+                        static_cast<unsigned long long>(window_reads),
+                        static_cast<unsigned long long>(window_network_usec / 1000u));
+                    tv_diag_line(line);
+                }
+                window_started_usec = ended;
+                window_bytes = window_reads = window_network_usec = 0;
+            }
             return count;
         }
     } file{url, runner, headers ? *headers : iptv::http::RequestHeaders{}};
@@ -2409,6 +2485,23 @@ int RunContainer(const char *url, StreamRunner *runner, const iptv::http::Reques
     return runner->Finish() == IPTV_STREAM_OK && runner->HasPresentedVideo() ? 0 : -1;
 }
 
+// Network waits of this thread end as soon as the viewer stops the channel.
+struct NetworkWaitsFollowControls
+{
+    explicit NetworkWaitsFollowControls(StreamRunner *runner)
+    {
+        tv_http_set_interrupt([](void *context)
+                              { return static_cast<StreamRunner *>(context)->StopRequested(); },
+                              runner);
+    }
+    ~NetworkWaitsFollowControls()
+    {
+        tv_http_set_interrupt(nullptr, nullptr);
+    }
+    NetworkWaitsFollowControls(const NetworkWaitsFollowControls &) = delete;
+    NetworkWaitsFollowControls &operator=(const NetworkWaitsFollowControls &) = delete;
+};
+
 int RunDirect(const char *url, StreamRunner *runner, std::uint8_t *read_buffer, char *playlist_data,
               const iptv::http::RequestHeaders *headers, bool reconnect_live)
 {
@@ -2426,6 +2519,9 @@ int RunDirect(const char *url, StreamRunner *runner, std::uint8_t *read_buffer, 
             url, "video/mp2t, video/webm, application/vnd.apple.mpegurl, */*", &request, headers);
         if (status != iptv::http::Status::ok)
         {
+            // The viewer left while the channel was still being asked for.
+            if (runner->PlaybackStopRequested())
+                return 1;
             if (++attempt == 3u)
             {
                 SetRequestFailure("Channel request failed", status, request.http_status,
@@ -2442,6 +2538,8 @@ int RunDirect(const char *url, StreamRunner *runner, std::uint8_t *read_buffer, 
             gDirectDiagnostics.end = DirectEnd::no_data;
             gDirectDiagnostics.last_native_error = request.native_error;
             iptv::http::CloseStream(&request);
+            if (runner->PlaybackStopRequested())
+                return 1;
             if (++attempt == 3u)
             {
                 SetLastPlaybackError("The channel opened but returned no media data.");
@@ -2687,11 +2785,23 @@ static int RunPlayer(const char *url, const char *channel_name, const char *user
         else
         {
             (void)iptv_native_agc_loading_start();
-            result =
-                UrlLooksLikeHls(url)
-                    ? RunHls(url, runner, read_buffer, playlist_data, &headers)
-                    : RunDirect(url, runner, read_buffer, playlist_data, &headers, reconnect_live);
-            if (stop_after_ms && result >= 0 && runner->PlaybackStopRequested() &&
+            {
+                const NetworkWaitsFollowControls waits(runner);
+                result = UrlLooksLikeHls(url)
+                             ? RunHls(url, runner, read_buffer, playlist_data, &headers)
+                             : RunDirect(url, runner, read_buffer, playlist_data, &headers,
+                                         reconnect_live);
+            }
+            // Leaving is not a failure, whatever the interrupted step reported.
+            if (result < 0 && runner->PlaybackStopRequested() && !runner->TestWindowEnded())
+            {
+                result = 1;
+                SetLastPlaybackError(nullptr);
+            }
+            // Only the test window running out says so: a viewer (or a script's
+            // button) who leaves a slow channel before its first picture has
+            // changed channel, and the channel has not failed.
+            if (stop_after_ms && result >= 0 && runner->TestWindowEnded() &&
                 !runner->HasPresentedVideo())
             {
                 result = -1;

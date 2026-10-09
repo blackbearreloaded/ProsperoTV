@@ -4,6 +4,7 @@
 
 #include "tv/channel_text.hpp"
 
+#include <iterator>
 #include <algorithm>
 #include <array>
 #include <cctype>
@@ -102,6 +103,121 @@ bool is_size_note(std::string_view note)
 }
 
 } // namespace
+
+namespace
+{
+
+// Code points that stand for one plain letter or digit, in code order.
+struct Decorative
+{
+    std::uint32_t code;
+    char plain;
+};
+constexpr Decorative kDecorative[] = {
+    {0x00AA, 'a'}, {0x00B2, '2'}, {0x00B3, '3'}, {0x00B9, '1'}, {0x00BA, 'o'}, {0x0262, 'G'},
+    {0x026A, 'I'}, {0x0274, 'N'}, {0x0280, 'R'}, {0x028F, 'Y'}, {0x0299, 'B'}, {0x029C, 'H'},
+    {0x029F, 'L'}, {0x02B0, 'H'}, {0x02B2, 'J'}, {0x02B3, 'R'}, {0x02B7, 'W'}, {0x02B8, 'Y'},
+    {0x02E1, 'L'}, {0x02E2, 'S'}, {0x02E3, 'X'}, {0x1D00, 'A'}, {0x1D04, 'C'}, {0x1D05, 'D'},
+    {0x1D07, 'E'}, {0x1D0A, 'J'}, {0x1D0B, 'K'}, {0x1D0D, 'M'}, {0x1D0F, 'O'}, {0x1D18, 'P'},
+    {0x1D1B, 'T'}, {0x1D1C, 'U'}, {0x1D20, 'V'}, {0x1D21, 'W'}, {0x1D22, 'Z'}, {0x1D2C, 'A'},
+    {0x1D2E, 'B'}, {0x1D30, 'D'}, {0x1D31, 'E'}, {0x1D33, 'G'}, {0x1D34, 'H'}, {0x1D35, 'I'},
+    {0x1D36, 'J'}, {0x1D37, 'K'}, {0x1D38, 'L'}, {0x1D39, 'M'}, {0x1D3A, 'N'}, {0x1D3C, 'O'},
+    {0x1D3E, 'P'}, {0x1D3F, 'R'}, {0x1D40, 'T'}, {0x1D41, 'U'}, {0x1D42, 'W'}, {0x1D43, 'A'},
+    {0x1D47, 'B'}, {0x1D48, 'D'}, {0x1D49, 'E'}, {0x1D4D, 'G'}, {0x1D4F, 'K'}, {0x1D50, 'M'},
+    {0x1D52, 'O'}, {0x1D56, 'P'}, {0x1D57, 'T'}, {0x1D58, 'U'}, {0x1D5B, 'V'}, {0x1D62, 'I'},
+    {0x1D63, 'R'}, {0x1D64, 'U'}, {0x1D65, 'V'}, {0x1D9C, 'C'}, {0x1DA0, 'F'}, {0x1DA6, 'I'},
+    {0x1DBB, 'Z'}, {0x2070, '0'}, {0x2071, 'I'}, {0x2074, '4'}, {0x2075, '5'}, {0x2076, '6'},
+    {0x2077, '7'}, {0x2078, '8'}, {0x2079, '9'}, {0x207A, '+'}, {0x207B, '-'}, {0x207F, 'N'},
+    {0x2080, '0'}, {0x2081, '1'}, {0x2082, '2'}, {0x2083, '3'}, {0x2084, '4'}, {0x2085, '5'},
+    {0x2086, '6'}, {0x2087, '7'}, {0x2088, '8'}, {0x2089, '9'}, {0x2C7D, 'V'}, {0xA730, 'F'},
+    {0xA731, 'S'},
+};
+
+} // namespace
+
+std::string plain_text(std::string_view text)
+{
+    std::string plain;
+    plain.reserve(text.size());
+    for (std::size_t index = 0; index < text.size();)
+    {
+        const unsigned char lead = static_cast<unsigned char>(text[index]);
+        if (lead < 0x80)
+        {
+            plain.push_back(text[index++]);
+            continue;
+        }
+        const std::size_t length = lead >= 0xF0 ? 4 : lead >= 0xE0 ? 3 : lead >= 0xC0 ? 2 : 1;
+        if (length == 1 || index + length > text.size())
+        {
+            plain.push_back(text[index++]); // not UTF-8: left as it came
+            continue;
+        }
+        std::uint32_t code = lead & (0xFFu >> (length + 1));
+        bool whole = true;
+        for (std::size_t at = 1; at < length; ++at)
+        {
+            const unsigned char next = static_cast<unsigned char>(text[index + at]);
+            whole = whole && (next & 0xC0) == 0x80;
+            code = (code << 6) | (next & 0x3Fu);
+        }
+        char found = 0;
+        if (whole && code >= 0xFF01 && code <= 0xFF5E)
+            found = static_cast<char>(code - 0xFEE0); // full-width forms
+        else if (whole)
+        {
+            const auto *end = std::end(kDecorative);
+            const auto *at = std::lower_bound(
+                std::begin(kDecorative), end, code,
+                [](const Decorative &entry, std::uint32_t value) { return entry.code < value; });
+            if (at != end && at->code == code)
+                found = at->plain;
+        }
+        if (found != 0)
+            plain.push_back(found);
+        else
+            plain.append(text.substr(index, length));
+        index += length;
+    }
+    return plain;
+}
+
+std::string label_text(std::string_view text)
+{
+    const std::string plain = plain_text(text);
+    std::string label;
+    label.reserve(plain.size());
+    bool space = false;
+    for (std::size_t index = 0; index < plain.size();)
+    {
+        const unsigned char lead = static_cast<unsigned char>(plain[index]);
+        const std::size_t length = lead >= 0xF0 ? 4 : lead >= 0xE0 ? 3 : lead >= 0xC0 ? 2 : 1;
+        if (index + length > plain.size())
+            break;
+        std::uint32_t code = lead;
+        if (length > 1)
+        {
+            code = lead & (0xFFu >> (length + 1));
+            for (std::size_t at = 1; at < length; ++at)
+                code = (code << 6) | (static_cast<unsigned char>(plain[index + at]) & 0x3Fu);
+        }
+        // Arrows, shapes, signs, dingbats, variation selectors and pictures:
+        // decoration around the words, and nothing the faces can write.
+        const bool symbol = (code >= 0x2190 && code <= 0x2BFF) || (code >= 0xFE00 && code <= 0xFE0F) ||
+                            (code >= 0x1F000 && code <= 0x1FAFF);
+        if (symbol || code == ' ')
+            space = !label.empty();
+        else
+        {
+            if (space)
+                label.push_back(' ');
+            space = false;
+            label.append(plain, index, length);
+        }
+        index += length;
+    }
+    return label.empty() ? plain : label;
+}
 
 bool contains_nocase(std::string_view text, std::string_view needle)
 {

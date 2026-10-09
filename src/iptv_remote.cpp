@@ -65,7 +65,7 @@ int listener = -1;
 std::array<Client, 4> clients;
 std::array<iptv_input_action_t, 32> actions;
 size_t read_at = 0, write_at = 0;
-char pin[7], hint[160] = "Phone remote unavailable", remote_url[80];
+char pin[7], hint[160] = "Phone remote unavailable", remote_url[80], start_report[160];
 std::string pairing_store;
 std::array<std::string, 8> paired_tokens;
 uint64_t pairing_deadline = 0;
@@ -508,12 +508,32 @@ bool iptv_remote_start(unsigned short port)
         failed_stage = "nonblocking";
     else
     {
-        result = bind(listener, reinterpret_cast<sockaddr *>(&address), sizeof(address));
-        if (result != 0 && (SocketError() == EACCES || SocketError() == EADDRINUSE))
+        // The preferred port, then others, then any free one. A console that
+        // refuses every named port (a title without network-server rights:
+        // seen on system software 12.70 inside the title's sandbox) still
+        // hands out an automatic one, but answers nobody on it: the remote
+        // is then unavailable, which is better said than a dead address shown.
+        const unsigned short candidates[] = {port, 28888, 38888, 20888, 0};
+        std::size_t used = 0;
+        bool refused_all = port != 0; // a caller that asks for any port gets one
+        start_report[0] = 0;
+        for (const unsigned short candidate : candidates)
         {
-            // Request an allowed/free port when the preferred port is unavailable.
-            address.sin_port = 0;
+            if (candidate == 0 && refused_all)
+            {
+                result = -1;
+                break;
+            }
+            address.sin_port = htons(candidate);
             result = bind(listener, reinterpret_cast<sockaddr *>(&address), sizeof(address));
+            const int error = result == 0 ? 0 : SocketError();
+            if (used < sizeof(start_report))
+                used += static_cast<std::size_t>(
+                    std::snprintf(start_report + used, sizeof(start_report) - used, "%s%u=%d",
+                                  used ? " " : "", static_cast<unsigned>(candidate), error));
+            if (result == 0 || (error != EACCES && error != EADDRINUSE))
+                break;
+            refused_all = refused_all && error == EACCES;
         }
         if (result != 0)
             failed_stage = "bind";
@@ -532,9 +552,14 @@ bool iptv_remote_start(unsigned short port)
     if (failed_stage)
     {
         const int error = SocketError();
+        const bool refused = std::strcmp(failed_stage, "bind") == 0 && error == EACCES;
         iptv_remote_stop();
-        std::snprintf(hint, sizeof(hint), "Phone remote unavailable: %s failed (%d, 0x%08x)",
-                      failed_stage, error, static_cast<unsigned>(result));
+        if (refused)
+            std::snprintf(hint, sizeof(hint),
+                          "Phone remote unavailable: the console did not allow it");
+        else
+            std::snprintf(hint, sizeof(hint), "Phone remote unavailable: %s failed (%d, 0x%08x)",
+                          failed_stage, error, static_cast<unsigned>(result));
         return false;
     }
     char ip[INET_ADDRSTRLEN] = "<PS5-IP>";
@@ -661,6 +686,10 @@ void iptv_remote_enable_search(bool enabled)
 const char *iptv_remote_hint(void)
 {
     return hint;
+}
+const char *iptv_remote_start_report(void)
+{
+    return start_report;
 }
 void iptv_remote_set_playback_favorite(int (*toggle)(void *), void *context)
 {

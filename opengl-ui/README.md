@@ -66,6 +66,13 @@ with a `dev/diagnostics.txt` beside the app.
 The test title also reads scripted runs (`ps5/src/tv_dev.hpp`), which
 `tools/console-run.py <console address> <app folder> <results> <script>`
 drives; the scripts are in `ps5/scripts/`.
+A script presses the menu's buttons itself; a
+`during <seconds> <button>` step presses one while the next channel plays, so
+the playback controls are tested without a controller or a paired phone
+(`ps5/scripts/playback-controls.txt`), and a `type <text>` step answers the
+next keyboard prompt (a PIN, a folder's name). A title that runs inside its sandbox on
+system software 12.70 cannot accept connections, so the phone remote says it
+is unavailable there and is tested with filesystem access.
 
 ## What is here
 

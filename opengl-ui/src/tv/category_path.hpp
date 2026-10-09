@@ -14,13 +14,23 @@ inline std::string_view category_trim(std::string_view path)
         path.remove_suffix(1);
     return path;
 }
+// Where the last level of a path starts: at "|", at "::", or at a "/" that
+// stands apart from the words ("US / Sports", "US/ Sports"). A slash inside a
+// word is part of a name: "24/7", "HD/RAW", "B/R Sports" are one level.
 inline std::size_t category_separator(std::string_view path)
 {
-    const auto slash = path.find_last_of("/|");
-    const auto colon = path.rfind("::");
-    return slash == path.npos   ? colon
-           : colon == path.npos ? slash
-                                : (slash > colon ? slash : colon);
+    for (std::size_t at = path.size(); at-- > 0;)
+    {
+        const char c = path[at];
+        if (c == '|')
+            return at;
+        if (c == ':' && at > 0 && path[at - 1] == ':')
+            return at - 1;
+        if (c == '/' && ((at > 0 && (path[at - 1] == ' ' || path[at - 1] == '\t')) ||
+                         (at + 1 < path.size() && (path[at + 1] == ' ' || path[at + 1] == '\t'))))
+            return at;
+    }
+    return path.npos;
 }
 inline std::string_view category_parent(std::string_view path)
 {

@@ -412,7 +412,9 @@ def main():
     text = log.decode("utf-8", "replace")
     for line in text.splitlines():
         ours = line.startswith(("[ProsperoTV]", "[TV]"))
-        if any(word in line.lower() for word in BAD_LOG_WORDS) or (ours and "failed" in line):
+        # The word, not a setting's name that holds it ("hide_failed=0").
+        if any(word in line.lower() for word in BAD_LOG_WORDS) or (
+                ours and re.search(r"(?<![A-Za-z0-9_])failed(?![A-Za-z0-9_])", line)):
             problems.append(f"app.log: {line.strip()[:200]}")
     if "first-swap ok" not in text:
         problems.append("app.log: no 'first-swap ok' line")

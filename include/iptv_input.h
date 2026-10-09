@@ -45,6 +45,11 @@ void iptv_input_poll(void);
 bool iptv_input_next(iptv_input_event_t* event);
 bool iptv_input_pressed(iptv_input_action_t action);
 void iptv_input_shutdown(void);
+/* Scripted hardware tests: an action to deliver delay_ms after iptv_input_schedule_start().
+ * At most 64 are kept; false when there is no room. Nothing is scheduled outside tests. */
+bool iptv_input_schedule(unsigned delay_ms, iptv_input_action_t action);
+/* Starts the clock of the scheduled actions, once: later calls change nothing until all fired. */
+void iptv_input_schedule_start(void);
 
 #ifdef __cplusplus
 }

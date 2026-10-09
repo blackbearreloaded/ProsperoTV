@@ -178,9 +178,73 @@ bool iptv_input_init(void)
     return true;
 }
 
+#define SCHEDULE_CAPACITY 64U
+static struct
+{
+    uint64_t at_ms;
+    iptv_input_action_t action;
+    bool waiting;
+} scheduled[SCHEDULE_CAPACITY];
+static uint64_t schedule_started_ms;
+static bool schedule_running;
+
+bool iptv_input_schedule(unsigned delay_ms, iptv_input_action_t action)
+{
+    if (action < 0 || action >= IPTV_INPUT_COUNT)
+        return false;
+    for (unsigned i = 0; i < SCHEDULE_CAPACITY; ++i)
+    {
+        if (scheduled[i].waiting)
+            continue;
+        scheduled[i].at_ms = delay_ms;
+        scheduled[i].action = action;
+        scheduled[i].waiting = true;
+        return true;
+    }
+    return false;
+}
+
+void iptv_input_schedule_start(void)
+{
+    if (schedule_running)
+        return;
+    for (unsigned i = 0; i < SCHEDULE_CAPACITY; ++i)
+    {
+        if (scheduled[i].waiting)
+        {
+            schedule_started_ms = now_ms();
+            schedule_running = true;
+            return;
+        }
+    }
+}
+
+static void schedule_poll(void)
+{
+    if (!schedule_running)
+        return;
+    const uint64_t elapsed = now_ms() - schedule_started_ms;
+    bool left = false;
+    for (unsigned i = 0; i < SCHEDULE_CAPACITY; ++i)
+    {
+        if (!scheduled[i].waiting)
+            continue;
+        if (scheduled[i].at_ms > elapsed)
+        {
+            left = true;
+            continue;
+        }
+        scheduled[i].waiting = false;
+        queue_push(scheduled[i].action, true);
+        queue_push(scheduled[i].action, false);
+    }
+    schedule_running = left;
+}
+
 void iptv_input_poll(void)
 {
     iptv_remote_poll();
+    schedule_poll();
     if (pad_handle < 0)
         return;
 

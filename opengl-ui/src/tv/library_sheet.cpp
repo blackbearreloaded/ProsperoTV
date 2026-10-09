@@ -33,7 +33,7 @@ void LibrarySheet::sync()
     all.title = folders_ ? tr("All favorites") : tr("All provider categories");
     if (!folders_ && !category_path_.empty())
     {
-        all.title = tr("Browse all in ") + category_path_;
+        all.title = tr("Browse all in ") + label_text(category_path_);
         all.value = model.category_hidden(category_path_) ? tr("Hidden") : "";
     }
     rows.push_back(std::move(all));
@@ -74,7 +74,7 @@ void LibrarySheet::sync()
             values_.push_back(child);
             branches_.push_back(info.second);
             ui::ListItem row;
-            row.title = category_leaf(child);
+            row.title = label_text(category_leaf(child));
             row.value = model.category_rule(child) == 1   ? tr("PIN required")
                         : model.category_rule(child) == 2 ? tr("Approved for kids")
                         : model.category_hidden(child)    ? tr("Hidden")
@@ -153,6 +153,20 @@ void LibrarySheet::handle(const InputFrame &input, ui::Feedback &feedback)
     const std::string value = at > 0 && static_cast<std::size_t>(at) <= values_.size()
                                   ? values_[static_cast<std::size_t>(at - 1)]
                                   : (folders_ ? std::string() : category_path_);
+    if (folders_ && input.is_pressed(Action::menu) && !value.empty())
+    {
+        // The folder goes; the channels in it stay favorites.
+        if (model.remove_folder(value))
+        {
+            model.announce(Level::busy, tr("Folder deleted"), value, 3);
+            feedback.play(audio::Cue::back);
+        }
+        else
+            feedback.play(audio::Cue::error);
+        sync();
+        list_.set_focus(0, true);
+        return;
+    }
     if (!folders_ && input.is_pressed(Action::north) && !value.empty())
     {
         if (!model.parental().enabled())
@@ -232,7 +246,8 @@ void LibrarySheet::draw(ui::Canvas &canvas) const
     ui::text(
         draw, fonts.regular,
         folders_
-            ? tr("Cross: Open   Square: Add/remove channel   Triangle: New folder   Circle: Back")
+            ? tr("Cross: Open   Square: Add/remove channel   Triangle: New folder   Options: Delete   "
+                 "Circle: Back")
             : tr("Cross: Browse   Square: Show/hide   Triangle: Normal / PIN / Kids   Circle: "
                  "Back"),
         400, 915, 21, shared_.theme.text_muted);
