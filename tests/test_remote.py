@@ -157,7 +157,7 @@ class RemoteTest(unittest.TestCase):
         self.pair()
         for key, action in (('up', 8), ('down', 9), ('left', 10), ('right', 11),
                             ('enter', 0), ('back', 1), ('search', 3), ('favorite', 2),
-                            ('previous', 5), ('next', 6), ('pause', 12), ('live', 13)):
+                            ('previous', 5), ('next', 6), ('tracks', 4), ('pause', 12), ('live', 13)):
             self.request('/api/key', key)
             self.assertEqual(self.server.stdout.readline().strip(), f'key:{action}')
         for query in ('BBC News', 'café 日本', '', 'a' * 39):

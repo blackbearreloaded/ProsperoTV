@@ -82,6 +82,42 @@ CAPTIONS
 video.m3u8
 MASTER
 done
+dir="$output/hls-reset"
+mkdir -p "$dir"
+for epoch in old new; do
+    offset=20
+    [[ $epoch != new ]] || offset=0
+    ffmpeg -hide_banner -loglevel error -y -i "$output/h264-aac.mp4" -c copy \
+        -output_ts_offset "$offset" "$dir/$epoch.ts"
+    first_pts=$(ffprobe -v error -select_streams v:0 -show_entries stream=start_time \
+        -of default=nw=1:nk=1 "$dir/$epoch.ts" | awk '{printf "%.0f", $1 * 90000; exit}')
+    cat > "$dir/$epoch.vtt" <<CAPTIONS
+WEBVTT
+X-TIMESTAMP-MAP=LOCAL:00:00:10.000,MPEGTS:$first_pts
+
+00:00:10.200 --> 00:00:10.600
+$epoch timeline
+CAPTIONS
+done
+for extension in ts vtt; do
+    cat > "$dir/$extension.m3u8" <<PLAYLIST
+#EXTM3U
+#EXT-X-TARGETDURATION:1
+#EXT-X-MEDIA-SEQUENCE:0
+#EXTINF:1,
+old.$extension
+#EXT-X-DISCONTINUITY
+#EXTINF:1,
+new.$extension
+#EXT-X-ENDLIST
+PLAYLIST
+done
+cat > "$dir/master.m3u8" <<'MASTER'
+#EXTM3U
+#EXT-X-MEDIA:TYPE=SUBTITLES,GROUP-ID="captions",NAME="English",LANGUAGE="eng",URI="vtt.m3u8"
+#EXT-X-STREAM-INF:BANDWIDTH=500000,SUBTITLES="captions"
+ts.m3u8
+MASTER
 cat > "$output/english.srt" <<'CAPTIONS'
 1
 00:00:00,200 --> 00:00:00,600

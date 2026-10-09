@@ -143,8 +143,10 @@ struct Frames
 {
     iptv_stream_format_t format{};
     unsigned video = 0, audio = 0;
+    std::uint64_t first_pts = UINT64_MAX, last_pts = 0;
 };
-void check_transport(const Memory &memory, bool hevc)
+void check_transport(const Memory &memory, bool hevc, unsigned expected_frames = 0,
+                     Frames *decoded = nullptr)
 {
     Frames frames;
     iptv_stream_backend_t backend{};
@@ -155,12 +157,15 @@ void check_transport(const Memory &memory, bool hevc)
         return 0;
     };
     backend.submit_video =
-        [](void *self, const std::uint8_t *bytes, std::size_t count, std::uint64_t)
+        [](void *self, const std::uint8_t *bytes, std::size_t count, std::uint64_t pts)
     {
         EXPECT_GT(count, 4u);
         EXPECT_EQ(bytes[0], 0);
         EXPECT_EQ(bytes[1], 0);
-        ++static_cast<Frames *>(self)->video;
+        auto &frames = *static_cast<Frames *>(self);
+        ++frames.video;
+        frames.first_pts = std::min(frames.first_pts, pts);
+        frames.last_pts = std::max(frames.last_pts, pts);
         return 0;
     };
     backend.submit_audio =
@@ -185,10 +190,14 @@ void check_transport(const Memory &memory, bool hevc)
     EXPECT_EQ(iptv_stream_stop(&session), IPTV_STREAM_OK) << session.telemetry.last_error;
     EXPECT_EQ(frames.format.video_codec, hevc ? IPTV_STREAM_VIDEO_HEVC : IPTV_STREAM_VIDEO_H264);
     EXPECT_EQ(frames.format.visible_width, hevc ? 160u : 320u);
-    EXPECT_EQ(frames.video, hevc ? 5u : 25u);
+    EXPECT_EQ(frames.video, expected_frames ? expected_frames : hevc ? 5u : 25u);
     if (!hevc)
-        EXPECT_GE(frames.audio, 46u);
+        EXPECT_GE(frames.audio, expected_frames ? 46u * expected_frames / 25u : 46u);
+    if (expected_frames)
+        EXPECT_NEAR(frames.last_pts - frames.first_pts, (expected_frames - 1) * 40000, 40000);
     EXPECT_EQ(iptv_stream_cleanup(&session), IPTV_STREAM_OK);
+    if (decoded)
+        *decoded = frames;
 }
 
 TEST(Media, ReadsMp4MoovAtEitherEndAndMatroskaWithAacSound)
@@ -655,6 +664,28 @@ TEST(Media, EmbeddedSubtitlesUseTheSameTimelineAsRemuxedVideo)
             EXPECT_TRUE(subtitles.at(first_pts + 1000000).empty());
         }
 }
+TEST(Media, HlsProviderClockResetKeepsVideoAndExternalSubtitlesPlayable)
+{
+    iptv::Subtitles subtitles;
+    Memory memory("hls-reset/master.m3u8");
+    memory.subtitles = &subtitles;
+    std::string error;
+    const auto result = memory.run(&error);
+    SCOPED_TRACE(::testing::PrintToString(memory.subtitle_times));
+    ASSERT_EQ(result, 0) << error;
+    EXPECT_EQ(memory.opened, memory.closed);
+    Frames frames;
+    check_transport(memory, false, 50, &frames);
+    ASSERT_EQ(memory.subtitle_times.size(), 2u);
+    EXPECT_NEAR(memory.subtitle_times[1] - memory.subtitle_times[0], 1000000, 40000);
+    for (unsigned i = 0; i < 2; ++i)
+    {
+        const auto cues = subtitles.at(frames.first_pts + 250000 + i * 1000000);
+        ASSERT_EQ(cues.size(), 1u);
+        EXPECT_EQ(cues.front()->text, i ? "new timeline" : "old timeline");
+    }
+}
+
 TEST(Media, StopsOnCancellationOrOutputFailureAndRejectsNonMedia)
 {
     Memory cancelled("h264-aac.mp4");
