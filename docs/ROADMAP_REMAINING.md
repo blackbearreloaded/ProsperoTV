@@ -544,3 +544,7 @@ synchronization, switching latency and resource cost remain pending.
 - 2026-10-09 | rewind | 6eb86e1 | host/PS5 build | partial-pass: programme tracks follow historical video PES; 112 core/21 media checks | ../psiptv/results/roadmap/timeshift-programme-result.json | native tracks
 
 - 2026-10-09 | rewind | 72a1254 | .30 PPSA88280 | failed: programme tracks change before queued video; clean teardown | ../psiptv/results/roadmap/console-38/result.json | preserve queued programme media
+
+- 2026-10-09 | rewind | 911f3b2 | .30 PPSA88281 | pass: A/B tracks across pause/seek/live, zero queue gaps, clean teardown | ../psiptv/results/roadmap/console-39/result.json | natural transition
+
+- 2026-10-09 | rewind | 911f3b2 | .30 PPSA88281 | partial-pass: natural track transition; one video queue gap unclassified | ../psiptv/results/roadmap/console-42/result.json | timing/formats
