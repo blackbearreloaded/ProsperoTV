@@ -1648,9 +1648,9 @@ static int32_t present_video_output(backend_state_t *state, const videodec2_fram
         goto failed;
     state->pending_present_pts_us = presentation_pts_us;
     state->pause_picture = (iptv_native_picture_t){
-        output->buffer, (size_t)output->buffer_size, output->pitch, output->height,
-        state->config.visible_width, state->config.visible_height, state->config.bit_depth,
-        presentation_pts_us};
+        output->buffer,          (size_t)output->buffer_size, output->pitch,
+        output->height,          state->config.visible_width, state->config.visible_height,
+        state->config.bit_depth, presentation_pts_us};
     state->pending_present_source = output->buffer;
     state->pending_present_from_drain = (uint8_t)(from_drain != 0);
     state->presentation_pending = 1;
@@ -1890,8 +1890,9 @@ static int32_t pause_video(backend_state_t *state)
         if (picture->data && !state->config.picture && now - redrawn >= UINT64_C(100000))
         {
             const iptv_native_video_overlay_t overlay = {
-                state->config.codec, picture->width, picture->height, state->frame_rate_x100,
-                state->bitrate_kbps, 0, picture->pts_us};
+                state->config.codec,    picture->width,      picture->height,
+                state->frame_rate_x100, state->bitrate_kbps, 0,
+                picture->pts_us};
             result = iptv_native_agc_present_yuv_deferred(
                 picture->data, picture->bytes, picture->pitch, picture->surface_height,
                 picture->width, picture->height, picture->bit_depth, &overlay);
@@ -2094,7 +2095,8 @@ static int32_t queue_coded_frame(backend_state_t *state, const void *coded_frame
     uint32_t read;
     uint32_t write;
     uint64_t queued_bytes;
-    const uint32_t generation = atomic_load_explicit(&state->stream_generation, memory_order_acquire);
+    const uint32_t generation =
+        atomic_load_explicit(&state->stream_generation, memory_order_acquire);
 
     for (;;)
     {
@@ -2432,8 +2434,7 @@ static void *audio_worker_entry(void *argument)
             }
             if (sync < 0)
             {
-                atomic_store_explicit(&state->audio_queue_read, read + 1u,
-                                      memory_order_release);
+                atomic_store_explicit(&state->audio_queue_read, read + 1u, memory_order_release);
                 continue;
             }
             atomic_store(&state->audio_sync_pending, 0);
@@ -2512,7 +2513,8 @@ int32_t iptv_native_backend_submit_audio(iptv_native_backend_t *backend, const v
         return IPTV_NATIVE_E_ARGUMENT;
     if (state->state != IPTV_NATIVE_STATE_OPEN || state->drain_started)
         return IPTV_NATIVE_E_STATE;
-    const uint32_t generation = atomic_load_explicit(&state->stream_generation, memory_order_acquire);
+    const uint32_t generation =
+        atomic_load_explicit(&state->stream_generation, memory_order_acquire);
     if (atomic_load_explicit(&state->discard_input, memory_order_acquire))
         return 0;
     const int mp2 =

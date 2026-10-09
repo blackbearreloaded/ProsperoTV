@@ -232,8 +232,10 @@ std::optional<std::uint32_t> PlaybackOsd::take_subtitle_selection()
 void PlaybackOsd::set_live_state(const iptv_player_live_state_t &state)
 {
     std::lock_guard lock(mutex_);
-    const auto behind = [](const iptv_player_live_state_t &value)
-    { return value.last_us > value.position_us ? (value.last_us - value.position_us) / 1000000 : 0; };
+    const auto behind = [](const iptv_player_live_state_t &value) {
+        return value.last_us > value.position_us ? (value.last_us - value.position_us) / 1000000
+                                                 : 0;
+    };
     if (state.available != history_.available || state.paused != history_.paused ||
         state.expired != history_.expired || behind(state) != behind(history_))
         dirty_ = true;
@@ -597,8 +599,8 @@ bool PlaybackOsd::draw(void *surface, std::size_t bytes, unsigned pitch, unsigne
                     drawn;
         if (subtitle_panel_.height)
         {
-            subtitle_panel_.y = (overlay ? (history_.available ? 660 : 740) : 1030) -
-                                 subtitle_panel_.height;
+            subtitle_panel_.y =
+                (overlay ? (history_.available ? 660 : 740) : 1030) - subtitle_panel_.height;
             drawn = subtitle_panel_.composite(surface, bytes, pitch, sh, vw, vh, depth) || drawn;
         }
     }

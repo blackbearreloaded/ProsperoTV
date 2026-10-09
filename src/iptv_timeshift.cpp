@@ -17,7 +17,7 @@ struct WebmRecord
     iptv_webm_video_info_t video{};
     std::uint64_t pts_us = 0, bytes = 0;
 };
-}
+} // namespace
 bool TimeshiftSeek::relative(std::uint64_t first, std::uint64_t last, std::uint64_t presented,
                              int seconds)
 {
@@ -110,17 +110,17 @@ bool Timeshift::append_webm(const iptv_webm_video_info_t &video, const iptv_webm
     iptv_vp9_packet_t packet{};
     iptv_vp9_frame_flags_t flags{};
     if (iptv_vp9_split_packet(block.data, block.bytes, &packet) != 0 ||
-        iptv_vp9_read_frame_flags(packet.frames[0].data, packet.frames[0].bytes,
-                                  video.profile, &flags) != 0)
+        iptv_vp9_read_frame_flags(packet.frames[0].data, packet.frames[0].bytes, video.profile,
+                                  &flags) != 0)
         return false;
     std::lock_guard lock(mutex_);
     if (!webm_enabled_ || sizeof(WebmRecord) + block.bytes > UINT64_MAX - end_)
         return false;
-    const bool changed = webm_video_.pixel_width &&
-                         (video.pixel_width != webm_video_.pixel_width ||
-                          video.pixel_height != webm_video_.pixel_height);
-    const bool reset = have_ticks_ &&
-                       ((block.pts_us < latest_us_ && latest_us_ - block.pts_us > 10000000) ||
+    const bool changed =
+        webm_video_.pixel_width && (video.pixel_width != webm_video_.pixel_width ||
+                                    video.pixel_height != webm_video_.pixel_height);
+    const bool reset =
+        have_ticks_ && ((block.pts_us < latest_us_ && latest_us_ - block.pts_us > 10000000) ||
                         (block.pts_us > latest_us_ && block.pts_us - latest_us_ > 30000000));
     if (changed || reset)
     {
@@ -147,8 +147,8 @@ bool Timeshift::append_webm(const iptv_webm_video_info_t &video, const iptv_webm
     return true;
 }
 Timeshift::Read Timeshift::read_webm(std::uint64_t offset, iptv_webm_video_info_t &video,
-                                    iptv_webm_block_t &block,
-                                    std::vector<std::uint8_t> &output) const
+                                     iptv_webm_block_t &block,
+                                     std::vector<std::uint8_t> &output) const
 {
     std::lock_guard lock(mutex_);
     block = {};
@@ -218,10 +218,10 @@ bool Timeshift::append(const std::uint8_t *data, std::size_t bytes)
             scan_ = begin_;
             synchronized_ = false;
         }
-    index();
-    trim();
-    data += chunk;
-    bytes -= chunk;
+        index();
+        trim();
+        data += chunk;
+        bytes -= chunk;
     }
     return true;
 }
@@ -285,8 +285,8 @@ std::optional<Timeshift::Position> Timeshift::seek(std::uint64_t target) const
         return {};
     // Some broadcasters omit the TS random-access indicator. Starting a few
     // seconds earlier lets the existing Annex-B parser find an IDR/CRA itself.
-    const auto *chosen = random && (webm_enabled_ || target - random->pts_us <= 10000000)
-                             ? random : fallback;
+    const auto *chosen =
+        random && (webm_enabled_ || target - random->pts_us <= 10000000) ? random : fallback;
     return Position{chosen->offset, chosen->pts_us, generation_};
 }
 std::optional<Timeshift::Position> Timeshift::seek_next(std::uint64_t target) const

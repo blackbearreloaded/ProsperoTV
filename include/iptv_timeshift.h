@@ -52,8 +52,8 @@ class Timeshift
     bool append_webm(const iptv_webm_video_info_t &video, const iptv_webm_block_t &block);
     // offset must be a seek result or the end of the previous returned record.
     // block.data borrows output until the next read; bytes includes the record header.
-    Read read_webm(std::uint64_t offset, iptv_webm_video_info_t &video,
-                   iptv_webm_block_t &block, std::vector<std::uint8_t> &output) const;
+    Read read_webm(std::uint64_t offset, iptv_webm_video_info_t &video, iptv_webm_block_t &block,
+                   std::vector<std::uint8_t> &output) const;
     // Owner-thread only, after interrupting native submission. The history lock
     // protects validation and copying through the playback reset callback.
     int reposition(iptv_stream_session_t *playback, const Position &position);

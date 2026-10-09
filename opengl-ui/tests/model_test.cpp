@@ -857,9 +857,7 @@ TEST_F(ModelTest, LiveReplayKeepsPausedBannerAndPreservesMenuNavigation)
     controls.set_live_state(state);
     std::vector<std::uint8_t> surface(1920 * 1088 * 3 / 2, 100);
     const auto draw = [&](std::uint64_t now)
-    {
-        return controls.draw(surface.data(), surface.size(), 1920, 1088, 1920, 1080, 8, now);
-    };
+    { return controls.draw(surface.data(), surface.size(), 1920, 1088, 1920, 1080, 8, now); };
     EXPECT_TRUE(draw(1));
     EXPECT_FALSE(draw(6000001));
     state.paused = 1;
@@ -868,8 +866,8 @@ TEST_F(ModelTest, LiveReplayKeepsPausedBannerAndPreservesMenuNavigation)
     state.expired = 1;
     controls.set_live_state(state);
     EXPECT_TRUE(draw(18000001));
-    for (const auto key : {IPTV_INPUT_PLAY_PAUSE, IPTV_INPUT_GO_LIVE, IPTV_INPUT_LEFT,
-                           IPTV_INPUT_RIGHT})
+    for (const auto key :
+         {IPTV_INPUT_PLAY_PAUSE, IPTV_INPUT_GO_LIVE, IPTV_INPUT_LEFT, IPTV_INPUT_RIGHT})
         EXPECT_EQ(controls.input(key, 18000001), 0); // Player owns replay outside menus.
     EXPECT_FALSE(controls.selected_channel());
     EXPECT_EQ(controls.input(IPTV_INPUT_CROSS, 18000002), 1);

@@ -1057,9 +1057,9 @@ class StreamRunner
     int DecodeWebm(const iptv_webm_video_info_t &video, const iptv_webm_block_t &block)
     {
         const auto &current = session_.telemetry.format;
-        if (adapter_.opened && (current.coded_width != video.pixel_width ||
-                                 current.coded_height != video.pixel_height ||
-                                 current.video_profile != video.profile))
+        if (adapter_.opened &&
+            (current.coded_width != video.pixel_width ||
+             current.coded_height != video.pixel_height || current.video_profile != video.profile))
             return IPTV_STREAM_REOPEN_REQUIRED;
         if (!adapter_.opened)
         {
@@ -1497,8 +1497,8 @@ class StreamRunner
             read_ahead_read_.store(read, std::memory_order_release);
         }
         const auto copied = mode_ == RunnerMode::webm
-                                ? history_->read_webm(read, history_webm_video_, history_webm_block_,
-                                                       history_webm_bytes_)
+                                ? history_->read_webm(read, history_webm_video_,
+                                                      history_webm_block_, history_webm_bytes_)
                                 : history_->read(read, read_ahead_buffer_, kReadBytes);
         chunk = copied.generation == history_generation_ ? copied.bytes : 0;
         // A producer may have advanced the retention boundary since the range
@@ -1524,7 +1524,8 @@ class StreamRunner
         }
         if (mode_ == RunnerMode::webm && !history_)
             return true; // Allocation failure retains the existing direct playback path.
-        read_ahead_buffer_ = new (std::nothrow) std::uint8_t[history_ ? kReadBytes : kReadAheadBytes];
+        read_ahead_buffer_ =
+            new (std::nothrow) std::uint8_t[history_ ? kReadBytes : kReadAheadBytes];
         if (!read_ahead_buffer_)
         {
             history_.reset();
@@ -1588,21 +1589,24 @@ class StreamRunner
                 continue;
             }
 
-            const std::size_t offset = history_ ? 0 : static_cast<std::size_t>(read % kReadAheadBytes);
+            const std::size_t offset =
+                history_ ? 0 : static_cast<std::size_t>(read % kReadAheadBytes);
             std::size_t chunk = available;
             if (mode_ != RunnerMode::webm && chunk > kReadBytes)
                 chunk = kReadBytes;
             if (mode_ != RunnerMode::webm && chunk > kReadAheadBytes - offset)
                 chunk = kReadAheadBytes - offset;
-            const int result = mode_ == RunnerMode::webm
-                                   ? DecodeWebm(history_webm_video_, history_webm_block_)
-                                   : iptv_stream_push(&session_, read_ahead_buffer_ + offset, chunk);
+            const int result =
+                mode_ == RunnerMode::webm
+                    ? DecodeWebm(history_webm_video_, history_webm_block_)
+                    : iptv_stream_push(&session_, read_ahead_buffer_ + offset, chunk);
             if (result != IPTV_STREAM_OK)
             {
                 if (mode_ == RunnerMode::webm && result == IPTV_STREAM_REOPEN_REQUIRED)
-                    history_reopen_ = {read, history_webm_block_.pts_us, history_generation_.load()};
+                    history_reopen_ = {read, history_webm_block_.pts_us,
+                                       history_generation_.load()};
                 else if (history_ && result == IPTV_STREAM_REOPEN_REQUIRED &&
-                    session_.telemetry.reopen_pts_us != IPTV_STREAM_PTS_UNKNOWN)
+                         session_.telemetry.reopen_pts_us != IPTV_STREAM_PTS_UNKNOWN)
                     history_reopen_pts_ = session_.telemetry.reopen_pts_us;
                 read_ahead_result_.store(result, std::memory_order_release);
                 break;

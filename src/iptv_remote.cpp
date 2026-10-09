@@ -459,8 +459,8 @@ void Request(Client &client)
             {"enter", IPTV_INPUT_CROSS},     {"back", IPTV_INPUT_CIRCLE},
             {"search", IPTV_INPUT_TRIANGLE}, {"favorite", IPTV_INPUT_SQUARE},
             {"previous", IPTV_INPUT_L1},     {"next", IPTV_INPUT_R1},
-            {"tracks", IPTV_INPUT_OPTIONS},
-            {"pause", IPTV_INPUT_PLAY_PAUSE}, {"live", IPTV_INPUT_GO_LIVE}};
+            {"tracks", IPTV_INPUT_OPTIONS},  {"pause", IPTV_INPUT_PLAY_PAUSE},
+            {"live", IPTV_INPUT_GO_LIVE}};
         for (const auto &key : keys)
             if (key.first == body)
             {
