@@ -125,8 +125,9 @@ make undeploy PS5_HOST=192.168.1.100
 
 The command works on the title ID in the root `sce_sys/param.json`
 (`PPSA99003`), whichever interface the installed folder holds. It recursively
-removes only `/data/homebrew/<TITLE_ID>/`, and deletes exact same-ID `.ffpkg`
-and `.ffpfsc` files plus interrupted-upload temporary images. It never deletes
+removes only `/data/homebrew/<TITLE_ID>/`, and deletes an exact same-ID
+`.ffpkg` image, a `.ffpfsc` image left by an older version, and
+interrupted-upload temporary images. It never deletes
 the `/data/homebrew` root or another title, and it does not touch the app's
 data in `/data/prosperotv`. Preview the resolved targets without a network
 request by adding `DEPLOY_DRY_RUN=1`; `FTP_PORT`, `PS5_FTP_USER`, and
@@ -162,7 +163,7 @@ the command finishes.
 | --- | --- | --- |
 | `PS5_HOST` | required | Console IPv4 address or hostname |
 | `FTP_PORT` | `2121` | FTP service port |
-| `DEPLOY_FORMAT` | `folder` | `folder`, `ffpfsc`, or `ffpkg` output |
+| `DEPLOY_FORMAT` | `folder` | `folder` or `ffpkg` output |
 | `PS5_FTP_USER` | `anonymous` | FTP username |
 | `PS5_FTP_PASSWORD` | `codex` | FTP password |
 | `DEPLOY_DRY_RUN` | `0` | Use `1` to build and print the target without networking |
@@ -172,11 +173,10 @@ and `DEPLOY_FORMAT` between runs; command-line Make values still override it.
 `make deploy PS5_HOST=192.0.2.1 DEPLOY_DRY_RUN=1` checks the local build and
 the resolved destination without contacting a console.
 
-The image formats are a local option of this root build only: `make ffpkg`,
-`make ffpfsc`, and `make packages` write `dist/<TITLE_ID>.ffpkg` and
-`dist/<TITLE_ID>.ffpfsc`, and `DEPLOY_FORMAT=ffpfsc` or `ffpkg` uploads one
-(see [Build output formats](FFPKG.md)). CI and releases carry the ZIP only, and
-an app installed as an image cannot update itself.
+The UFS2 image is a local option of this root build only: `make ffpkg`
+writes `dist/<TITLE_ID>.ffpkg`, and `DEPLOY_FORMAT=ffpkg` uploads it (see
+[Build output formats](FFPKG.md)). CI and releases carry the ZIP only, and an
+app installed as an image cannot update itself.
 
 ## Smoke test
 

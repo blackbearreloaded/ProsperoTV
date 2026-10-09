@@ -1,53 +1,25 @@
 # Build output formats
 
-Every application or package build creates and validates
-`dist/<TITLE_ID>/`. The Make targets map to the same PowerShell
-`-OutputFormat` selections:
+Every application build creates and validates `dist/<TITLE_ID>/`.
 
 Tagged GitHub Releases and every CI build attach a `.zip` containing the
-complete title folder and its `SHA256SUMS`, and nothing else. The image
-formats below (`make ffpkg`, `make ffpfsc`, `make packages`) remain a local
-option for anyone who wants an image on their own machine.
+complete title folder and its `SHA256SUMS`, and nothing else. The UFS2 image
+below (`make ffpkg`) remains a local option for anyone who wants an image on
+their own machine. The Make targets map to the same PowerShell
+`-OutputFormat` selections:
 
 | Make target / selection | Additional output | Packaging tool |
 | --- | --- | --- |
 | `make app` / `Folder` | None | None |
 | `make ffpkg` / `Ffpkg` | `dist/<TITLE_ID>.ffpkg` | UFS2Tool |
-| `make ffpfsc` / `Ffpfsc` | `dist/<TITLE_ID>.ffpfsc` | MkPFS |
-| `make packages` / `All` | Both images | Both tools |
 
 ```bash
 make app
 make ffpkg
-make ffpfsc
-make packages
 ```
 
 `-Ffpkg` remains accepted as a compatibility alias for
 `-OutputFormat Ffpkg` in the Windows PowerShell frontend.
-
-## Compressed FFPFSC
-
-MkPFS creates the console-compatible, exFAT-wrapped compressed form directly
-from the validated app folder:
-
-```text
-python -m mkpfs pack folder --no-adjust-output-file-extension \
-  --version PS5 --verify \
-  <app-directory> <title.ffpfsc>
-```
-
-On first use, `tools/setup-packaging-dependencies.sh` or the equivalent
-PowerShell bootstrapper fetches the pinned
-[PSBrew/MkPFS](https://github.com/PSBrew/MkPFS) revision into the ignored
-`.deps/MkPFS` cache and installs its dependencies under that ignored checkout;
-Linux/WSL uses `.venv-linux` and PowerShell uses `.venv`. The repository does
-not distribute MkPFS source or binaries. Python 3.9 or newer with `venv`
-support is required.
-
-The build uses MkPFS's default wrapped-folder mode because upstream documents
-it as the maximum-compatibility `.ffpfsc` layout. It does not use the advanced
-direct raw-PFS mode.
 
 ## UFS2 FFPKG
 
@@ -60,7 +32,7 @@ ufs2tool makefs -S 4096 -b 20% -t ffs \
 ```
 
 On first use, `tools/setup-packaging-dependencies.sh` or the equivalent
-PowerShell bootstrapper fetches
+PowerShell bootstrapper (`tools/setup-ffpkg-tooling.ps1`) fetches
 [SvenGDK/UFS2Tool](https://github.com/SvenGDK/UFS2Tool) at commit
 `b5307a60d5b4e3a68ba680e0e33cfadf05017c77`, builds its CLI with the .NET SDK
 8 or newer, and caches it under ignored `.deps/UFS2Tool/`. The repository does
@@ -73,6 +45,12 @@ launched successfully on PS5 system software 6.02 and 12.70.
 Despite the similar names, `.ffpkg` here is a mountable filesystem image. This
 project does not create a signed retail PKG/FPKG container.
 
-Package files from older builds are not automatically deleted when a different
-format is selected. Rebuild the exact format immediately before deployment so
-an old image is not mistaken for the current app.
+An image from an older build is not deleted when the folder is built again.
+Rebuild the image immediately before deploying it so an old one is not
+mistaken for the current app.
+
+The compressed `.ffpfsc` image of earlier versions is no longer built, and
+`make ffpfsc` and `make packages` are gone with it. If an old
+`<TITLE_ID>.ffpfsc` is still in `/data/homebrew`, delete it before installing
+the folder: a folder and an image with the same title ID must not both be in
+the loader's scan paths.

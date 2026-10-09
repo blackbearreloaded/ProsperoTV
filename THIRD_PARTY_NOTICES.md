@@ -16,8 +16,7 @@ ProsperoTV builds on and acknowledges:
 
 - [PS5 Native App Boilerplate](https://github.com/blackbearreloaded/ps5-native-app-boilerplate),
   [PS5 Payload SDK](https://github.com/ps5-payload-dev/sdk),
-  [PacBrew](https://github.com/ps5-payload-dev/pacbrew-repo),
-  [MkPFS](https://github.com/PSBrew/MkPFS), and
+  [PacBrew](https://github.com/ps5-payload-dev/pacbrew-repo), and
   [UFS2Tool](https://github.com/SvenGDK/UFS2Tool).
 - [iptv-org/iptv](https://github.com/iptv-org/iptv) for the public channel
   catalog and metadata.
@@ -138,15 +137,6 @@ When `.ffpkg` output is requested, the platform bootstrapper fetches
 `b5307a60d5b4e3a68ba680e0e33cfadf05017c77` into the ignored
 `.deps/UFS2Tool` cache and builds it with the host .NET SDK. UFS2Tool is
 BSD-2-Clause software and is not distributed by this repository.
-
-## Optional MkPFS dependency
-
-When `.ffpfsc` output is requested, the platform bootstrapper fetches
-[PSBrew/MkPFS](https://github.com/PSBrew/MkPFS) at commit
-`6cb8313dfe0c988ac52617794553f343243d3a56` into the ignored `.deps/MkPFS`
-cache and installs its Python dependencies into an ignored virtual environment
-there. MkPFS and its dependencies retain their own licenses and are not
-distributed by this repository.
 
 ## Independently authored runtime shim
 

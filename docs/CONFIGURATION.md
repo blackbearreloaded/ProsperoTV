@@ -50,7 +50,9 @@ The release workflow rejects a tag that differs from
 `masterVersion` at `01.00` and increment `contentVersion` for each release.
 Change `masterVersion` only when intentionally changing the compatible release
 baseline. Each tagged GitHub Release contains the complete title folder as a
-`.zip` and its `SHA256SUMS`.
+`.zip` and its `SHA256SUMS`, both published by the workflow run of that tag
+and never attached by hand; a release that already has a ZIP is left as it is
+(see the [README](../README.md#versioning-and-releases)).
 
 The loader-visible SDK and FSELF constants are internal build-format values,
 not application versions. They remain fixed to the cross-firmware-validated
@@ -115,7 +117,7 @@ Deployment uses a separate set of Make variables:
 | --- | --- | --- |
 | `PS5_HOST` | required | Console IPv4 address or hostname. |
 | `FTP_PORT` | `2121` | FTP service port. |
-| `DEPLOY_FORMAT` | `folder` | `folder`, `ffpfsc`, or `ffpkg` output. |
+| `DEPLOY_FORMAT` | `folder` | `folder` or `ffpkg` output. |
 | `PS5_FTP_USER` | `anonymous` | FTP username. |
 | `PS5_FTP_PASSWORD` | `codex` | FTP password. |
 | `DEPLOY_DRY_RUN` | `0` | Build without networking when set to `1`. |

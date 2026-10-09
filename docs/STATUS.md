@@ -25,7 +25,7 @@ remaining UI/cache behavior and long-duration soak remain.
 | VP9 Profile 0 | Bounded incremental WebM demux; native 1080p, 1440p, and 2160p capacity classes; superframe splitting; hidden/display frame ordering; one-frame caller-owned pipeline |
 | Presentation | SDR NV12 AGC presenter with 1080p and 4K VideoOut classes; bilinear 1440p-to-4K scaling |
 | Diagnostics | Persistent playback receipt and native decode/present telemetry |
-| Build output | Native title folder plus optional `.ffpkg` and `.ffpfsc` packaging paths |
+| Build output | Native title folder, released as a ZIP; a `.ffpkg` image as a local option |
 
 ## Incomplete or not yet proven
 

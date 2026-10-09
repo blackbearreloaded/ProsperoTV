@@ -381,6 +381,14 @@ The workflow rejects a mismatched tag, builds the app, and publishes the
 release with the notes in `docs/releases/01.000.030.md`. See
 [Configuration](docs/CONFIGURATION.md) for the coordinated metadata fields.
 
+A release is made by pushing the version tag and in no other way: the
+workflow builds, attests, and publishes `PPSA99003.zip` and `SHA256SUMS`, and
+files are not attached by hand. If the tag has no release yet, the workflow
+creates it; if a release exists without a ZIP (notes written in advance, or a
+draft), it adds the two files and leaves the title and notes alone; if a
+release already has a ZIP, nothing is replaced and the run ends with a
+warning.
+
 ## Stream compatibility and limitations
 
 - Public IPTV URLs can disappear, move, become GeoIP-restricted, require

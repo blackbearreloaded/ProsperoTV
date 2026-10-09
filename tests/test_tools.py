@@ -338,6 +338,7 @@ int main() {
         )
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn(f"/data/homebrew/{TITLE_ID}/", result.stdout)
+        # A compressed image left by an older version is still cleaned up.
         self.assertIn(f"{TITLE_ID}.{{ffpkg,ffpfsc}}", result.stdout)
         self.assertIn("no network request was sent", result.stdout)
 
@@ -423,9 +424,24 @@ int main() {
         needed = ("contents: read", "id-token: write", "attestations: write")
         for permission in needed:
             self.assertIn(f"      {permission}\n", workflow)
-        # The image stays a local option.
-        makefile = (ROOT / "Makefile").read_text(encoding="utf-8")
-        self.assertIn("bash tools/build.sh Ffpfsc", makefile)
+        # The compressed image is gone: no target, no script branch, no tooling.
+        for name in ("Makefile", "tools/build.sh", "build.ps1",
+                     "tools/setup-packaging-dependencies.sh"):
+            text = (ROOT / name).read_text(encoding="utf-8").lower()
+            self.assertNotIn("ffpfsc", text, name)
+            self.assertNotIn("mkpfs", text, name)
+        self.assertFalse((ROOT / "tools/setup-mkpfs-tooling.ps1").exists())
+
+    def test_release_job_never_replaces_published_files(self):
+        workflow = (ROOT / ".github/workflows/tooling.yml").read_text(encoding="utf-8")
+        self.assertNotIn("--clobber", workflow)
+        self.assertNotIn("delete-asset", workflow)
+        self.assertNotIn("gh release edit", workflow)
+        # One upload, to a release that has no ZIP yet; one warning otherwise.
+        self.assertEqual(workflow.count("gh release upload"), 1)
+        self.assertIn("--json assets --jq '.assets[].name'", workflow)
+        self.assertIn("::warning title=Release files not from this run::", workflow)
+        self.assertIn("--verify-tag", workflow)
 
     def test_pull_request_builds_are_named_and_labelled(self):
         workflow = (ROOT / ".github/workflows/tooling.yml").read_text(encoding="utf-8")

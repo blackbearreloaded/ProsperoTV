@@ -6,7 +6,7 @@
 # app from opengl-ui/ (job "app"). A version tag, which must equal param.json's
 # contentVersion, also publishes: job "release" attaches the ZIP job "app"
 # built, with its checksum, to a GitHub Release. Nothing built anywhere else is
-# ever attached.
+# ever attached, and a release that already has a ZIP is never changed.
 # Copyright (C) 2026 BlackBearReloaded
 # SPDX-License-Identifier: GPL-3.0-or-later
 
@@ -301,10 +301,23 @@ jobs:
           TITLE_ID: ${{ needs.app.outputs.title_id }}
         run: |
           set -euo pipefail
+          TAG=$GITHUB_REF_NAME
           assets=("release/$TITLE_ID.zip" "release/SHA256SUMS")
           notes="docs/releases/$GITHUB_REF_NAME.md"
-          if gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            gh release upload "$GITHUB_REF_NAME" "${assets[@]}" --clobber --repo "$GITHUB_REPOSITORY"
+          # The files of a release come from the run of its tag, once. A release without a
+          # ZIP (notes written in advance, or a draft) gets them and keeps its title and
+          # notes; one that already has a ZIP is never touched, because the catalog records
+          # that ZIP's checksum.
+          if names=$(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name' 2>/dev/null); then
+            has_zip=0
+            while IFS= read -r name; do
+              if [[ $name == *.zip ]]; then has_zip=1; fi
+            done <<< "$names"
+            if (( has_zip )); then
+              echo "::warning title=Release files not from this run::A release for $TAG already has a ZIP; it was not replaced. Its files were not published by this run and may have no attestation."
+            else
+              gh release upload "$TAG" "${assets[@]}" --repo "$GITHUB_REPOSITORY"
+            fi
           elif [[ -f $notes ]]; then
             gh release create "$GITHUB_REF_NAME" "${assets[@]}" \
               --repo "$GITHUB_REPOSITORY" --verify-tag --latest \

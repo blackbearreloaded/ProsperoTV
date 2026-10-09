@@ -23,7 +23,7 @@ Status: active
 - Scope and functionality: iptv-org and custom M3U catalogs, SQLite caching,
   browsing/search/favorites/history, HLS and direct MPEG-TS playback, AAC audio,
   native H.264/HEVC playback, and direct WebM VP9 Profile 0 playback.
-- Deliverables: source, tests, signed title folder, optional FFPFSC image,
+- Deliverables: source, tests, signed title folder (released as a ZIP),
   deployment tooling, hardware evidence, and an accurate status record.
 - Non-goals: DRM, encrypted streams, provider credentials, console settings
   changes, proprietary assets in Git, or unsupported firmware claims.

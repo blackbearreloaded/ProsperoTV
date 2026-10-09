@@ -9,7 +9,7 @@
 
 #requires -Version 5.1
 param(
-    [ValidateSet("Folder", "Ffpkg", "Ffpfsc", "All")]
+    [ValidateSet("Folder", "Ffpkg")]
     [string]$OutputFormat = "Folder",
     [switch]$Ffpkg
 )
@@ -29,9 +29,6 @@ function Convert-ToWslPath([string]$Path) {
 }
 
 if ($Ffpkg) {
-    if ($OutputFormat -notin @("Folder", "Ffpkg")) {
-        Fail "-Ffpkg cannot be combined with -OutputFormat $OutputFormat."
-    }
     $OutputFormat = "Ffpkg"
 }
 if (-not (Get-Command wsl.exe -ErrorAction SilentlyContinue)) {
