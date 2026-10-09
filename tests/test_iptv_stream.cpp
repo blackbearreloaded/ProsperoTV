@@ -1004,16 +1004,23 @@ TEST_F(AudioSelectionTest, ForwardScanRetainsSkippedConfigurationWithoutPlayingS
     ASSERT_EQ(iptv_stream_push(&session, first.data(), first.size()), IPTV_STREAM_OK);
     ASSERT_EQ(fake.videos, 1u);
     std::vector<std::uint8_t> skipped;
-    AppendPacket(&skipped, ConfigurationPacket(1, 2, 20));
+    auto changed = ConfigurationPacket(1, 2, 20);
+    // Leave the final picture pending until the scan reaches its target boundary.
+    const auto length = (unsigned(changed[8]) * 256 + changed[9]) - 12;
+    changed[8] = length >> 8;
+    changed[9] = length & 255;
+    std::fill(changed.begin() + 10 + length, changed.end(), 0xff);
+    AppendPacket(&skipped, changed);
     AppendPacket(&skipped, StampedPacket(UnsupportedAacPacket(), 20 * 90000));
     for (std::size_t at = 0; at < skipped.size();)
     {
         const auto bytes = std::min<std::size_t>(7, skipped.size() - at);
-        ASSERT_EQ(
-            iptv_stream_scan(&session, skipped.data() + at, bytes, at + bytes == skipped.size()),
-            IPTV_STREAM_OK);
+        ASSERT_EQ(iptv_stream_scan(&session, skipped.data() + at, bytes, 0), IPTV_STREAM_OK);
         at += bytes;
     }
+    EXPECT_EQ(session.telemetry.last_video_pts_us, 1000000u);
+    ASSERT_EQ(iptv_stream_scan(&session, nullptr, 0, 1), IPTV_STREAM_OK);
+    EXPECT_EQ(session.telemetry.last_video_pts_us, 20000000u);
     EXPECT_EQ(fake.videos, 1u);
     EXPECT_EQ(fake.audios, 0u);
     EXPECT_EQ(fake.opens, 1u);

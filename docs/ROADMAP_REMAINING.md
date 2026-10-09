@@ -123,19 +123,28 @@ The configuration tests replay both directions across real H.264 and HEVC setup
 changes, strip in-band headers, and compare pixels decoded by fresh decoders.
 They also cover bounded retention, rejected expired seeks, untimed changes and
 provider resets. This applies to compatible decoder formats: resolution/profile
-changes still follow the existing reopen path. Jumping ahead into buffered bytes
-that have never been demuxed still needs a configuration scan before reposition.
+changes still follow the existing reopen path.
 All 103 core and 21 media/subtitle sanitizer tests and the application-only PS5
 build pass at 289d250. No native configuration-replay acceptance is claimed.
 
-This remains incomplete: forward seeks into undecoded configuration changes,
-provider timeline/subtitle ordering, direct WebM live
+Forward seeks now scan skipped retained bytes in bounded chunks before resetting
+the decoder. Scanning retains configuration changes without submitting video or
+audio, flushes the last pending picture at the target boundary, and yields to
+new controls between chunks. Copies carry their timeline generation so a
+concurrent provider reset cannot feed bytes from a different timeline. The
+watchdog excludes this intentional scan. All 105 core and 21 media/subtitle
+sanitizer tests and the application-only PS5 build pass at 1c8e33e; the core
+regression also checks a configuration change held in the final pending picture.
+
+This remains incomplete: provider timeline/subtitle ordering, direct WebM live
 playback and native pause/rewind/expiry, synchronization
 and resource acceptance still need work. The earlier 146-test UI sanitizer suite,
 13 phone remote integration tests, native queue-state host check and PS5
 application build pass. The foreground changes
-have a frozen earlier test package (446ca92, PPSA88273), but case31 did not run
-because .30 was running PPSA99008. The configuration changes are not installed,
+have a frozen earlier test package (446ca92, PPSA88273). Case31 launched on .30
+and rendered the pairing screen, but its code expired before the playback
+controls connected, leaving native timeshift acceptance inconclusive.
+The configuration changes are not installed,
 and no timeshift PR is open.
 
 - 2026-10-08 | rewind | 4c63161 | host/PS5 build | partial-pass: mapped history and clock replay | ../psiptv/results/roadmap/timeshift-clock-native-result.json | integrate foreground controls
@@ -144,6 +153,7 @@ and no timeshift PR is open.
 - 2026-10-08 | rewind | 04eb912 | host/PS5 build | partial-pass: subtitle replay | ../psiptv/results/roadmap/timeshift-subtitles-result.json | timeline ordering, native acceptance
 - 2026-10-08 | rewind | b2bf8dd | host/PS5 build | partial-pass: seek/control ordering | ../psiptv/results/roadmap/timeshift-seek-controls-result.json | bounded native TS case
 - 2026-10-08 | rewind | 289d250 | host/PS5 build | partial-pass: historical decoder setup | ../psiptv/results/roadmap/timeshift-config-result.json | forward scan and native acceptance
+- 2026-10-08 | rewind | 1c8e33e | host/PS5 build | partial-pass: forward configuration scan | ../psiptv/results/roadmap/timeshift-scan-result.json | native acceptance and remaining formats
 
 ## Source additions
 
