@@ -4,6 +4,7 @@
 
 #ifndef IPTV_PLAYER_H
 #define IPTV_PLAYER_H
+#include "iptv_stream.h"
 #include <stdint.h>
 
 #ifdef __cplusplus
@@ -32,6 +33,18 @@ extern "C"
      * to consume it, or 2 to stop for a channel switch. */
     typedef int (*iptv_player_controls_t)(void *context, int action);
     void iptv_player_set_controls(iptv_player_controls_t controls, void *context);
+    typedef struct iptv_player_audio_state
+    {
+        iptv_stream_audio_track_t tracks[IPTV_STREAM_MAX_AUDIO_TRACKS];
+        char titles[IPTV_STREAM_MAX_AUDIO_TRACKS][128];
+        char languages[IPTV_STREAM_MAX_AUDIO_TRACKS][32];
+        uint32_t count, selected_pid, disabled, pending;
+        int32_t result;
+    } iptv_player_audio_state_t;
+    /* Thread-safe snapshots and requests. The demux worker applies changes
+     * between chunks. Selection never accesses its session concurrently. */
+    void iptv_player_audio_state(iptv_player_audio_state_t *state);
+    int iptv_player_select_audio(uint32_t pid);
     /* Runs the same foreground path with a bounded automatic stop. A zero timeout
  * disables the
      * deadline. This is used by controlled hardware acceptance. */
@@ -39,6 +52,12 @@ extern "C"
                                    unsigned stop_after_ms);
 
 #ifdef __cplusplus
+}
+#include "iptv_subtitles.h"
+namespace iptv
+{
+// The foreground session owns this synchronized decoder and cue queue.
+Subtitles &player_subtitles();
 }
 #endif
 

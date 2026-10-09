@@ -246,6 +246,91 @@ static attr_result_t find_attribute(slice_t list, const char *wanted, slice_t *f
     return matched ? ATTR_FOUND : ATTR_NOT_FOUND;
 }
 
+static bool text_attribute(slice_t list, const char *key, char *out, size_t capacity,
+                           bool required = false)
+{
+    slice_t value{};
+    const auto found = find_attribute(list, key, &value);
+    if (found == ATTR_NOT_FOUND)
+        return !required;
+    if (found != ATTR_FOUND || !value.size || value.size >= capacity)
+        return false;
+    std::memcpy(out, value.data, value.size);
+    out[value.size] = '\0';
+    return true;
+}
+
+static bool yes_attribute(slice_t list, const char *key, uint32_t *out)
+{
+    slice_t value{};
+    const auto found = find_attribute(list, key, &value);
+    if (found == ATTR_NOT_FOUND)
+        return true;
+    if (found != ATTR_FOUND || (!equal(value, "YES") && !equal(value, "NO")))
+        return false;
+    *out = equal(value, "YES") ? 1u : 0u;
+    return true;
+}
+
+static iptv_hls_result_t parse_rendition(slice_t attributes, const char *base, size_t base_bytes,
+                                         iptv_hls_rendition_t *out)
+{
+    *out = {};
+    slice_t type{};
+    if (find_attribute(attributes, "TYPE", &type) != ATTR_FOUND)
+        return IPTV_HLS_MALFORMED;
+    if (equal(type, "AUDIO"))
+        out->kind = IPTV_HLS_RENDITION_AUDIO;
+    else if (equal(type, "SUBTITLES"))
+        out->kind = IPTV_HLS_RENDITION_SUBTITLE;
+    else if (equal(type, "VIDEO") || equal(type, "CLOSED-CAPTIONS"))
+        return IPTV_HLS_OK;
+    else
+        return IPTV_HLS_MALFORMED;
+    if (!text_attribute(attributes, "GROUP-ID", out->group, sizeof(out->group), true) ||
+        !text_attribute(attributes, "NAME", out->name, sizeof(out->name), true) ||
+        !text_attribute(attributes, "LANGUAGE", out->language, sizeof(out->language)) ||
+        !yes_attribute(attributes, "DEFAULT", &out->is_default) ||
+        !yes_attribute(attributes, "AUTOSELECT", &out->autoselect) ||
+        !yes_attribute(attributes, "FORCED", &out->forced))
+        return IPTV_HLS_MALFORMED;
+    slice_t autoselect{}, forced{};
+    if ((out->is_default && !out->autoselect &&
+         find_attribute(attributes, "AUTOSELECT", &autoselect) == ATTR_FOUND) ||
+        (out->kind != IPTV_HLS_RENDITION_SUBTITLE &&
+         find_attribute(attributes, "FORCED", &forced) == ATTR_FOUND))
+        return IPTV_HLS_MALFORMED;
+    slice_t uri{};
+    const auto found_uri = find_attribute(attributes, "URI", &uri);
+    if (found_uri == ATTR_INVALID ||
+        (out->kind == IPTV_HLS_RENDITION_SUBTITLE && found_uri != ATTR_FOUND))
+        return IPTV_HLS_MALFORMED;
+    if (found_uri == ATTR_FOUND)
+    {
+        const auto result =
+            iptv_hls_resolve_url(base, base_bytes, uri.data, uri.size, out->url, sizeof(out->url));
+        if (result != IPTV_HLS_OK)
+            return result;
+    }
+    slice_t characteristics{};
+    const auto found = find_attribute(attributes, "CHARACTERISTICS", &characteristics);
+    if (found == ATTR_INVALID)
+        return IPTV_HLS_MALFORMED;
+    for (size_t at = 0; at < characteristics.size;)
+    {
+        size_t end = at;
+        while (end < characteristics.size && characteristics.data[end] != ',')
+            ++end;
+        const auto value = trim({characteristics.data + at, end - at});
+        if (equal(value, "public.accessibility.describes-music-and-sound"))
+            out->hearing_impaired = 1;
+        if (equal(value, "public.accessibility.describes-video"))
+            out->visual_impaired = 1;
+        at = end + 1;
+    }
+    return IPTV_HLS_OK;
+}
+
 static bool valid_url_bytes(slice_t value)
 {
     if (!value.size)
@@ -604,6 +689,11 @@ static iptv_hls_result_t parse_variant(slice_t attributes, const iptv_hls_limits
     std::memset(variant, 0, sizeof(*variant));
     variant->codec = IPTV_HLS_CODEC_UNKNOWN;
     variant->compatible = 1u;
+
+    if (!text_attribute(attributes, "AUDIO", variant->audio_group, sizeof(variant->audio_group)) ||
+        !text_attribute(attributes, "SUBTITLES", variant->subtitle_group,
+                        sizeof(variant->subtitle_group)))
+        return IPTV_HLS_MALFORMED;
 
     slice_t value{};
     const attr_result_t bandwidth = find_attribute(attributes, "BANDWIDTH", &value);
@@ -1006,7 +1096,31 @@ extern "C" iptv_hls_result_t iptv_hls_parse(const char *data, size_t data_bytes,
             return fail(playlist, IPTV_HLS_MALFORMED, line_number);
 
         slice_t value{};
-        if (tag_value(line, "#EXT-X-STREAM-INF:", &value))
+        if (tag_value(line, "#EXT-X-MEDIA:", &value))
+        {
+            if (media_seen)
+                return fail(playlist, IPTV_HLS_MALFORMED, line_number);
+            master_seen = true;
+            iptv_hls_rendition_t rendition{};
+            const auto result =
+                parse_rendition(value, playlist_url, playlist_url_bytes, &rendition);
+            if (result != IPTV_HLS_OK)
+                return fail(playlist, result, line_number);
+            if (!rendition.kind)
+                continue;
+            for (uint32_t i = 0; i < playlist->rendition_count; ++i)
+            {
+                const auto &prior = playlist->renditions[i];
+                if (prior.kind == rendition.kind && !std::strcmp(prior.group, rendition.group) &&
+                    (!std::strcmp(prior.name, rendition.name) ||
+                     (prior.is_default && rendition.is_default)))
+                    return fail(playlist, IPTV_HLS_MALFORMED, line_number);
+            }
+            if (playlist->rendition_count == IPTV_HLS_MAX_RENDITIONS)
+                return fail(playlist, IPTV_HLS_OUTPUT_LIMIT, line_number);
+            playlist->renditions[playlist->rendition_count++] = rendition;
+        }
+        else if (tag_value(line, "#EXT-X-STREAM-INF:", &value))
         {
             if (media_seen)
                 return fail(playlist, IPTV_HLS_MALFORMED, line_number);
@@ -1074,6 +1188,21 @@ extern "C" iptv_hls_result_t iptv_hls_parse(const char *data, size_t data_bytes,
         playlist->kind = IPTV_HLS_KIND_MASTER;
         if (!playlist->variant_count)
             return fail(playlist, IPTV_HLS_MALFORMED, line_number);
+        for (uint32_t i = 0; i < playlist->variant_count; ++i)
+        {
+            const auto &variant = playlist->variants[i];
+            bool audio = !variant.audio_group[0], subtitles = !variant.subtitle_group[0];
+            for (uint32_t j = 0; j < playlist->rendition_count; ++j)
+            {
+                const auto &rendition = playlist->renditions[j];
+                audio |= rendition.kind == IPTV_HLS_RENDITION_AUDIO &&
+                         !std::strcmp(variant.audio_group, rendition.group);
+                subtitles |= rendition.kind == IPTV_HLS_RENDITION_SUBTITLE &&
+                             !std::strcmp(variant.subtitle_group, rendition.group);
+            }
+            if (!audio || !subtitles)
+                return fail(playlist, IPTV_HLS_MALFORMED, line_number);
+        }
         return fail(playlist, select_variant(limits, playlist), 0u);
     }
     if (media_seen)
@@ -1121,4 +1250,75 @@ extern "C" const char *iptv_hls_result_name(iptv_hls_result_t result)
     default:
         return "unknown HLS result";
     }
+}
+
+bool iptv::HlsVariantManifest(const iptv_hls_playlist_t &master, uint32_t index, std::string &text)
+{
+    text.clear();
+    if (master.kind != IPTV_HLS_KIND_MASTER || master.variant_count > IPTV_HLS_MAX_VARIANTS ||
+        index >= master.variant_count || master.rendition_count > IPTV_HLS_MAX_RENDITIONS)
+        return false;
+    const auto clean = [](const auto &value)
+    {
+        for (size_t i = 0; i < sizeof(value); ++i)
+        {
+            const auto c = static_cast<unsigned char>(value[i]);
+            if (!c)
+                return true;
+            if (c < 32 || c == 127 || c == '"')
+                return false;
+        }
+        return false;
+    };
+    const auto &variant = master.variants[index];
+    if (!clean(variant.url) || !clean(variant.audio_group) || !clean(variant.subtitle_group))
+        return false;
+    std::string result = "#EXTM3U\n#EXT-X-VERSION:7\n";
+    bool external = false;
+    for (uint32_t i = 0; i < master.rendition_count; ++i)
+    {
+        const auto &r = master.renditions[i];
+        if (!clean(r.group))
+            return false;
+        const bool audio = r.kind == IPTV_HLS_RENDITION_AUDIO;
+        if ((audio && (!variant.audio_group[0] || std::strcmp(r.group, variant.audio_group))) ||
+            (!audio && (r.kind != IPTV_HLS_RENDITION_SUBTITLE || !variant.subtitle_group[0] ||
+                        std::strcmp(r.group, variant.subtitle_group))))
+            continue;
+        if (!clean(r.name) || !clean(r.language) || !clean(r.url))
+            return false;
+        external |= r.url[0] != 0;
+        result += std::string("#EXT-X-MEDIA:TYPE=") + (audio ? "AUDIO" : "SUBTITLES") +
+                  ",GROUP-ID=\"" + r.group + "\",NAME=\"" + r.name + "\"";
+        if (r.language[0])
+            result += std::string(",LANGUAGE=\"") + r.language + "\"";
+        result += r.is_default ? ",DEFAULT=YES" : ",DEFAULT=NO";
+        result += r.autoselect ? ",AUTOSELECT=YES" : ",AUTOSELECT=NO";
+        if (!audio)
+            result += r.forced ? ",FORCED=YES" : ",FORCED=NO";
+        if (r.hearing_impaired || r.visual_impaired)
+        {
+            result += ",CHARACTERISTICS=\"";
+            if (r.hearing_impaired)
+                result += "public.accessibility.describes-music-and-sound";
+            if (r.hearing_impaired && r.visual_impaired)
+                result += ',';
+            if (r.visual_impaired)
+                result += "public.accessibility.describes-video";
+            result += '"';
+        }
+        if (r.url[0])
+            result += std::string(",URI=\"") + r.url + "\"";
+        result += '\n';
+    }
+    if (!external)
+        return true;
+    result += "#EXT-X-STREAM-INF:BANDWIDTH=" + std::to_string(variant.bandwidth);
+    if (variant.audio_group[0])
+        result += std::string(",AUDIO=\"") + variant.audio_group + "\"";
+    if (variant.subtitle_group[0])
+        result += std::string(",SUBTITLES=\"") + variant.subtitle_group + "\"";
+    result += std::string("\n") + variant.url + "\n";
+    text = std::move(result);
+    return true;
 }

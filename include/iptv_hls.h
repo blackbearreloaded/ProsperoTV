@@ -12,9 +12,11 @@
 extern "C" {
 #endif
 
-#define IPTV_HLS_API_VERSION UINT32_C(2)
+#define IPTV_HLS_API_VERSION UINT32_C(3)
 #define IPTV_HLS_URL_BYTES 2048u
 #define IPTV_HLS_MAX_VARIANTS 24u
+#define IPTV_HLS_MAX_RENDITIONS 32u
+#define IPTV_HLS_LABEL_BYTES 128u
 #define IPTV_HLS_MAX_SEGMENTS 128u
 #define IPTV_HLS_DEFAULT_MAX_INPUT_BYTES (256u * 1024u)
 #define IPTV_HLS_DEFAULT_MAX_LINE_BYTES 2048u
@@ -73,6 +75,8 @@ typedef struct iptv_hls_limits {
 
 typedef struct iptv_hls_variant {
     char url[IPTV_HLS_URL_BYTES];
+    char audio_group[IPTV_HLS_LABEL_BYTES];
+    char subtitle_group[IPTV_HLS_LABEL_BYTES];
     uint64_t bandwidth;
     uint64_t average_bandwidth;
     uint32_t width;
@@ -86,6 +90,25 @@ typedef struct iptv_hls_variant {
     uint32_t compatible;
     uint32_t within_limits;
 } iptv_hls_variant_t;
+
+typedef enum iptv_hls_rendition_kind {
+    IPTV_HLS_RENDITION_NONE = 0,
+    IPTV_HLS_RENDITION_AUDIO = 1,
+    IPTV_HLS_RENDITION_SUBTITLE = 2
+} iptv_hls_rendition_kind_t;
+
+typedef struct iptv_hls_rendition {
+    iptv_hls_rendition_kind_t kind;
+    char group[IPTV_HLS_LABEL_BYTES];
+    char name[IPTV_HLS_LABEL_BYTES];
+    char language[32]; /* BCP 47, not necessarily a three-letter ISO code. */
+    char url[IPTV_HLS_URL_BYTES]; /* Empty audio URI means carried with video. */
+    uint32_t is_default;
+    uint32_t autoselect;
+    uint32_t forced;
+    uint32_t hearing_impaired;
+    uint32_t visual_impaired;
+} iptv_hls_rendition_t;
 
 typedef struct iptv_hls_segment {
     char url[IPTV_HLS_URL_BYTES];
@@ -102,6 +125,8 @@ typedef struct iptv_hls_playlist {
     uint32_t variant_count;
     uint32_t selected_variant;
     iptv_hls_variant_t variants[IPTV_HLS_MAX_VARIANTS];
+    uint32_t rendition_count;
+    iptv_hls_rendition_t renditions[IPTV_HLS_MAX_RENDITIONS];
 
     uint32_t is_live;
     uint32_t target_duration_ms;
@@ -134,6 +159,13 @@ uint32_t iptv_hls_select_variant(
 const char *iptv_hls_result_name(iptv_hls_result_t result);
 
 #ifdef __cplusplus
+}
+#include <string>
+namespace iptv
+{
+// One already-selected variant and its matching rendition groups, with resolved
+// URLs. Empty output means no external renditions and keeps the ordinary TS path.
+bool HlsVariantManifest(const iptv_hls_playlist_t &master, uint32_t index, std::string &text);
 }
 #endif
 

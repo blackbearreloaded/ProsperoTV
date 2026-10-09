@@ -18,7 +18,7 @@ and relevant checks work.
 | Zapping | Next, previous and previously watched channel during playback | Implemented; 140 UI sanitizer tests and PS5 build pass; console case pending |
 | Playback channel list | Select a channel from a list over the playing video | Implemented; host input/render checks and PS5 build pass; console case pending |
 | Channel banner | Brief channel/guide banner on tune and on request | Implemented; mapped guide, timing and rendered image checks pass; console case pending |
-| Audio/subtitles | Select available language tracks and render subtitles | Pending |
+| Audio/subtitles | Select available language tracks and render subtitles | Embedded/HLS audio and container/DVB/WebVTT subtitles implemented with host checks; live-provider and native acceptance pending |
 | Sleep timer | Stop playback at a selected deadline | Implemented; 134 UI sanitizer tests and PS5 build pass; console case pending |
 | Live pause/rewind | Pause and replay several minutes of the current live channel | Pending |
 | Deinterlacing | Preserve field-rate motion on interlaced broadcast video | Pending |
@@ -239,3 +239,123 @@ only the `hide_failed` settings label; the case validator checks all six receipt
 and teardown. The phone's Favorite command has a different meaning from the
 controller's Square button, so physical last-channel recall, visual overlay
 capture and compositor-cost measurements remain unverified.
+
+## Audio selection
+
+Options during playback opens Audio; L1/R1 switches to Subtitles. Up/Down selects a track, Left/Right changes
+page, Cross applies it, and Circle or Options closes the panel. The same controls
+work for live television, movies and catch-up. Off mutes the selected stream.
+The panel shows provider ISO 639 language codes, codec and accessibility labels;
+an absent language remains a numbered track. Selection lasts for this playback
+session. The channel list and live zapping are suspended while the panel is open.
+
+The transport reader retains up to 32 supported audio PIDs, preserves selection
+when a recurring PMT reorders tracks, and falls back when a provider removes the
+selected PID. Off remains Off through those updates. MP4 and Matroska remuxing
+preserves all supported audio tracks and their language metadata. The existing
+AAC, MPEG audio, AC-3 and E-AC-3 codec limits still apply. Separate HLS audio and
+WebVTT renditions use the same controls, as described below.
+
+The demux worker applies requests between chunks and publishes a synchronized
+snapshot to the controls. The native backend discards and joins the old audio
+worker, opens the selected audio decoder and keeps the video decoder and
+presentation alive. New audio waits for the displayed timestamp; a bounded
+fallback handles broken timestamps. Changing audio cannot hold video behind the
+ordinary audio buffering gate. Decoder failures are reported in the panel and a
+different track can be selected. Native switch latency and synchronization still
+require measurement on hardware.
+
+Validation: 79 core tests, 42 tooling/remote checks, four MP4/Matroska tests and
+142 UI tests pass. The parser tests cover PMT reordering/removal, Off, retries,
+bounded track copies, malformed descriptors, continuity counters and transport
+clock wrap. Real generated two-language MP4 and Matroska fixtures switch audio
+while retaining one video backend. The PS5 cross-build and native buffering
+state check pass. The rendered panel was inspected at
+`results/roadmap/playback-audio.png`. No console installation is claimed for
+these changes; the last recorded installed test build remains 72c5141.
+
+## Subtitles
+
+The playback track panel lists embedded subtitle languages and an Off choice,
+including forced and hearing-impaired labels supplied by the provider. MP4 and
+Matroska expose supported text, SubRip, ASS, WebVTT, mov_text, DVB, DVD and PGS
+tracks through the existing FFmpeg dependency. Text keeps punctuation, Unicode,
+line breaks and word wrapping; ASS styling and vector drawings are omitted.
+Bitmap captions retain their palette, transparency and source-canvas position.
+The presenter composites captions onto its scratch surface at the displayed
+video timestamp, including native ten-bit surfaces and text above the banner.
+
+Live MPEG-TS and TS HLS segments discover DVB subtitle languages and page IDs
+from the provider's PMT. The reader assembles complete bounded PES packets,
+preserves partial packets across repeated PMTs, ignores duplicates, and drops
+incomplete captions after packet loss. Removed languages disappear from the
+panel. Bad subtitle framing and scrambled subtitle PIDs leave clear audio and
+video running. Subtitle timestamps use the video's transport-clock epoch.
+The framing follows the existing [FFmpeg transport reader](https://github.com/FFmpeg/FFmpeg/blob/n8.0.1/libavformat/mpegts.c).
+
+Only the selected language is decoded. A bounded compressed-packet cache retains
+captions downloaded ahead of playback while subtitles are Off, allowing a
+language change to recover the caption for the current picture. Cues expire by
+video time. Packet, track, rectangle, pixel and queue limits isolate subtitle
+failures. Discontinuities discard old captions and bitmap decoder state; track
+changes and immutable presentation snapshots are synchronized across threads.
+
+Host checks cover MP4/Matroska subtitle-to-video timing in two languages, actual
+DVB palette decoding and clearing, transport fragmentation/loss/clock wrap,
+provider updates, language changes, resource limits and eight/ten-bit compositing
+without touching frame padding. The rendered menu and English/Chinese captions
+were inspected in `results/roadmap/playback-subtitle-menu.png` and
+`playback-subtitles.png`. Native timing, language-switch latency and compositor
+cost remain console acceptance work. No newer console installation is claimed.
+
+Validation: 83 core tests, 13 media/subtitle tests and 144 UI tests pass under
+ASan/UBSan, and the PS5 production cross-build passes. Separate HLS renditions
+remain the next part of this feature; these checks do not close that requirement.
+
+HLS master parsing now retains each variant's audio/subtitle group references
+and up to 32 advertised renditions, including resolved HTTP(S) URLs, BCP 47
+languages, default/forced flags and accessibility labels. It checks duplicate
+names/defaults, missing groups, required subtitle URLs and bounded labels against
+[RFC 8216](https://www.rfc-editor.org/rfc/rfc8216.html#section-4.3.4.1).
+The discovery change passed the 86-test core sanitizer suite, 42 tooling checks
+and PS5 build.
+
+The player now gives FFmpeg one selected quality and only its matching audio and
+subtitle groups. Each nested request uses the application's HTTP client,
+origin-scoped credentials, redirect handling and validated byte ranges. The
+reader bounds playlist and WebVTT resources, rejects local-file access and keeps
+provider URLs out of FFmpeg diagnostics. HLS without external renditions retains
+the existing transport-stream path and its stale-segment recovery.
+
+Separate audio is remuxed alongside the video, retaining all supported languages
+so the existing demux worker can switch at the displayed picture after network
+read-ahead. This downloads the advertised audio tracks; only the selected track
+is decoded. Provider names and BCP 47 language tags remain visible in the panel.
+Fragmented MP4 initialization segments and byte ranges are handled by the same
+reader without transcoding.
+
+WebVTT resources apply their `X-TIMESTAMP-MAP` before demux, align the wrapping
+transport clock with the video, and suppress identical cues repeated in adjacent
+segments. Subtitles are enabled before stream probing so initial dialogue is
+retained even while the panel is Off. A small, version-checked patch fixes the
+pinned FFmpeg reader's subtitle context and AVIO buffer cleanup; generated
+multi-segment fixtures cover the lifetime under LeakSanitizer.
+
+Validation: 87 core, 17 media/subtitle and 144 UI sanitizer tests, plus 42 tooling
+and remote checks. The generated HLS fixtures cover transport stream, fragmented
+MP4, byte ranges, redirected playlists, two audio/subtitle languages, mapped
+timestamps, repeated captions and resource cleanup on failure. The PS5 executable
+cross-build also passes. Live-provider discontinuities,
+native synchronization, selection latency and resource cost remain acceptance
+work. These changes have not been installed on a console.
+
+Native baseline acceptance (2026-10-08): candidate `2a46313`, disposable title
+`PPSA88266`, passed 12-second playback of synthetic TS, MP4, Matroska and
+external-rendition HLS on the verified-idle console `.30`. Each produced
+260–281 video frames and 524–563 decoded audio frames, with requested stop,
+clean native cleanup and healthy services after title exit. All 52 uploaded
+files matched the frozen package. Evidence: `results/roadmap/console-14/validation.json`.
+The generic runner flagged the settings label `hide_failed=0`; the scoped
+validator checked all four receipts and complete installed hashes independently.
+This proves baseline playback only. Track selection, subtitle visibility and
+synchronization, switching latency and resource cost remain pending.

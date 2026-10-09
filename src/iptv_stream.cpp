@@ -19,7 +19,8 @@ constexpr uint16_t kPatPid = 0;
 constexpr uint16_t kNullPid = 0x1fffu;
 constexpr size_t kPsiBytes = 1024u;
 constexpr size_t kPesHeaderBytes = 264u;
-constexpr size_t kContinuityEntries = 8u;
+constexpr size_t kContinuityEntries = 8u + IPTV_STREAM_MAX_SUBTITLE_TRACKS;
+constexpr size_t kSubtitlePesBytes = 65535u + 6u;
 constexpr size_t kPtsMarkers = 64u;
 constexpr size_t kSyncPackets = 3u;
 constexpr size_t kPacketBufferBytes = IPTV_STREAM_TS_PACKET_BYTES * 4u;
@@ -84,6 +85,15 @@ struct pes_t
     bool marker_added;
 };
 
+struct subtitle_pes_t
+{
+    uint32_t pid;
+    buffer_t packet;
+    size_t expected;
+    timestamp_t time;
+    bool active;
+};
+
 struct bit_reader_t
 {
     const uint8_t *data;
@@ -107,6 +117,12 @@ struct impl_t
     bool video_random_access;
     bool hevc_skip_rasl;
     bool audio_disabled;
+    bool audio_off;
+    iptv_stream_audio_track_t audio_tracks[IPTV_STREAM_MAX_AUDIO_TRACKS];
+    size_t audio_track_count;
+    iptv_stream_subtitle_track_t subtitle_tracks[IPTV_STREAM_MAX_SUBTITLE_TRACKS];
+    size_t subtitle_track_count;
+    subtitle_pes_t subtitles[IPTV_STREAM_MAX_SUBTITLE_TRACKS];
 
     uint8_t packet[kPacketBufferBytes];
     size_t packet_bytes;
@@ -248,7 +264,9 @@ static void marker_clear(marker_list_t *markers)
 
 static void update_buffered(iptv_stream_session_t *session, const impl_t *impl)
 {
-    const size_t total = impl->packet_bytes + impl->video_es.size + impl->audio_es.size;
+    size_t total = impl->packet_bytes + impl->video_es.size + impl->audio_es.size;
+    for (const auto &subtitle : impl->subtitles)
+        total += subtitle.packet.size;
     const uint32_t value = total > UINT32_MAX ? UINT32_MAX : static_cast<uint32_t>(total);
     session->telemetry.buffered_bytes = value;
     if (value > session->telemetry.buffered_bytes_max)
@@ -391,6 +409,17 @@ static uint64_t extend_pts(iptv_stream_session_t *session, timestamp_t *time, ui
     time->seen = true;
     const uint64_t ticks = time->epoch + raw;
     return (ticks / 90u) * 1000u + ((ticks % 90u) * 1000u) / 90u;
+}
+
+static void align_pts(timestamp_t *time, const timestamp_t &video, uint64_t raw)
+{
+    if (time->seen || !video.seen)
+        return;
+    time->epoch = video.epoch;
+    if (raw + kPtsHalf < video.last_raw)
+        time->epoch += kPtsModulus;
+    else if (raw > video.last_raw + kPtsHalf && time->epoch >= kPtsModulus)
+        time->epoch -= kPtsModulus;
 }
 
 static bool h264_extended_profile(uint32_t profile)
@@ -704,6 +733,64 @@ static int parse_pat_section(iptv_stream_session_t *session, impl_t *impl, const
     return IPTV_STREAM_OK;
 }
 
+static void reset_audio_track(impl_t *impl, uint32_t next_pid)
+{
+    impl->audio_es.size = 0;
+    impl->audio_pes = {};
+    impl->audio_time = {};
+    marker_clear(&impl->audio_markers);
+    for (auto &entry : impl->continuity)
+        if (entry.pid == impl->format.audio_pid || entry.pid == next_pid)
+            entry.seen = false;
+}
+
+static void update_subtitle_tracks(impl_t *impl, const iptv_stream_subtitle_track_t *tracks,
+                                   size_t count)
+{
+    bool changed = impl->subtitle_track_count != count;
+    for (size_t i = 0; i < count && !changed; ++i)
+    {
+        const auto &a = tracks[i], &b = impl->subtitle_tracks[i];
+        changed = a.pid != b.pid || a.composition_page != b.composition_page ||
+                  a.ancillary_page != b.ancillary_page || a.subtitling_type != b.subtitling_type ||
+                  std::memcmp(a.language, b.language, sizeof(a.language)) != 0;
+    }
+    if (!changed)
+        return;
+    std::memcpy(impl->subtitle_tracks, tracks, count * sizeof(*tracks));
+    impl->subtitle_track_count = count;
+    // Keep assembly for retained PIDs; a recurring PMT can split a subtitle PES.
+    for (auto &subtitle : impl->subtitles)
+    {
+        bool keep = false;
+        for (size_t i = 0; i < count; ++i)
+            keep |= tracks[i].pid == subtitle.pid;
+        if (subtitle.pid && !keep)
+        {
+            for (auto &entry : impl->continuity)
+                if (entry.pid == subtitle.pid)
+                    entry.seen = false;
+            buffer_release(&subtitle.packet);
+            subtitle = {};
+        }
+    }
+    for (size_t i = 0; i < count; ++i)
+    {
+        bool found = false;
+        for (const auto &subtitle : impl->subtitles)
+            found |= subtitle.pid == tracks[i].pid;
+        if (!found)
+            for (auto &subtitle : impl->subtitles)
+                if (!subtitle.pid)
+                {
+                    subtitle.pid = tracks[i].pid;
+                    break;
+                }
+    }
+    if (impl->backend.subtitle_tracks)
+        impl->backend.subtitle_tracks(impl->backend.context, impl->subtitle_tracks, count);
+}
+
 static int parse_pmt_section(iptv_stream_session_t *session, impl_t *impl, const uint8_t *section,
                              size_t bytes)
 {
@@ -720,6 +807,10 @@ static int parse_pmt_section(iptv_stream_session_t *session, impl_t *impl, const
     const size_t end = bytes - 4u;
     size_t at = 12u + program_info;
     uint32_t first_other_stream_type = 0;
+    iptv_stream_audio_track_t audio_tracks[IPTV_STREAM_MAX_AUDIO_TRACKS]{};
+    size_t audio_track_count = 0;
+    iptv_stream_subtitle_track_t subtitle_tracks[IPTV_STREAM_MAX_SUBTITLE_TRACKS]{};
+    size_t subtitle_track_count = 0;
     if (at > end)
         return fail(session, IPTV_STREAM_MALFORMED_TS, "PMT program descriptors exceed section");
     while (at + 5u <= end)
@@ -733,22 +824,78 @@ static int parse_pmt_section(iptv_stream_session_t *session, impl_t *impl, const
             return fail(session, IPTV_STREAM_MALFORMED_TS,
                         "PMT elementary descriptors exceed section");
         uint8_t audio_type = type;
-        if (type == 0x06u)
+        iptv_stream_audio_track_t track{};
+        track.pid = pid;
+        for (size_t descriptor = at; descriptor < at + info;)
         {
-            for (size_t descriptor = at; descriptor + 2u <= at + info;)
+            if (descriptor + 2u > at + info)
+                return fail(session, IPTV_STREAM_MALFORMED_TS, "incomplete PMT descriptor");
+            const uint8_t tag = section[descriptor], length = section[descriptor + 1u];
+            descriptor += 2u;
+            if (descriptor + length > at + info)
+                return fail(session, IPTV_STREAM_MALFORMED_TS, "invalid PMT descriptor");
+            if (type == 0x06u)
             {
-                const uint8_t tag = section[descriptor], length = section[descriptor + 1u];
-                descriptor += 2u;
-                if (descriptor + length > at + info)
-                    return fail(session, IPTV_STREAM_MALFORMED_TS, "invalid audio descriptor");
                 if (tag == 0x6au || (tag == 0x05u && length >= 4u &&
                                      std::memcmp(section + descriptor, "AC-3", 4) == 0))
                     audio_type = 0x81u;
                 if (tag == 0x7au || (tag == 0x05u && length >= 4u &&
                                      std::memcmp(section + descriptor, "EAC3", 4) == 0))
                     audio_type = 0x87u;
-                descriptor += length;
             }
+            if (tag == 0x0au)
+            {
+                if (!length || (length % 4u) != 0)
+                    return fail(session, IPTV_STREAM_MALFORMED_TS, "invalid language descriptor");
+                for (unsigned letter = 0; letter < 3; ++letter)
+                {
+                    const auto c = section[descriptor + letter];
+                    track.language[letter] =
+                        static_cast<char>(c >= 'A' && c <= 'Z' ? c + ('a' - 'A') : c);
+                }
+                for (unsigned letter = 0; letter < 3; ++letter)
+                    if (track.language[letter] < 'a' || track.language[letter] > 'z')
+                    {
+                        std::memset(track.language, 0, sizeof(track.language));
+                        break;
+                    }
+                track.audio_type = section[descriptor + 3u];
+            }
+            if (type == 0x06u && tag == 0x59u && length && length % 8u == 0)
+                for (size_t item = descriptor; item < descriptor + length; item += 8u)
+                {
+                    const auto subtype = section[item + 3u];
+                    if (subtype < 0x10u || subtype > 0x2fu ||
+                        subtitle_track_count == IPTV_STREAM_MAX_SUBTITLE_TRACKS)
+                        continue;
+                    iptv_stream_subtitle_track_t subtitle{};
+                    subtitle.pid = pid;
+                    subtitle.composition_page =
+                        static_cast<uint16_t>(section[item + 4u] << 8 | section[item + 5u]);
+                    subtitle.ancillary_page =
+                        static_cast<uint16_t>(section[item + 6u] << 8 | section[item + 7u]);
+                    subtitle.subtitling_type = subtype;
+                    for (unsigned letter = 0; letter < 3; ++letter)
+                    {
+                        const auto c = section[item + letter];
+                        subtitle.language[letter] =
+                            static_cast<char>(c >= 'A' && c <= 'Z' ? c + ('a' - 'A') : c);
+                    }
+                    for (unsigned letter = 0; letter < 3; ++letter)
+                        if (subtitle.language[letter] < 'a' || subtitle.language[letter] > 'z')
+                        {
+                            std::memset(subtitle.language, 0, sizeof(subtitle.language));
+                            break;
+                        }
+                    bool duplicate = false;
+                    for (size_t i = 0; i < subtitle_track_count; ++i)
+                        duplicate |=
+                            subtitle_tracks[i].pid == pid &&
+                            subtitle_tracks[i].composition_page == subtitle.composition_page;
+                    if (!duplicate)
+                        subtitle_tracks[subtitle_track_count++] = subtitle;
+                }
+            descriptor += length;
         }
         if (!next.video_pid && (type == 0x1bu || type == 0x24u))
         {
@@ -756,17 +903,34 @@ static int parse_pmt_section(iptv_stream_session_t *session, impl_t *impl, const
             next.video_stream_type = type;
             next.video_codec = type == 0x1bu ? IPTV_STREAM_VIDEO_H264 : IPTV_STREAM_VIDEO_HEVC;
         }
-        else if (!next.audio_pid && (audio_type == 0x0fu || audio_type == 0x03u ||
-                                     audio_type == 0x04u || iptv_audio_software_type(audio_type)))
+        else if (audio_type == 0x0fu || audio_type == 0x03u || audio_type == 0x04u ||
+                 iptv_audio_software_type(audio_type))
         {
-            next.audio_pid = pid;
-            next.audio_stream_type = audio_type;
+            if (!pid || pid == kNullPid)
+                return fail(session, IPTV_STREAM_MALFORMED_TS, "invalid audio PID");
+            for (size_t i = 0; i < audio_track_count; ++i)
+                if (audio_tracks[i].pid == pid)
+                    return fail(session, IPTV_STREAM_MALFORMED_TS, "duplicate audio PID");
+            if (audio_track_count < IPTV_STREAM_MAX_AUDIO_TRACKS)
+            {
+                track.stream_type = audio_type;
+                audio_tracks[audio_track_count++] = track;
+                // Retain the chosen PID even when a provider reorders its PMT.
+                if (!impl->audio_off && (!next.audio_pid || pid == impl->format.audio_pid))
+                {
+                    next.audio_pid = pid;
+                    next.audio_stream_type = audio_type;
+                }
+            }
         }
         else if (!first_other_stream_type && type != 0x1bu && type != 0x24u && type != 0x0fu &&
                  type != 0x03u && type != 0x04u)
             first_other_stream_type = type;
         at += info;
     }
+    for (size_t i = 0; i < audio_track_count; ++i)
+        if (audio_tracks[i].pid == next.video_pid)
+            return fail(session, IPTV_STREAM_MALFORMED_TS, "audio and video share a PID");
     if (at != end || !next.video_pid || next.video_pid == kNullPid ||
         (next.audio_pid != 0 && (next.video_pid == next.audio_pid || next.audio_pid == kNullPid)))
         return fail(session, IPTV_STREAM_UNSUPPORTED_FORMAT,
@@ -793,21 +957,29 @@ static int parse_pmt_section(iptv_stream_session_t *session, impl_t *impl, const
         marker_clear(&impl->audio_markers);
         impl->video_pes = {};
         impl->audio_pes = {};
-        impl->audio_disabled = false;
-        session->telemetry.audio_disabled = 0;
+        impl->audio_disabled = impl->audio_off;
+        session->telemetry.audio_disabled = impl->audio_off ? 1u : 0u;
         session->telemetry.audio_warning[0] = '\0';
     }
     else if (impl->pmt_seen && !same_audio)
     {
-        impl->audio_es.size = 0;
-        marker_clear(&impl->audio_markers);
-        impl->audio_pes = {};
+        reset_audio_track(impl, next.audio_pid);
         if (impl->backend_ever_opened)
-            disable_audio(session, impl, "audio program changed; continuing with silent video");
+        {
+            if (impl->backend.select_audio &&
+                impl->backend.select_audio(impl->backend.context, next.audio_stream_type) == 0)
+            {
+                impl->audio_disabled = impl->audio_off;
+                session->telemetry.audio_disabled = impl->audio_off ? 1u : 0u;
+                session->telemetry.audio_warning[0] = '\0';
+            }
+            else
+                disable_audio(session, impl, "audio program changed; continuing with silent video");
+        }
         else
         {
-            impl->audio_disabled = false;
-            session->telemetry.audio_disabled = 0;
+            impl->audio_disabled = impl->audio_off;
+            session->telemetry.audio_disabled = impl->audio_off ? 1u : 0u;
             session->telemetry.audio_warning[0] = '\0';
         }
     }
@@ -828,6 +1000,19 @@ static int parse_pmt_section(iptv_stream_session_t *session, impl_t *impl, const
         next.audio_channels = impl->format.audio_channels;
     }
     impl->format = next;
+    std::memcpy(impl->audio_tracks, audio_tracks, sizeof(audio_tracks));
+    impl->audio_track_count = audio_track_count;
+    size_t kept = 0;
+    for (size_t i = 0; i < subtitle_track_count; ++i)
+    {
+        const auto pid = subtitle_tracks[i].pid;
+        bool invalid = !pid || pid == kNullPid || pid == next.pmt_pid || pid == next.video_pid;
+        for (size_t j = 0; j < audio_track_count; ++j)
+            invalid |= pid == audio_tracks[j].pid;
+        if (!invalid)
+            subtitle_tracks[kept++] = subtitle_tracks[i];
+    }
+    update_subtitle_tracks(impl, subtitle_tracks, kept);
     impl->pmt_seen = true;
     session->telemetry.format = impl->format;
     ++session->telemetry.pmt_sections;
@@ -1443,6 +1628,10 @@ static int parse_pes_header(iptv_stream_session_t *session, impl_t *impl, pes_t 
         uint64_t raw = 0;
         if (!parse_pts_raw(data + 9u, &raw))
             return reject_pes(session, impl, pes, IPTV_STREAM_MALFORMED_TS, "invalid PES PTS");
+        // A newly chosen track can start after the 33-bit transport clock wrapped.
+        // Use the nearest video epoch, including audio just before that wrap.
+        if (!pes->video)
+            align_pts(&impl->audio_time, impl->video_time, raw);
         pes->pts_us = extend_pts(session, pes->video ? &impl->video_time : &impl->audio_time, raw);
     }
     pes->header_complete = true;
@@ -1555,6 +1744,113 @@ static continuity_t *continuity_for(impl_t *impl, uint16_t pid)
     return nullptr;
 }
 
+static subtitle_pes_t *subtitle_for(impl_t *impl, uint16_t pid)
+{
+    for (auto &subtitle : impl->subtitles)
+        if (subtitle.pid == pid)
+            return &subtitle;
+    return nullptr;
+}
+
+static bool deliver_subtitle(iptv_stream_session_t *session, impl_t *impl, subtitle_pes_t *subtitle)
+{
+    const auto *data = subtitle->packet.data;
+    const auto bytes = subtitle->packet.size;
+    if (bytes < 22u || data[0] || data[1] || data[2] != 1u || data[3] != 0xbdu ||
+        (data[6] & 0xf0u) != 0x80u) // No scrambled PES.
+        return false;
+    const unsigned pts_flags = (data[7] >> 6) & 3u;
+    const size_t header = 9u + data[8];
+    if (pts_flags < 2u || data[8] < (pts_flags == 3u ? 10u : 5u) || header + 8u > bytes ||
+        bytes - header > impl->config.max_pes_bytes || data[header] != 0x20u ||
+        data[header + 1u] != 0u || (data[9] >> 4) != pts_flags)
+        return false;
+    uint64_t raw = 0;
+    if (!parse_pts_raw(data + 9u, &raw))
+        return false;
+    // DVB subtitle segments are complete within a PES. Exclude trailing PES
+    // stuffing, but keep 0xff bytes inside segment bodies and page/object data.
+    const size_t begin = header + 2u;
+    size_t end = begin;
+    while (end < bytes && data[end] == 0x0fu)
+    {
+        if (bytes - end < 6u)
+            return false;
+        const size_t length = (static_cast<size_t>(data[end + 4u]) << 8) | data[end + 5u];
+        if (length > bytes - end - 6u)
+            return false;
+        end += 6u + length;
+    }
+    if (end == begin)
+        return false;
+    for (size_t i = end; i < bytes; ++i)
+        if (data[i] != 0xffu)
+            return false;
+    align_pts(&subtitle->time, impl->video_time, raw);
+    const uint64_t pts = extend_pts(session, &subtitle->time, raw);
+    for (size_t i = 0; i < impl->subtitle_track_count; ++i)
+        if (impl->subtitle_tracks[i].pid == subtitle->pid)
+            impl->backend.subtitle_packet(impl->backend.context, &impl->subtitle_tracks[i],
+                                          data + begin, end - begin, pts);
+    return true;
+}
+
+static void feed_subtitle(iptv_stream_session_t *session, impl_t *impl, subtitle_pes_t *subtitle,
+                          const uint8_t *data, size_t bytes, bool pusi)
+{
+    if (!impl->backend.subtitle_packet)
+        return;
+    const auto discard = [&]
+    {
+        subtitle->active = false;
+        subtitle->expected = 0;
+        subtitle->packet.size = 0;
+        ++session->telemetry.dropped_payloads;
+        if (impl->backend.subtitle_reset)
+            impl->backend.subtitle_reset(impl->backend.context);
+    };
+    if (pusi)
+    {
+        if (subtitle->active)
+            discard();
+        subtitle->packet.size = 0;
+        subtitle->expected = 0;
+        subtitle->active = true;
+        if (!subtitle->packet.data && !buffer_init(&subtitle->packet, kSubtitlePesBytes))
+            discard();
+    }
+    while (bytes && subtitle->active)
+    {
+        const size_t wanted = subtitle->expected ? subtitle->expected : 6u;
+        const size_t remaining = wanted - subtitle->packet.size;
+        const size_t take = bytes < remaining ? bytes : remaining;
+        if (!buffer_append(&subtitle->packet, data, take))
+        {
+            discard();
+            break;
+        }
+        data += take;
+        bytes -= take;
+        if (subtitle->packet.size != wanted)
+            break;
+        if (!subtitle->expected)
+        {
+            const auto *header = subtitle->packet.data;
+            subtitle->expected = 6u + (static_cast<size_t>(header[4]) << 8) + header[5];
+            if (header[0] || header[1] || header[2] != 1u || header[3] != 0xbdu ||
+                subtitle->expected < 22u)
+                discard();
+            continue;
+        }
+        if (!deliver_subtitle(session, impl, subtitle))
+            discard();
+        subtitle->active = false;
+        subtitle->packet.size = 0;
+        subtitle->expected = 0;
+    }
+    update_buffered(session, impl);
+}
+
 static void reset_pid(impl_t *impl, uint16_t pid)
 {
     if (pid == kPatPid)
@@ -1575,6 +1871,15 @@ static void reset_pid(impl_t *impl, uint16_t pid)
         impl->audio_es.size = 0;
         marker_clear(&impl->audio_markers);
         impl->audio_time = {};
+    }
+    else if (auto *subtitle = subtitle_for(impl, pid))
+    {
+        subtitle->active = false;
+        subtitle->packet.size = 0;
+        subtitle->expected = 0;
+        subtitle->time = {};
+        if (impl->backend.subtitle_reset)
+            impl->backend.subtitle_reset(impl->backend.context);
     }
 }
 
@@ -1614,23 +1919,34 @@ static int continuity_check(iptv_stream_session_t *session, impl_t *impl, uint16
     return 1;
 }
 
-static bool relevant_pid(const impl_t *impl, uint16_t pid)
+static bool relevant_pid(impl_t *impl, uint16_t pid)
 {
     return pid == kPatPid || (impl->pat_seen && pid == impl->format.pmt_pid) ||
            (impl->pmt_seen && (pid == impl->format.video_pid ||
-                               (!impl->audio_disabled && pid == impl->format.audio_pid)));
+                               (!impl->audio_disabled && pid == impl->format.audio_pid))) ||
+           (impl->backend.subtitle_packet && subtitle_for(impl, pid));
 }
 
 static int process_packet(iptv_stream_session_t *session, impl_t *impl, const uint8_t *packet)
 {
-    if (packet[0] != 0x47u || (packet[3] & 0xc0u) != 0)
+    if (packet[0] != 0x47u)
         return fail(session, IPTV_STREAM_MALFORMED_TS, "invalid MPEG-TS packet header");
     const bool pusi = (packet[1] & 0x40u) != 0;
     const bool transport_error = (packet[1] & 0x80u) != 0;
     const uint16_t pid = static_cast<uint16_t>((packet[1] & 0x1fu) << 8 | packet[2]);
+    const auto invalid_packet = [&](int result, const char *message)
+    {
+        if (pid && subtitle_for(impl, pid))
+        {
+            ++session->telemetry.dropped_payloads;
+            reset_pid(impl, pid);
+            return static_cast<int>(IPTV_STREAM_OK);
+        }
+        return fail(session, result, message);
+    };
     const uint8_t adaptation_control = (packet[3] >> 4) & 3u;
     if (!adaptation_control)
-        return fail(session, IPTV_STREAM_MALFORMED_TS, "reserved TS adaptation mode");
+        return invalid_packet(IPTV_STREAM_MALFORMED_TS, "reserved TS adaptation mode");
     const bool has_payload = adaptation_control == 1u || adaptation_control == 3u;
     size_t payload_at = 4u;
     bool discontinuity = false;
@@ -1638,19 +1954,19 @@ static int process_packet(iptv_stream_session_t *session, impl_t *impl, const ui
     {
         const size_t adaptation = packet[4];
         if (adaptation > 183u || 5u + adaptation > IPTV_STREAM_TS_PACKET_BYTES)
-            return fail(session, IPTV_STREAM_MALFORMED_TS, "TS adaptation field exceeds packet");
+            return invalid_packet(IPTV_STREAM_MALFORMED_TS, "TS adaptation field exceeds packet");
         if (adaptation)
             discontinuity = (packet[5] & 0x80u) != 0;
         payload_at += 1u + adaptation;
     }
     if (payload_at > IPTV_STREAM_TS_PACKET_BYTES)
-        return fail(session, IPTV_STREAM_MALFORMED_TS, "TS payload offset exceeds packet");
+        return invalid_packet(IPTV_STREAM_MALFORMED_TS, "TS payload offset exceeds packet");
 
     ++session->telemetry.packets;
     if (pid == kNullPid || !relevant_pid(impl, pid))
         return IPTV_STREAM_OK;
     if ((packet[3] & 0xc0u) != 0)
-        return fail(session, IPTV_STREAM_UNSUPPORTED_FORMAT, "scrambled MPEG-TS is unsupported");
+        return invalid_packet(IPTV_STREAM_UNSUPPORTED_FORMAT, "scrambled MPEG-TS is unsupported");
     if (transport_error)
     {
         ++session->telemetry.continuity_errors;
@@ -1687,6 +2003,8 @@ static int process_packet(iptv_stream_session_t *session, impl_t *impl, const ui
         return feed_pes(session, impl, &impl->video_pes, payload, bytes, pusi, true);
     if (impl->pmt_seen && pid == impl->format.audio_pid)
         return feed_pes(session, impl, &impl->audio_pes, payload, bytes, pusi, false);
+    if (auto *subtitle = subtitle_for(impl, pid))
+        feed_subtitle(session, impl, subtitle, payload, bytes, pusi);
     return IPTV_STREAM_OK;
 }
 
@@ -1919,6 +2237,15 @@ int iptv_stream_discontinuity(iptv_stream_session_t *session)
     marker_clear(&impl->audio_markers);
     impl->video_time = {};
     impl->audio_time = {};
+    for (auto &subtitle : impl->subtitles)
+    {
+        subtitle.active = false;
+        subtitle.packet.size = 0;
+        subtitle.expected = 0;
+        subtitle.time = {};
+    }
+    if (impl->backend.subtitle_reset)
+        impl->backend.subtitle_reset(impl->backend.context);
     ++session->telemetry.discontinuities;
     update_buffered(session, impl);
     return IPTV_STREAM_OK;
@@ -1979,6 +2306,8 @@ int iptv_stream_cleanup(iptv_stream_session_t *session)
     }
     buffer_release(&impl->video_es);
     buffer_release(&impl->audio_es);
+    for (auto &subtitle : impl->subtitles)
+        buffer_release(&subtitle.packet);
     delete impl;
     session->_impl = nullptr;
     ++session->telemetry.cleanup_count;
@@ -1987,6 +2316,60 @@ int iptv_stream_cleanup(iptv_stream_session_t *session)
     if (stop_result == IPTV_STREAM_OK)
         session->telemetry.state = IPTV_STREAM_STATE_STOPPED;
     return stop_result;
+}
+
+size_t iptv_stream_audio_tracks(const iptv_stream_session_t *session,
+                                iptv_stream_audio_track_t *tracks, size_t capacity,
+                                uint32_t *selected_pid)
+{
+    const auto *impl =
+        valid_session(session) ? static_cast<const impl_t *>(session->_impl) : nullptr;
+    if (selected_pid)
+        *selected_pid = impl ? impl->format.audio_pid : 0;
+    if (!impl)
+        return 0;
+    if (tracks && capacity)
+        std::memcpy(tracks, impl->audio_tracks,
+                    (capacity < impl->audio_track_count ? capacity : impl->audio_track_count) *
+                        sizeof(*tracks));
+    return impl->audio_track_count;
+}
+
+int iptv_stream_select_audio(iptv_stream_session_t *session, uint32_t pid)
+{
+    if (!valid_session(session) || !get_impl(session))
+        return IPTV_STREAM_INVALID_ARGUMENT;
+    auto *impl = get_impl(session);
+    if (session->telemetry.state == IPTV_STREAM_STATE_STOPPED ||
+        session->telemetry.state == IPTV_STREAM_STATE_ERROR)
+        return IPTV_STREAM_INVALID_STATE;
+    uint32_t type = 0;
+    for (size_t i = 0; i < impl->audio_track_count; ++i)
+        if (impl->audio_tracks[i].pid == pid)
+            type = impl->audio_tracks[i].stream_type;
+    if (pid && !type)
+        return IPTV_STREAM_INVALID_ARGUMENT;
+    if (pid == impl->format.audio_pid && impl->audio_off == (pid == 0) &&
+        (!impl->audio_disabled || impl->audio_off))
+        return IPTV_STREAM_OK;
+    if (impl->backend_open && !impl->backend.select_audio)
+        return IPTV_STREAM_NATIVE_UNAVAILABLE;
+    impl->audio_off = pid == 0;
+    reset_audio_track(impl, pid);
+    impl->format.audio_pid = pid;
+    impl->format.audio_stream_type = type;
+    impl->format.audio_sample_rate = impl->format.audio_channels = 0;
+    impl->audio_disabled = impl->audio_off;
+    session->telemetry.audio_disabled = impl->audio_off ? 1u : 0u;
+    session->telemetry.audio_warning[0] = '\0';
+    session->telemetry.format = impl->format;
+    update_buffered(session, impl);
+    if (impl->backend_open && impl->backend.select_audio(impl->backend.context, type) != 0)
+    {
+        disable_audio(session, impl, "selected audio could not open; choose another track");
+        return IPTV_STREAM_NATIVE_ERROR;
+    }
+    return IPTV_STREAM_OK;
 }
 
 iptv_stream_state_t iptv_stream_state(const iptv_stream_session_t *session)

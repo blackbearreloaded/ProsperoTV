@@ -142,12 +142,9 @@ bool PlaybackOsd::load_fonts(const std::string &directory)
     if (!load("inter-regular.huifont", regular_, fonts_.regular))
         return false;
     fonts_.semibold = fonts_.regular;
-    bool east_asian = model_.uses_east_asian(), korean = model_.uses_korean();
-    note_scripts(title_ + now_ + next_, &east_asian, &korean);
-    if (east_asian)
-        (void)load("noto-sans-east-asian.huifont", east_asian_, fonts_.hand);
-    if (korean)
-        (void)load("noto-sans-korean.huifont", korean_, fonts_.pixel);
+    // Subtitle language may differ from every channel name in the catalogue.
+    (void)load("noto-sans-east-asian.huifont", east_asian_, fonts_.hand);
+    (void)load("noto-sans-korean.huifont", korean_, fonts_.pixel);
     return true;
 }
 
@@ -179,6 +176,59 @@ int PlaybackOsd::select(unsigned index)
     return 2;
 }
 
+void PlaybackOsd::set_audio_state(const iptv_player_audio_state_t &state)
+{
+    std::lock_guard lock(mutex_);
+    bool changed = audio_.count != state.count || audio_.selected_pid != state.selected_pid ||
+                   audio_.disabled != state.disabled || audio_.pending != state.pending ||
+                   audio_.result != state.result;
+    const auto count = std::min(state.count, IPTV_STREAM_MAX_AUDIO_TRACKS);
+    for (unsigned i = 0; i < count && !changed; ++i)
+        changed = audio_.tracks[i].pid != state.tracks[i].pid ||
+                  audio_.tracks[i].stream_type != state.tracks[i].stream_type ||
+                  audio_.tracks[i].audio_type != state.tracks[i].audio_type ||
+                  std::strncmp(audio_.titles[i], state.titles[i], 128) != 0 ||
+                  std::strncmp(audio_.languages[i], state.languages[i], 32) != 0 ||
+                  std::strncmp(audio_.tracks[i].language, state.tracks[i].language, 3) != 0;
+    if (changed)
+    {
+        audio_ = state;
+        audio_.count = count;
+        audio_focus_ = std::min(audio_focus_, count);
+        dirty_ = true;
+    }
+}
+
+std::optional<std::uint32_t> PlaybackOsd::take_audio_selection()
+{
+    std::lock_guard lock(mutex_);
+    const auto result = audio_selection_;
+    audio_selection_.reset();
+    return result;
+}
+
+void PlaybackOsd::set_subtitle_state(const iptv::SubtitleState &state)
+{
+    std::lock_guard lock(mutex_);
+    if (subtitles_.tracks != state.tracks || subtitles_.selected != state.selected ||
+        subtitles_.error != state.error)
+    {
+        subtitles_ = state;
+        if (subtitles_.tracks.size() > iptv::Subtitles::max_tracks)
+            subtitles_.tracks.resize(iptv::Subtitles::max_tracks);
+        subtitle_focus_ =
+            std::min(subtitle_focus_, static_cast<unsigned>(subtitles_.tracks.size()));
+        dirty_ = true;
+    }
+}
+std::optional<std::uint32_t> PlaybackOsd::take_subtitle_selection()
+{
+    std::lock_guard lock(mutex_);
+    const auto result = subtitle_selection_;
+    subtitle_selection_.reset();
+    return result;
+}
+
 int PlaybackOsd::input(int action, std::uint64_t now)
 {
     std::lock_guard lock(mutex_);
@@ -187,6 +237,55 @@ int PlaybackOsd::input(int action, std::uint64_t now)
         if (platform::unix_time() / 60 != guide_minute_)
             update_guide();
         return 0;
+    }
+    if (action == IPTV_INPUT_OPTIONS)
+    {
+        audio_menu_ = !audio_menu_;
+        subtitle_tab_ = false;
+        list_ = false;
+        audio_focus_ = 0;
+        for (unsigned i = 0; i < audio_.count; ++i)
+            if (audio_.tracks[i].pid == audio_.selected_pid)
+                audio_focus_ = i + 1;
+        dirty_ = true;
+        return 1;
+    }
+    if (audio_menu_)
+    {
+        if (action == IPTV_INPUT_L1 || action == IPTV_INPUT_R1)
+        {
+            subtitle_tab_ = !subtitle_tab_;
+            subtitle_focus_ = 0;
+            for (unsigned i = 0; i < subtitles_.tracks.size(); ++i)
+                if (subtitles_.tracks[i].id == subtitles_.selected)
+                    subtitle_focus_ = i + 1;
+            dirty_ = true;
+            return 1;
+        }
+        auto &focus = subtitle_tab_ ? subtitle_focus_ : audio_focus_;
+        const unsigned count =
+            subtitle_tab_ ? static_cast<unsigned>(subtitles_.tracks.size()) : audio_.count;
+        if (action == IPTV_INPUT_CIRCLE)
+            audio_menu_ = false;
+        else if (action == IPTV_INPUT_CROSS && count)
+        {
+            if (subtitle_tab_)
+                subtitle_selection_ = focus ? subtitles_.tracks[focus - 1].id : 0;
+            else if (!audio_.pending)
+                audio_selection_ = focus ? audio_.tracks[focus - 1].pid : 0;
+        }
+        else if (action == IPTV_INPUT_UP || action == IPTV_INPUT_DOWN ||
+                 action == IPTV_INPUT_LEFT || action == IPTV_INPUT_RIGHT)
+        {
+            const int delta = action == IPTV_INPUT_UP     ? -1
+                              : action == IPTV_INPUT_DOWN ? 1
+                              : action == IPTV_INPUT_LEFT ? -9
+                                                          : 9;
+            focus = static_cast<unsigned>(
+                std::clamp(static_cast<int>(focus) + delta, 0, static_cast<int>(count)));
+        }
+        dirty_ = true;
+        return 1;
     }
     if (action == IPTV_INPUT_TRIANGLE || action == IPTV_INPUT_TOUCHPAD)
     {
@@ -215,12 +314,10 @@ int PlaybackOsd::input(int action, std::uint64_t now)
     {
         const bool backwards = action == IPTV_INPUT_L1 || action == IPTV_INPUT_DOWN;
         const auto current = current_position_;
-        const unsigned at =
-            current < 0
-                ? (backwards ? 0u : static_cast<unsigned>(channels_.size() - 1))
-                : static_cast<unsigned>(current);
-        return select(channels_[(at + channels_.size() + (backwards ? -1 : 1)) %
-                                channels_.size()]);
+        const unsigned at = current < 0
+                                ? (backwards ? 0u : static_cast<unsigned>(channels_.size() - 1))
+                                : static_cast<unsigned>(current);
+        return select(channels_[(at + channels_.size() + (backwards ? -1 : 1)) % channels_.size()]);
     }
     if (action == IPTV_INPUT_CROSS)
     {
@@ -258,7 +355,93 @@ void PlaybackOsd::line(std::string_view value, float x, float y, float size, flo
 
 void PlaybackOsd::paint()
 {
-    if (list_)
+    if (audio_menu_ && subtitle_tab_)
+    {
+        panel_.reset(80, 100, 820, 860);
+        line("Subtitles", 28, 54, 32, 760);
+        line(subtitles_.tracks.empty() ? "No supported subtitles advertised"
+             : subtitles_.error != iptv::SubtitleError::none
+                 ? "Subtitles unavailable. Choose another track."
+                 : "Choose a language or turn subtitles off",
+             28, 88, 22, 760);
+        const unsigned begin = (subtitle_focus_ / 9) * 9;
+        for (unsigned row = 0; row < 9 && begin + row <= subtitles_.tracks.size(); ++row)
+        {
+            const unsigned index = begin + row, top = 110 + row * 72;
+            if (index == subtitle_focus_)
+                for (unsigned y = top; y < top + 66; ++y)
+                    std::fill_n(panel_.pixels.begin() + y * panel_.width + 16, 788, 66);
+            std::string label = "Off";
+            unsigned id = 0;
+            if (index)
+            {
+                const auto &track = subtitles_.tracks[index - 1];
+                id = track.id;
+                label = "Track " + std::to_string(index);
+                if (!track.language.empty())
+                    label += " (" + track.language + ")";
+                if (track.forced)
+                    label += "  Forced";
+                if (track.hearing_impaired)
+                    label += "  Hearing impaired";
+                if (!track.title.empty())
+                    label += "  " + track.title;
+            }
+            line((id == subtitles_.selected ? "> " : "") + label, 28, top + 43, 28, 760);
+        }
+        line("L1/R1 Audio / Subtitles", 28, 764, 22, 760);
+        line("Up/Down Browse · Left/Right Page", 28, 800, 22, 760);
+        line("Cross Select · Circle Close", 28, 833, 22, 760);
+    }
+    else if (audio_menu_)
+    {
+        panel_.reset(80, 100, 820, 860);
+        line("Audio", 28, 54, 32, 760);
+        line(!audio_.count                            ? "No supported audio tracks advertised"
+             : audio_.pending                         ? "Changing audio..."
+             : audio_.result < 0                      ? "Could not switch. Choose another track."
+             : audio_.selected_pid && audio_.disabled ? "Audio unavailable. Choose another track."
+                                                      : "Choose a language or turn audio off",
+             28, 88, 22, 760);
+        const unsigned begin = (audio_focus_ / 9) * 9;
+        for (unsigned row = 0; row < 9 && begin + row <= audio_.count; ++row)
+        {
+            const unsigned index = begin + row, top = 110 + row * 72;
+            if (index == audio_focus_)
+                for (unsigned y = top; y < top + 66; ++y)
+                    std::fill_n(panel_.pixels.begin() + y * panel_.width + 16, 788, 66);
+            std::string label = "Off";
+            std::uint32_t pid = 0;
+            if (index)
+            {
+                const auto &track = audio_.tracks[index - 1];
+                pid = track.pid;
+                const auto *title = audio_.titles[index - 1];
+                const auto *language = audio_.languages[index - 1];
+                label = title[0] ? std::string(title, strnlen(title, 128))
+                                 : "Track " + std::to_string(index);
+                if (language[0])
+                    label += " (" + std::string(language, strnlen(language, 32)) + ")";
+                else if (track.language[0])
+                    label += " (" + std::string(track.language, 3) + ")";
+                const char *codec = track.stream_type == 0x81   ? "AC-3"
+                                    : track.stream_type == 0x87 ? "E-AC-3"
+                                    : track.stream_type == 3 || track.stream_type == 4
+                                        ? "MPEG audio"
+                                        : "AAC";
+                label += std::string("  ") + codec;
+                if (track.audio_type == 2)
+                    label += "  Hearing impaired";
+                if (track.audio_type == 3)
+                    label += "  Audio description";
+            }
+            line((pid == audio_.selected_pid ? "> " : "") + label, 28, top + 43, 28, 760);
+        }
+        line("L1/R1 Audio / Subtitles", 28, 764, 22, 760);
+        line("Up/Down Browse · Left/Right Page", 28, 800, 22, 760);
+        line("Cross Select · Circle Close", 28, 833, 22, 760);
+    }
+    else if (list_)
     {
         panel_.reset(80, 100, 760, 860);
         line("Channels", 28, 54, 32, 700);
@@ -286,15 +469,68 @@ void PlaybackOsd::paint()
         line(title_, 30, 52, 36, 1700);
         line(now_, 30, 101, 28, 1700);
         line(next_, 30, 143, 28, 1700);
-        line(live_ ? "Up/Down Channel · Square Last · Cross List · Triangle Info · Circle Back"
-                   : "Triangle Info · Circle Back",
+        line(live_
+                 ? "Up/Down Channel · Square Last · Cross List · Options Tracks · Triangle Info · "
+                   "Circle Back"
+                 : "Options Tracks · Triangle Info · Circle Back",
              30, 204, 24, 1700);
     }
     dirty_ = false;
 }
 
+void PlaybackOsd::paint_subtitles()
+{
+    struct Line
+    {
+        const hui::gfx::Font *font;
+        std::string text;
+    };
+    std::vector<Line> lines;
+    float widest = 0;
+    constexpr float size = 36, max_width = 1560;
+    for (const auto &cue : subtitle_cues_)
+    {
+        if (!cue)
+            continue;
+        const auto &face = face_for(fonts_, fonts_.regular, cue->text);
+        if (!face.font)
+            continue;
+        for (const auto &wrapped : face.font->wrap(cue->text, size, max_width))
+        {
+            std::string_view remaining = wrapped;
+            while (!remaining.empty() && lines.size() < 8)
+            {
+                std::size_t end = 0, next = 0;
+                while (next < remaining.size())
+                {
+                    hui::gfx::next_codepoint(remaining, &next);
+                    if (end && face.font->measure(remaining.substr(0, next), size) > max_width)
+                        break;
+                    end = next;
+                }
+                const auto text = remaining.substr(0, end);
+                widest = std::max(widest, face.font->measure(text, size));
+                lines.push_back({face.font, std::string(text)});
+                remaining.remove_prefix(end);
+            }
+            if (lines.size() == 8)
+                break;
+        }
+        if (lines.size() == 8)
+            break;
+    }
+    const unsigned width = lines.empty() ? 0 : static_cast<unsigned>(std::ceil(widest)) + 44;
+    subtitle_panel_.reset((1920 - width) / 2, 0, width,
+                          lines.size() * 46 + (lines.empty() ? 0 : 20));
+    for (unsigned i = 0; i < lines.size(); ++i)
+        subtitle_panel_.text(*lines[i].font, lines[i].text,
+                             (width - lines[i].font->measure(lines[i].text, size)) / 2, 42 + i * 46,
+                             size, max_width);
+}
+
 bool PlaybackOsd::draw(void *surface, std::size_t bytes, unsigned pitch, unsigned sh, unsigned vw,
-                       unsigned vh, unsigned depth, std::uint64_t now)
+                       unsigned vh, unsigned depth, std::uint64_t now,
+                       const std::vector<std::shared_ptr<const iptv::SubtitleCue>> &subtitles)
 {
     std::lock_guard lock(mutex_);
     if (!fonts_.regular.font)
@@ -304,12 +540,36 @@ bool PlaybackOsd::draw(void *surface, std::size_t bytes, unsigned pitch, unsigne
         started_ = true;
         banner_until_ = now + 5000000;
     }
-    if (!list_ && now >= banner_until_)
+    const bool overlay = list_ || audio_menu_ || now < banner_until_;
+    const bool captions = !list_ && !audio_menu_ && !subtitles.empty();
+    if (!overlay && !captions)
+    {
+        subtitle_cues_.clear();
         return false;
+    }
     if (!surface)
         return true;
-    if (dirty_)
+    bool drawn = false;
+    if (captions)
+    {
+        if (subtitle_cues_ != subtitles)
+        {
+            subtitle_cues_ = subtitles;
+            paint_subtitles();
+        }
+        for (const auto &cue : subtitles)
+            if (cue)
+                drawn =
+                    composite_subtitle_bitmaps(*cue, surface, bytes, pitch, sh, vw, vh, depth) ||
+                    drawn;
+        if (subtitle_panel_.height)
+        {
+            subtitle_panel_.y = (overlay ? 740 : 1030) - subtitle_panel_.height;
+            drawn = subtitle_panel_.composite(surface, bytes, pitch, sh, vw, vh, depth) || drawn;
+        }
+    }
+    if (overlay && dirty_)
         paint();
-    return panel_.composite(surface, bytes, pitch, sh, vw, vh, depth);
+    return (overlay && panel_.composite(surface, bytes, pitch, sh, vw, vh, depth)) || drawn;
 }
 } // namespace ptv

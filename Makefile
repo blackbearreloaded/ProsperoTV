@@ -45,6 +45,7 @@ RUNTIME_INPUTS := tools/rebuild-libc.sh \
 	$(wildcard tooling/native/*.cpp tooling/native/*.hpp) \
 	$(wildcard tooling/native/runtime/*.txt)
 APP_DEFINITIONS += SDL_MAIN_HANDLED SDL_STATIC_LIB USING_GENERATED_CONFIG_H RMLUI_STATIC_LIB ITLIB_FLAT_MAP_NO_THROW IPTV_AUTOTEST_ENABLED=$(IPTV_AUTOTEST) IPTV_PROBE=$(IPTV_PROBE)
+APP_DEFINITIONS += IPTV_NETWORK_COMPAT=1
 # Keep the native shell compact. The streaming hot path remains in O2-built C
 # code and platform libraries.
 APP_CXXFLAGS += -frtti -Os
@@ -52,6 +53,8 @@ APP_INCLUDE_PATHS += include src vendor/ps5/sdl/include vendor/ps5/sdl/include/S
 APP_INCLUDE_PATHS += .deps/ffmpeg-audio/root/include
 APP_STATIC_ARCHIVES += vendor/ps5/sdl/lib/libSDL2.a vendor/ps5/rmlui/lib/librmlui.a vendor/ps5/freetype/lib/libfreetype.a vendor/ps5/sdk/lib/libunwind.a vendor/ps5/sdk/lib/libcxx.a vendor/ps5/sdk/lib/libcxxabi.a
 APP_STATIC_ARCHIVES += .deps/ffmpeg-audio/root/lib/libavformat.a .deps/ffmpeg-audio/root/lib/libavcodec.a .deps/ffmpeg-audio/root/lib/libswresample.a .deps/ffmpeg-audio/root/lib/libavutil.a
+# FFmpeg's HTTPS/HLS support needs OpenSSL in the legacy app link as well.
+PACBREW_PACKAGES += openssl
 PACBREW_INCLUDE_PATHS += include
 PACBREW_STATIC_ARCHIVES += lib/libsqlite3.a
 HOST_UNIT_TEST := build/tests/iptv_core_tests

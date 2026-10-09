@@ -283,6 +283,7 @@ typedef struct backend_state
     _Atomic int stop_requested;
     _Atomic uint32_t stream_generation;
     _Atomic uint64_t presented_frame_count;
+    _Atomic uint64_t presented_pts_us;
     const native_video_mode_t *mode;
     iptv_native_open_config_t config;
     iptv_native_telemetry_t telemetry;
@@ -323,8 +324,11 @@ typedef struct backend_state
     _Atomic uint32_t audio_queue_read;
     _Atomic uint32_t audio_queue_write;
     _Atomic uint32_t audio_queue_sample_rate;
+    _Atomic uint32_t audio_buffer_type;
     _Atomic int audio_worker_stop;
+    _Atomic int audio_worker_discard;
     _Atomic int audio_worker_result;
+    _Atomic int audio_sync_pending;
     video_queue_item_t *video_queue;
     void *video_thread;
     _Atomic uint32_t video_queue_read;
@@ -1034,6 +1038,7 @@ static int32_t disable_audio_internal(backend_state_t *state, int32_t result)
     if (state->telemetry.cleanup_result == 0 && cleanup_result != 0)
         state->telemetry.cleanup_result = cleanup_result;
     state->config.enable_audio = 0;
+    atomic_store(&state->audio_buffer_type, 0);
     return cleanup_result;
 }
 
@@ -1273,6 +1278,7 @@ int32_t iptv_native_backend_init(iptv_native_backend_t *backend)
     state->video_generation = 1u;
     state->audio_generation = 1u;
     atomic_store_explicit(&state->presented_frame_count, 0, memory_order_relaxed);
+    atomic_store_explicit(&state->presented_pts_us, UINT64_MAX, memory_order_relaxed);
     atomic_store_explicit(&state->playback_started, 0, memory_order_relaxed);
     atomic_store_explicit(&state->playback_gate_started_us, 0, memory_order_relaxed);
     reset_allocation(&state->compute_allocation);
@@ -1310,6 +1316,10 @@ int32_t iptv_native_backend_open(iptv_native_backend_t *backend,
     state->config = *config;
     if (config->picture)
         state->config.enable_audio = 0;
+    atomic_store(&state->audio_buffer_type,
+                 state->config.enable_audio
+                     ? (config->audio_stream_type ? config->audio_stream_type : 0x0fu)
+                     : 0);
     state->open_started_us = monotonic_us();
     state->telemetry.codec = config->codec;
     state->telemetry.profile = config->profile;
@@ -1389,6 +1399,8 @@ static int32_t complete_pending_presentation(backend_state_t *state)
     state->presentation_pending = 0;
     state->pending_present_source = NULL;
     state->telemetry.last_presented_video_pts_us = state->pending_present_pts_us;
+    atomic_store_explicit(&state->presented_pts_us, state->pending_present_pts_us,
+                          memory_order_release);
     rate_now = monotonic_us();
     if (state->last_present_monotonic_us != 0)
     {
@@ -1582,6 +1594,7 @@ static int32_t present_video_output(backend_state_t *state, const videodec2_fram
         (uint32_t)state->config.codec, state->config.visible_width,
         state->config.visible_height,  state->frame_rate_x100,
         state->bitrate_kbps,           rate_now - state->controls_started_us < CONTROLS_OVERLAY_US,
+        presentation_pts_us,
     };
     if (state->config.picture)
     {
@@ -1780,14 +1793,14 @@ static int playback_queues_ready(const backend_state_t *state)
              atomic_load(&state->video_queue[video_read % VIDEO_QUEUE_CAPACITY].pts_us),
              atomic_load(&state->video_queue[(video_write - 1u) % VIDEO_QUEUE_CAPACITY].pts_us)));
     const uint32_t audio_rate = atomic_load(&state->audio_queue_sample_rate);
+    const uint32_t audio_type = atomic_load(&state->audio_buffer_type);
     // AAC carries at least 1024 core samples; Layer II carries 1152 per frame.
     // Estimate duration without touching queue storage, which may be released.
-    const uint32_t audio_samples =
-        (state->config.audio_stream_type == 0x03u || state->config.audio_stream_type == 0x04u)
-            ? 1152u
-        : state->config.audio_stream_type == 0x81u ? 1536u
-                                                   : 1024u;
-    const int audio_ready = !state->config.enable_audio || timed_out || pressure ||
+    const uint32_t audio_samples = (audio_type == 0x03u || audio_type == 0x04u) ? 1152u
+                                   : audio_type == 0x81u                        ? 1536u
+                                                                                : 1024u;
+    const int audio_ready = !audio_type || atomic_load(&state->audio_sync_pending) || timed_out ||
+                            pressure ||
                             (audio_rate && (uint64_t)(audio_write - audio_read) * audio_samples *
                                                    UINT64_C(1000000) / audio_rate >=
                                                PLAYBACK_BUFFER_US);
@@ -1828,7 +1841,9 @@ static void *video_worker_entry(void *argument)
         {
             const int empty =
                 atomic_load(&state->video_queue_read) == atomic_load(&state->video_queue_write) ||
-                (state->config.enable_audio && !atomic_load(&state->audio_worker_stop) &&
+                (atomic_load(&state->audio_buffer_type) &&
+                 !atomic_load(&state->audio_sync_pending) &&
+                 !atomic_load(&state->audio_worker_stop) &&
                  atomic_load(&state->audio_worker_result) == 0 &&
                  atomic_load(&state->audio_queue_read) == atomic_load(&state->audio_queue_write));
             const uint64_t now = monotonic_us();
@@ -2216,10 +2231,12 @@ static void *audio_worker_entry(void *argument)
     backend_state_t *state = argument;
     int had_data = 0;
     int empty_reported = 0;
+    uint64_t sync_started = 0;
 
     for (;;)
     {
-        if (atomic_load_explicit(&state->stop_requested, memory_order_relaxed))
+        if (atomic_load_explicit(&state->stop_requested, memory_order_relaxed) ||
+            atomic_load_explicit(&state->audio_worker_discard, memory_order_acquire))
             break;
         if (!atomic_load_explicit(&state->playback_started, memory_order_acquire) &&
             !atomic_load_explicit(&state->audio_worker_stop, memory_order_acquire))
@@ -2263,6 +2280,33 @@ static void *audio_worker_entry(void *argument)
             state->audio_sink.next_output_position = 0;
             state->audio_generation = generation;
         }
+        if (atomic_load(&state->audio_sync_pending))
+        {
+            const uint64_t video_pts =
+                atomic_load_explicit(&state->presented_pts_us, memory_order_acquire);
+            const uint64_t now = monotonic_us();
+            if (!sync_started)
+                sync_started = now;
+            // Track changes reach the demuxer ahead of the displayed picture.
+            // Wait for video to catch up, bounded for broken/missing timestamps.
+            if (!atomic_load_explicit(&state->audio_worker_stop, memory_order_acquire) &&
+                item->pts_us != UINT64_MAX && video_pts != UINT64_MAX &&
+                now - sync_started < UINT64_C(30000000))
+            {
+                if (item->pts_us > video_pts && item->pts_us - video_pts > UINT64_C(50000))
+                {
+                    (void)sceKernelUsleep(1000u);
+                    continue;
+                }
+                if (video_pts > item->pts_us && video_pts - item->pts_us > UINT64_C(100000))
+                {
+                    atomic_store_explicit(&state->audio_queue_read, read + 1u,
+                                          memory_order_release);
+                    continue;
+                }
+            }
+            atomic_store(&state->audio_sync_pending, 0);
+        }
         const int32_t result = decode_audio_frame(state, item->data, item->bytes, item->pts_us);
         atomic_store_explicit(&state->audio_queue_read, read + 1u, memory_order_release);
         had_data = 1;
@@ -2286,6 +2330,7 @@ static int32_t start_audio_worker(backend_state_t *state)
     atomic_store_explicit(&state->audio_queue_read, 0, memory_order_relaxed);
     atomic_store_explicit(&state->audio_queue_write, 0, memory_order_relaxed);
     atomic_store_explicit(&state->audio_worker_stop, 0, memory_order_relaxed);
+    atomic_store_explicit(&state->audio_worker_discard, 0, memory_order_relaxed);
     atomic_store_explicit(&state->audio_worker_result, 0, memory_order_relaxed);
     result =
         scePthreadCreate(&state->audio_thread, NULL, audio_worker_entry, state, "prosperotv-audio");
@@ -2314,6 +2359,7 @@ static int32_t stop_audio_worker(backend_state_t *state)
             atomic_load_explicit(&state->audio_worker_result, memory_order_relaxed);
         state->telemetry.audio_disabled = 1;
         state->config.enable_audio = 0;
+        atomic_store(&state->audio_buffer_type, 0);
     }
     free(state->audio_queue);
     state->audio_queue = NULL;
@@ -2341,9 +2387,10 @@ int32_t iptv_native_backend_submit_audio(iptv_native_backend_t *backend, const v
         return 0;
     if (atomic_load_explicit(&state->audio_worker_result, memory_order_acquire) != 0)
     {
-        (void)disable_audio_internal(
-            state, atomic_load_explicit(&state->audio_worker_result, memory_order_relaxed));
-        return 0;
+        const int32_t error =
+            atomic_load_explicit(&state->audio_worker_result, memory_order_relaxed);
+        (void)disable_audio_internal(state, error);
+        return error;
     }
     if (atomic_load_explicit(&state->stop_requested, memory_order_relaxed))
         return 0;
@@ -2355,7 +2402,7 @@ int32_t iptv_native_backend_submit_audio(iptv_native_backend_t *backend, const v
         if (!declared_bytes || declared_bytes != frame_bytes || frame_bytes > AUDIO_FRAME_MAX_BYTES)
         {
             (void)disable_audio_internal(state, IPTV_NATIVE_E_AUDIO_FRAME);
-            return 0;
+            return IPTV_NATIVE_E_AUDIO_FRAME;
         }
         // LATM carries its rate inside AudioSpecificConfig; only the buffering estimate
         // uses 48 kHz here. PCM playback uses the decoder's actual sample rate.
@@ -2368,7 +2415,7 @@ int32_t iptv_native_backend_submit_audio(iptv_native_backend_t *backend, const v
         if (!declared_bytes || declared_bytes != frame_bytes || frame_bytes > AUDIO_FRAME_MAX_BYTES)
         {
             (void)disable_audio_internal(state, IPTV_NATIVE_E_AUDIO_FRAME);
-            return 0;
+            return IPTV_NATIVE_E_AUDIO_FRAME;
         }
     }
     else
@@ -2377,7 +2424,7 @@ int32_t iptv_native_backend_submit_audio(iptv_native_backend_t *backend, const v
             (adts[1] & 0xf6u) != 0xf0u)
         {
             (void)disable_audio_internal(state, IPTV_NATIVE_E_AUDIO_FRAME);
-            return 0;
+            return IPTV_NATIVE_E_AUDIO_FRAME;
         }
         declared_bytes =
             ((size_t)(adts[3] & 3u) << 11) | ((size_t)adts[4] << 3) | ((size_t)adts[5] >> 5);
@@ -2385,7 +2432,7 @@ int32_t iptv_native_backend_submit_audio(iptv_native_backend_t *backend, const v
         if (declared_bytes != frame_bytes || adts_core_rate(adts, frame_bytes) == 0)
         {
             (void)disable_audio_internal(state, IPTV_NATIVE_E_AUDIO_FRAME);
-            return 0;
+            return IPTV_NATIVE_E_AUDIO_FRAME;
         }
         rate = adts_core_rate(adts, frame_bytes);
     }
@@ -2400,7 +2447,7 @@ int32_t iptv_native_backend_submit_audio(iptv_native_backend_t *backend, const v
         if (atomic_load_explicit(&state->stop_requested, memory_order_relaxed))
             return 0;
         if (atomic_load_explicit(&state->audio_worker_result, memory_order_acquire) != 0)
-            return 0;
+            return atomic_load_explicit(&state->audio_worker_result, memory_order_relaxed);
         (void)sceKernelUsleep(1000u);
     }
 
@@ -2427,6 +2474,42 @@ int32_t iptv_native_backend_disable_audio(iptv_native_backend_t *backend)
     if (!state->config.enable_audio)
         return 0;
     return disable_audio_internal(state, IPTV_NATIVE_E_AUDIO_FRAME);
+}
+
+int32_t iptv_native_backend_select_audio(iptv_native_backend_t *backend, uint32_t stream_type)
+{
+    backend_state_t *state = state_from(backend);
+    if (!state || state->magic != BACKEND_MAGIC)
+        return IPTV_NATIVE_E_ARGUMENT;
+    if (state->state != IPTV_NATIVE_STATE_OPEN || state->drain_started || state->config.picture)
+        return IPTV_NATIVE_E_STATE;
+    if (stream_type && stream_type != 0x0fu && stream_type != 0x03u && stream_type != 0x04u &&
+        !iptv_audio_software_type(stream_type))
+        return IPTV_NATIVE_E_UNSUPPORTED;
+
+    atomic_store(&state->audio_buffer_type, 0);
+    atomic_store_explicit(&state->audio_worker_discard, 1, memory_order_release);
+    const int32_t cleanup = release_audio(state);
+    if (cleanup && !state->telemetry.cleanup_result)
+        state->telemetry.cleanup_result = cleanup;
+    memset(&state->audio_sink, 0, sizeof(state->audio_sink));
+    state->audio_sink.handle = -1;
+    atomic_store_explicit(&state->audio_queue_sample_rate, 0, memory_order_relaxed);
+    state->config.enable_audio = stream_type != 0;
+    state->config.audio_stream_type = stream_type;
+    state->audio_generation = atomic_load_explicit(&state->stream_generation, memory_order_acquire);
+    atomic_store(&state->audio_sync_pending, stream_type != 0);
+    atomic_store(&state->audio_buffer_type, stream_type);
+    state->telemetry.audio_disabled = stream_type == 0;
+    state->telemetry.last_audio_result = 0;
+    if (!stream_type)
+        return cleanup;
+    int32_t result = initialize_audio(state);
+    if (!result)
+        result = start_audio_worker(state);
+    if (result)
+        (void)disable_audio_internal(state, result);
+    return result;
 }
 
 int32_t iptv_native_backend_discontinuity(iptv_native_backend_t *backend)
@@ -2766,7 +2849,7 @@ int main(void)
     gate.video_queue = calloc(VIDEO_QUEUE_CAPACITY, sizeof(*gate.video_queue));
     gate.audio_queue = calloc(AUDIO_QUEUE_CAPACITY, sizeof(*gate.audio_queue));
     assert(gate.video_queue && gate.audio_queue);
-    gate.config.enable_audio = 1;
+    atomic_store(&gate.audio_buffer_type, 0x0f);
     atomic_store(&gate.playback_gate_started_us, monotonic_us());
     assert(!playback_queues_ready(&gate));
     atomic_store(&gate.video_queue_write, 2);
@@ -2777,12 +2860,16 @@ int main(void)
     assert(playback_queues_ready(&gate));
     atomic_store(&gate.audio_queue_write, 2);
     assert(!playback_queues_ready(&gate));
+    atomic_store(&gate.audio_sync_pending, 1);
+    assert(playback_queues_ready(&gate)); // A language switch must let video catch up to audio.
+    atomic_store(&gate.audio_sync_pending, 0);
+    assert(!playback_queues_ready(&gate)); // Ordinary A/V buffering resumes after alignment.
     atomic_store(&gate.video_queue_bytes, VIDEO_QUEUE_MAX_BYTES - INPUT_SLOT_BYTES);
     assert(playback_queues_ready(&gate)); // Release producer pressure.
     atomic_store(&gate.video_queue_bytes, 0);
-    gate.config.enable_audio = 0;
+    atomic_store(&gate.audio_buffer_type, 0);
     assert(playback_queues_ready(&gate)); // Silent channels need no audio.
-    gate.config.enable_audio = 1;
+    atomic_store(&gate.audio_buffer_type, 0x0f);
     atomic_store(&gate.playback_gate_started_us, monotonic_us() - PLAYBACK_START_TIMEOUT_US);
     assert(playback_queues_ready(&gate)); // Bounded fallback for bad timestamps.
     free(gate.audio_queue);

@@ -14,5 +14,92 @@ mkdir -p "$output"
 ffmpeg -hide_banner -loglevel error -y -f lavfi -i testsrc2=size=320x180:rate=25 -f lavfi -i sine=frequency=440:sample_rate=48000 -t 1 -c:v libx264 -threads 2 -profile:v high -pix_fmt yuv420p -c:a aac -b:a 64k "$output/h264-aac.mp4"
 ffmpeg -hide_banner -loglevel error -y -i "$output/h264-aac.mp4" -c copy "$output/h264-aac.mkv"
 ffmpeg -hide_banner -loglevel error -y -i "$output/h264-aac.mp4" -c copy -movflags +faststart "$output/h264-aac-fast.mp4"
+ffmpeg -hide_banner -loglevel error -y -i "$output/h264-aac.mp4" -f lavfi -i sine=frequency=880:sample_rate=48000 -t 1 -map 0:v -map 0:a -map 1:a -c:v copy -c:a aac -b:a 64k -metadata:s:a:0 language=eng -metadata:s:a:1 language=spa "$output/two-audio.mp4"
+ffmpeg -hide_banner -loglevel error -y -i "$output/two-audio.mp4" -map 0 -c copy "$output/two-audio.mkv"
+for format in mpegts fmp4 ranged; do
+    dir="$output/hls-$format"
+    mkdir -p "$dir"
+    for track in video english spanish; do
+        map=0:v:0
+        [[ $track != english ]] || map=0:a:0
+        [[ $track != spanish ]] || map=0:a:1
+        segment_type=$format
+        segment_options=()
+        if [[ $format == ranged ]]; then
+            segment_type=fmp4
+            segment_options=(-hls_flags single_file -hls_segment_filename "$dir/$track-stream.mp4")
+        fi
+        ffmpeg -hide_banner -loglevel error -y -i "$output/two-audio.mp4" -map "$map" -c copy \
+            -hls_time 0.4 -hls_list_size 0 -hls_segment_type "$segment_type" "${segment_options[@]}" \
+            -hls_fmp4_init_filename "$track-init.mp4" "$dir/$track.m3u8"
+    done
+    cat > "$dir/master.m3u8" <<'MASTER'
+#EXTM3U
+#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="sound",NAME="English",LANGUAGE="eng",DEFAULT=YES,AUTOSELECT=YES,URI="english.m3u8"
+#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="sound",NAME="Español",LANGUAGE="spa",AUTOSELECT=YES,URI="spanish.m3u8"
+#EXT-X-STREAM-INF:BANDWIDTH=500000,AUDIO="sound"
+video.m3u8
+MASTER
+    first_pts=$(ffprobe -v error -select_streams v:0 -show_entries stream=start_time \
+        -of default=nw=1:nk=1 "$dir/video.m3u8" | awk '{printf "%.0f", $1 * 90000; exit}')
+    for language in en es; do
+        first='Hello, <i>world</i>!'
+        second='Second line'
+        if [[ $language == es ]]; then first='Hola, mundo!'; second='Otra línea'; fi
+        cat > "$dir/$language-0.vtt" <<CAPTIONS
+WEBVTT
+X-TIMESTAMP-MAP=LOCAL:00:00:10.000,MPEGTS:$first_pts
+
+first
+00:00:10.200 --> 00:00:10.600
+$first
+CAPTIONS
+        cp "$dir/$language-0.vtt" "$dir/$language-1.vtt"
+        cat >> "$dir/$language-1.vtt" <<CAPTIONS
+
+second
+00:00:10.650 --> 00:00:10.900
+$second
+CAPTIONS
+        cat > "$dir/$language.m3u8" <<CAPTIONS
+#EXTM3U
+#EXT-X-TARGETDURATION:1
+#EXTINF:0.5,
+$language-0.vtt
+#EXTINF:0.5,
+$language-1.vtt
+#EXT-X-ENDLIST
+CAPTIONS
+    done
+    cat > "$dir/subtitles-master.m3u8" <<'MASTER'
+#EXTM3U
+#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="sound",NAME="English",LANGUAGE="en-US",DEFAULT=YES,AUTOSELECT=YES,URI="english.m3u8"
+#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="sound",NAME="Español",LANGUAGE="es",AUTOSELECT=YES,URI="spanish.m3u8",CHARACTERISTICS="public.accessibility.describes-video"
+#EXT-X-MEDIA:TYPE=SUBTITLES,GROUP-ID="captions",NAME="English CC",LANGUAGE="eng",URI="en.m3u8",CHARACTERISTICS="public.accessibility.describes-music-and-sound"
+#EXT-X-MEDIA:TYPE=SUBTITLES,GROUP-ID="captions",NAME="Español",LANGUAGE="spa",URI="es.m3u8",FORCED=YES
+#EXT-X-STREAM-INF:BANDWIDTH=500000,AUDIO="sound",SUBTITLES="captions"
+video.m3u8
+MASTER
+done
+cat > "$output/english.srt" <<'CAPTIONS'
+1
+00:00:00,200 --> 00:00:00,600
+Hello, <i>world</i>!
+
+2
+00:00:00,650 --> 00:00:00,900
+Second line
+CAPTIONS
+cat > "$output/spanish.srt" <<'CAPTIONS'
+1
+00:00:00,200 --> 00:00:00,600
+Hola, mundo!
+
+2
+00:00:00,650 --> 00:00:00,900
+Otra línea
+CAPTIONS
+ffmpeg -hide_banner -loglevel error -y -i "$output/h264-aac.mp4" -i "$output/english.srt" -i "$output/spanish.srt" -map 0 -map 1 -map 2 -c copy -c:s mov_text -metadata:s:s:0 language=eng -metadata:s:s:1 language=spa "$output/subtitles.mp4"
+ffmpeg -hide_banner -loglevel error -y -i "$output/h264-aac.mp4" -i "$output/english.srt" -i "$output/spanish.srt" -map 0 -map 1 -map 2 -c copy -c:s srt -metadata:s:s:0 language=eng -metadata:s:s:1 language=spa "$output/subtitles.mkv"
 ffmpeg -hide_banner -loglevel error -y -f lavfi -i testsrc2=size=160x96:rate=10 -t 0.5 -c:v libx265 -x265-params pools=1:frame-threads=1:log-level=error -an "$output/hevc.mp4"
 printf '%s\n' "$stamp" > "$output/.complete"

@@ -1224,13 +1224,15 @@ static int32_t present_nv12(const void *source, size_t source_bytes, uint32_t pi
     target = (uint8_t *)presenter.framebuffer + buffer_index * presenter.framebuffer_bytes;
     if (overlay)
     {
-        const int osd_visible = draw_osd && draw_osd(osd_context, NULL, 0, pitch, surface_height,
-                                                     visible_width, visible_height, bit_depth);
+        const int osd_visible =
+            draw_osd && draw_osd(osd_context, NULL, 0, pitch, surface_height, visible_width,
+                                 visible_height, bit_depth, overlay->pts_us);
         if (osd_visible || iptv_native_agc_overlay_enabled() ||
             (!draw_osd && overlay->show_controls))
         {
             /* Keep decoder reference pictures intact. Reuse this separate
-             * surface only after the previous GPU submission has finished. */
+             * surface
+             * only after the previous GPU submission has finished. */
             result = prepare_overlay_surface(yuv_bytes);
             if (result != 0)
                 return result;
@@ -1244,7 +1246,8 @@ static int32_t present_nv12(const void *source, size_t source_bytes, uint32_t pi
                                visible_width, visible_height, &info, bit_depth == 10u ? 2u : 1u);
             if (osd_visible)
                 (void)draw_osd(osd_context, presenter.overlay_surface, source_bytes, pitch,
-                               surface_height, visible_width, visible_height, bit_depth);
+                               surface_height, visible_width, visible_height, bit_depth,
+                               overlay->pts_us);
             flush_gpu_data(source, yuv_bytes);
         }
     }

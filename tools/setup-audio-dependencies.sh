@@ -14,7 +14,7 @@ suffix=audio
 [[ $target == ps5 ]] || suffix=host
 build="$root/.deps/ffmpeg-$suffix/build"
 prefix="$root/.deps/ffmpeg-$suffix/root"
-stamp=$(sha256sum "${BASH_SOURCE[0]}" | cut -d' ' -f1)
+stamp=$(cat "${BASH_SOURCE[0]}" "$root/tools/patch-ffmpeg-hls.py" | sha256sum | cut -d' ' -f1)
 if [[ -f $prefix/.complete && $(<"$prefix/.complete") == "$stamp" && -f $prefix/lib/libavformat.a ]]; then
     exit 0
 fi
@@ -24,29 +24,39 @@ if [[ ! -f $archive ]]; then
 fi
 printf '%s  %s\n' "$hash" "$archive" | sha256sum --check --strict
 [[ -f $source/configure ]] || tar -xJf "$archive" -C "$root/.deps"
+python3 "$root/tools/patch-ffmpeg-hls.py" "$source"
 cross=()
 if [[ $target == ps5 ]]; then
     sdk="$root/.deps/native/ps5-payload-sdk"
     source "$sdk/toolchain/prospero.sh"
     unset DESTDIR PREFIX
-    cross=(--target-os=freebsd --arch=x86_64 --enable-cross-compile
+    ports=$(bash "$root/tools/setup-pacbrew-dependencies.sh" --all)
+    export PKG_CONFIG_DIR=
+    export PKG_CONFIG_SYSROOT_DIR="$ports"
+    export PKG_CONFIG_LIBDIR="$ports/user/homebrew/lib/pkgconfig"
+    export PKG_CONFIG_PATH="$ports/user/homebrew/libdata/pkgconfig"
+    cross=(--target-os=freebsd --arch=x86_64 --enable-cross-compile --pkg-config=pkg-config
         --cc="$sdk/bin/prospero-clang" --ar="$sdk/bin/prospero-ar"
         --ranlib="$sdk/bin/prospero-ranlib")
 fi
 cd "$build"
 "$source/configure" --prefix="$prefix" "${cross[@]}" --disable-autodetect --disable-everything \
-    --disable-programs --disable-doc --disable-network --disable-avdevice \
+    --disable-programs --disable-doc --enable-network --disable-avdevice \
+    --enable-openssl --enable-protocol=http,https,udp --pkg-config-flags=--static \
     --disable-avfilter --disable-swscale --disable-shared --enable-static \
-    --disable-pthreads --disable-w32threads --disable-os2threads --disable-x86asm \
+    --enable-pthreads --disable-w32threads --disable-os2threads --disable-x86asm \
     --enable-avcodec --enable-avutil --enable-swresample --enable-avformat \
-    --enable-demuxer=mov,matroska --enable-muxer=mpegts \
+    --enable-demuxer=mov,matroska,hls,webvtt --enable-muxer=mpegts \
     --enable-parser=h264,hevc,aac,aac_latm,ac3,mpegaudio \
     --enable-bsf=h264_mp4toannexb,hevc_mp4toannexb \
-    --enable-decoder=aac,aac_latm,ac3,eac3,mp2,mp3,h264,hevc
+    --enable-decoder=aac,aac_latm,ac3,eac3,mp2,mp3,h264,hevc,text,subrip,ass,movtext,webvtt,dvbsub,dvdsub,pgssub
 # The SDK probe linker permits unresolved imports. PS5 exports gmtime, not
 # gmtime_r; select FFmpeg's own portability fallback instead of a bogus import.
 if [[ $target == ps5 ]]; then
     sed -i 's/^#define HAVE_GMTIME_R 1$/#define HAVE_GMTIME_R 0/' config.h
+    # Thread synchronization is required even with one decoding thread per
+    # context. Optional FreeBSD thread naming functions are not PS5 imports.
+    sed -i -E 's/^(#define HAVE_PTHREAD_SET_?NAME_NP) 1$/\1 0/' config.h
 fi
 make -j"${BUILD_JOBS:-4}"
 make install
