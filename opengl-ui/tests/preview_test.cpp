@@ -9,14 +9,70 @@
 
 namespace
 {
-TEST(PreviewPixels, ReadsPitchedNv12AndP010AndRejectsTruncatedPictures)
+TEST(PreviewPixels, HlgUsesReferenceLuminanceAndRetainsTenBitSamples)
+{
+    std::vector<std::uint16_t> samples(4 * 4 * 3 / 2, 512);
+    const unsigned codes[] = {64, 502, 721, 940}; // Black, 50%, 75%, peak.
+    for (unsigned y = 0; y < 4; ++y)
+        for (unsigned x = 0; x < 4; ++x)
+            samples[y * 4 + x] = codes[x];
+    iptv_native_picture_t picture{samples.data(),   samples.size() * 2, 4, 4, 4, 4, 10, 0,
+                                  {9, 18, 9, 1, {}}};
+    ptv::ImagePixels pixels;
+    ASSERT_TRUE(ptv::preview_pixels(picture, &pixels));
+    const unsigned expected[] = {0, 124, 188, 235};
+    for (unsigned x = 0; x < 4; ++x)
+    {
+        EXPECT_NEAR(pixels.rgba[x * 4], expected[x], 1);
+        EXPECT_EQ(pixels.rgba[x * 4], pixels.rgba[x * 4 + 1]);
+        EXPECT_EQ(pixels.rgba[x * 4 + 1], pixels.rgba[x * 4 + 2]);
+    }
+    EXPECT_TRUE(iptv_color_is_hlg(picture.color));
+    samples[0] = 500;
+    samples[1] = 503; // Same eight-bit value, different ten-bit luminance.
+    ASSERT_TRUE(ptv::preview_pixels(picture, &pixels));
+    EXPECT_LT(pixels.rgba[0], pixels.rgba[4]);
+    picture.color.range = 2;
+    EXPECT_FALSE(iptv_color_is_hlg(picture.color));
+    picture.color.range = 1;
+    picture.color.primaries = 1;
+    EXPECT_FALSE(iptv_color_is_hlg(picture.color));
+}
+
+TEST(PreviewPixels, HdrPreviewMapsBlackPaperWhiteAndHighlightsToSdr)
+{
+    std::vector<std::uint16_t> samples(4 * 4 * 3 / 2, 512);
+    for (unsigned y = 0; y < 4; ++y)
+    {
+        samples[y * 4] = 64;
+        samples[y * 4 + 1] = 573; // About 203 nits.
+        samples[y * 4 + 2] = 723; // About 1000 nits.
+        samples[y * 4 + 3] = 940; // PQ peak.
+    }
+    iptv_native_picture_t picture{samples.data(),   samples.size() * 2, 4, 4, 4, 4, 10, 0,
+                                  {9, 16, 9, 1, {}}};
+    ptv::ImagePixels pixels;
+    ASSERT_TRUE(ptv::preview_pixels(picture, &pixels));
+    EXPECT_EQ(pixels.rgba[0], 0);
+    EXPECT_NEAR(pixels.rgba[4], 187, 2);
+    EXPECT_GT(pixels.rgba[8], pixels.rgba[4]);
+    EXPECT_GT(pixels.rgba[12], pixels.rgba[8]);
+    for (unsigned x = 0; x < 4; ++x)
+    {
+        EXPECT_EQ(pixels.rgba[x * 4], pixels.rgba[x * 4 + 1]);
+        EXPECT_EQ(pixels.rgba[x * 4 + 1], pixels.rgba[x * 4 + 2]);
+        EXPECT_EQ(pixels.rgba[x * 4 + 3], 255);
+    }
+}
+
+TEST(PreviewPixels, ReadsPitchedNv12AndNativeMain10AndRejectsTruncatedPictures)
 {
     std::vector<std::uint8_t> nv12(8 * 6, 128);
     // Four visible pixels on two rows, with row and surface-height padding.
     for (unsigned y = 0; y < 2; ++y)
         for (unsigned x = 0; x < 4; ++x)
             nv12[y * 8 + x] = x < 2 ? 16 : 235;
-    iptv_native_picture_t frame{nv12.data(), nv12.size(), 8, 4, 4, 2, 8, 0};
+    iptv_native_picture_t frame{nv12.data(), nv12.size(), 8, 4, 4, 2, 8, 0, {}};
     ptv::ImagePixels pixels;
     ASSERT_TRUE(ptv::preview_pixels(frame, &pixels));
     EXPECT_EQ(pixels.width, 4);
@@ -28,7 +84,11 @@ TEST(PreviewPixels, ReadsPitchedNv12AndP010AndRejectsTruncatedPictures)
     EXPECT_EQ(pixels.rgba[3], 255);
     std::vector<std::uint8_t> p010(nv12.size() * 2);
     for (std::size_t i = 0; i < nv12.size(); ++i)
-        p010[i * 2 + 1] = nv12[i];
+    {
+        const unsigned word = unsigned(nv12[i]) * 4 + 3;
+        p010[i * 2] = word & 255;
+        p010[i * 2 + 1] = word >> 8;
+    }
     const auto expected = pixels.rgba;
     frame.data = p010.data();
     frame.bytes = p010.size();
@@ -45,7 +105,7 @@ TEST(PreviewPixels, ReadsPitchedNv12AndP010AndRejectsTruncatedPictures)
 TEST(PreviewPixels, BoundsTheWorkForLargeAndPortraitPictures)
 {
     std::vector<std::uint8_t> nv12(3840 * 2160 * 3 / 2, 128);
-    iptv_native_picture_t frame{nv12.data(), nv12.size(), 3840, 2160, 3840, 2160, 8, 0};
+    iptv_native_picture_t frame{nv12.data(), nv12.size(), 3840, 2160, 3840, 2160, 8, 0, {}};
     ptv::ImagePixels pixels;
     ASSERT_TRUE(ptv::preview_pixels(frame, &pixels));
     EXPECT_EQ(pixels.width, 640);

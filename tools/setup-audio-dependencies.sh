@@ -14,7 +14,7 @@ suffix=audio
 [[ $target == ps5 ]] || suffix=host
 build="$root/.deps/ffmpeg-$suffix/build"
 prefix="$root/.deps/ffmpeg-$suffix/root"
-stamp=$(cat "${BASH_SOURCE[0]}" "$root/tools/patch-ffmpeg-hls.py" | sha256sum | cut -d' ' -f1)
+stamp=$(cat "${BASH_SOURCE[0]}" "$root/tools/patch-ffmpeg-hls.py" "$root/tools/patch-ffmpeg-color.py" | sha256sum | cut -d' ' -f1)
 if [[ -f $prefix/.complete && $(<"$prefix/.complete") == "$stamp" && -f $prefix/lib/libavformat.a ]]; then
     exit 0
 fi
@@ -25,6 +25,7 @@ fi
 printf '%s  %s\n' "$hash" "$archive" | sha256sum --check --strict
 [[ -f $source/configure ]] || tar -xJf "$archive" -C "$root/.deps"
 python3 "$root/tools/patch-ffmpeg-hls.py" "$source"
+python3 "$root/tools/patch-ffmpeg-color.py" "$source"
 cross=()
 if [[ $target == ps5 ]]; then
     sdk="$root/.deps/native/ps5-payload-sdk"

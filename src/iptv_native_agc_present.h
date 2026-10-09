@@ -7,6 +7,7 @@
 
 #include <stddef.h>
 #include <stdint.h>
+#include "iptv_color.h"
 
 #ifdef __cplusplus
 extern "C"
@@ -24,14 +25,17 @@ extern "C"
         uint64_t pts_us;
         uint32_t field;       /* 0: full picture; 1/2: reconstruct top/bottom field. */
         uint32_t cpu_written; /* Copy and flush CPU-decoded surfaces before the GPU reads. */
+        iptv_color_info_t color;
     } iptv_native_video_overlay_t;
 
     /* Register only between foreground sessions; the player joins its workers
      * before it returns. A NULL surface queries visibility. A real surface is a
-     * presenter-owned copy, valid only during this call. Return 1 if drawn. */
+     * presenter-owned copy, valid only during this call. Return 1 if drawn.
+     * hdr describes the source encoding: 0=SDR, 1=PQ, 2=HLG, even when the
+     * output subsequently tone maps the composed surface to SDR. */
     typedef int (*iptv_native_osd_t)(void *context, void *surface, size_t bytes, uint32_t pitch,
                                      uint32_t surface_height, uint32_t width, uint32_t height,
-                                     uint32_t depth, uint64_t pts_us);
+                                     uint32_t depth, uint64_t pts_us, int hdr);
     void iptv_native_agc_set_osd(iptv_native_osd_t draw, void *context);
 
     int32_t iptv_native_agc_present_nv12(const void *source, size_t source_bytes, uint32_t pitch,
@@ -55,6 +59,9 @@ extern "C"
     int32_t iptv_native_agc_present_drain(void);
     void iptv_native_agc_present_set_cancelled(int cancelled);
     int32_t iptv_native_agc_present_shutdown(void);
+    int iptv_native_agc_hdr_active(void);
+    /* Disposable-title scripts only: exercise SDR fallback and sample completed output. */
+    void iptv_native_agc_set_color_test(int force_sdr, int sample_output);
 
 #ifdef __cplusplus
 }

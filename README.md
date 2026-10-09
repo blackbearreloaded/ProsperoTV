@@ -404,8 +404,10 @@ warning.
   field; it does not perform motion-adaptive reconstruction. Interlaced streams
   rejected by the hardware decoder use bounded software decoding up to 1080i.
 - MPEG-TS playback supports H.264 and 8-bit/10-bit HEVC video. Main10 uses hardware
-  decoding and GPU presentation to the SDR output; HDR output and HDR-to-SDR tone
-  mapping are not implemented. The Main10 presentation path currently requires
+  decoding and GPU presentation. BT.2020/PQ and HLG select HDR10 output; HLG
+  converts to PQ, and rejected HDR output requests fall back to SDR tone mapping.
+  Static mastering/content-light metadata is retained, but custom HDMI metadata
+  forwarding is unverified. The Main10 presentation path currently requires
   decoder pitch to match visible width (standard 720p/1080p/1440p/2160p widths).
   Unsupported audio may
   continue as silent video when the video path remains valid.
@@ -493,7 +495,8 @@ The remaining ideas are not scheduled or promised.
   a channel that is being watched.
 - [x] **Smoother interlaced pictures.** Presenting each broadcast field separately
   to preserve its full motion.
-- **HDR.** Showing HDR channels as HDR; today they are shown in SDR.
+- [x] **HDR.** Showing HDR10 and HLG channels as HDR, with SDR tone mapping when
+  HDR output is unavailable.
 - **Several channels at once.** Two or four pictures side by side, for
   sport, if the console's decoder allows it.
 

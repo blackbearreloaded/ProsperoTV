@@ -4,6 +4,7 @@
 #pragma once
 #include <stddef.h>
 #include <stdint.h>
+#include "iptv_color.h"
 
 #ifdef __cplusplus
 extern "C"
@@ -16,10 +17,12 @@ extern "C"
         uint32_t count; /* Displayed fields, including repeat-first-field. */
         uint32_t duration_us;
         uint32_t field_picture; /* One access unit contains only one field. */
+        iptv_color_info_t color;
     } iptv_field_info_t;
     typedef struct iptv_field_parser iptv_field_parser_t;
 
-    iptv_field_parser_t *iptv_field_parser_create(void);
+    /* Codec matches the stream API: 1 H.264, 2 HEVC. HEVC exports color only. */
+    iptv_field_parser_t *iptv_field_parser_create(uint32_t codec);
     void iptv_field_parser_destroy(iptv_field_parser_t *parser);
     iptv_field_info_t iptv_field_parse(iptv_field_parser_t *parser, const void *data, size_t bytes);
 

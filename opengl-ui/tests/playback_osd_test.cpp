@@ -3,10 +3,54 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "tv/playback_osd.hpp"
 #include "core/save_file.hpp"
+#include "iptv_color.h"
 #include <gtest/gtest.h>
 #include <algorithm>
 #include <cstdlib>
 #include <cstring>
+
+TEST(VideoPanel, HdrPaperWhiteAndCaptionAlphaKeepVideoAndPaddingIntact)
+{
+    EXPECT_EQ(iptv_color_ui_luma(16, 1), 64);
+    EXPECT_NEAR(iptv_color_ui_luma(235, 1), 721, 1);
+    std::uint16_t hlg_white[3];
+    iptv_color_ui_yuv(255, 255, 255, hlg_white, 1);
+    EXPECT_NEAR(hlg_white[0], 721, 1);
+    EXPECT_EQ(hlg_white[1], 512);
+    EXPECT_EQ(hlg_white[2], 512);
+    EXPECT_EQ(iptv_color_ui_luma(16, 0), 64);
+    EXPECT_NEAR(iptv_color_ui_luma(235, 0), 573, 1);
+    for (unsigned i = 1; i < 256; ++i)
+        EXPECT_GE(iptv_color_ui_luma(i, 0), iptv_color_ui_luma(i - 1, 0));
+    std::uint16_t white[3];
+    iptv_color_ui_yuv(255, 255, 255, white, 0);
+    EXPECT_NEAR(white[0], 573, 1);
+    EXPECT_EQ(white[1], 512);
+    EXPECT_EQ(white[2], 512);
+    constexpr unsigned pitch = 8, sh = 4, count = pitch * sh * 3 / 2;
+    std::vector<std::uint16_t> surface(count + 8, 256);
+    ptv::VideoPanel panel;
+    panel.reset(0, 0, 1920, 1080);
+    std::fill(panel.pixels.begin(), panel.pixels.end(), 235);
+    ASSERT_TRUE(panel.composite(surface.data(), count * 2, pitch, sh, 4, 4, 10, true));
+    EXPECT_EQ(surface[0], white[0]);
+    EXPECT_EQ(surface[4], 256);
+    EXPECT_EQ(surface[pitch * sh], 512);
+    EXPECT_EQ(surface.back(), 256);
+    iptv::SubtitleCue cue;
+    cue.canvas_width = cue.canvas_height = 4;
+    iptv::SubtitleBitmap bitmap;
+    bitmap.width = bitmap.height = 4;
+    bitmap.argb.assign(16, 0x80ffffff);
+    cue.bitmaps.push_back(bitmap);
+    std::fill(surface.begin(), surface.end(), 256);
+    ASSERT_TRUE(
+        ptv::composite_subtitle_bitmaps(cue, surface.data(), count * 2, pitch, sh, 4, 4, 10, true));
+    EXPECT_EQ(surface[0], (256 * 127 + white[0] * 128 + 127) / 255);
+    EXPECT_EQ(surface[pitch * sh], (256 * 127 + 512 * 128 + 127) / 255);
+    EXPECT_EQ(surface[4], 256);
+    EXPECT_EQ(surface.back(), 256);
+}
 
 TEST(VideoPanel, CompositeKeepsPaddingAndSupportsNativeLowBitMain10)
 {

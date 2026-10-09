@@ -63,7 +63,7 @@ includes="-I$root/src -I$root/ps5/src -I$root/host -I$kit/src -I$kit/third_party
             $relative != gfx/backdrop.cpp && $relative != gfx/canvas.cpp ]] || continue
         edge "$kit/src/$relative" "-Wall -Wextra"
     done < "$root/tools/kit-sources.txt"
-    for name in iptv_catalog iptv_http iptv_source_state iptv_store iptv_user_state iptv_xtream; do
+    for name in iptv_catalog iptv_color iptv_http iptv_source_state iptv_store iptv_user_state iptv_xtream; do
         edge "$tv/src/$name.cpp" "-Wall -Wextra"
     done
     edge "$gtest/googletest/src/gtest-all.cc" "-isystem $gtest/googletest/include -I$gtest/googletest"

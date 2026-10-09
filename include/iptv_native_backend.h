@@ -7,6 +7,7 @@
 
 #include <stddef.h>
 #include <stdint.h>
+#include "iptv_color.h"
 
 #ifdef __cplusplus
 extern "C"
@@ -57,7 +58,8 @@ extern "C"
         IPTV_NATIVE_STATE_ERROR
     } iptv_native_state_t;
 
-    /* A borrowed, linear NV12/P010 picture. Only valid during the callback.
+    /* A borrowed linear NV12 picture (low-aligned 16-bit words for Main10).
+     * Only valid during the callback.
      * A consumer must copy it before returning; it owns no display resources. */
     typedef struct iptv_native_picture
     {
@@ -65,6 +67,7 @@ extern "C"
         size_t bytes;
         uint32_t pitch, surface_height, width, height, bit_depth;
         uint64_t pts_us;
+        iptv_color_info_t color;
     } iptv_native_picture_t;
 
     typedef struct iptv_native_open_config
@@ -132,6 +135,8 @@ extern "C"
         uint32_t decoder_frame_accepted;
         uint32_t software_video;
         int32_t software_video_trigger;
+        iptv_color_info_t color;
+        uint32_t hdr_output;
         uint64_t submitted_audio_frames;
         uint64_t decoded_audio_frames;
         uint64_t audio_output_grains;

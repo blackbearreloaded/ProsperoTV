@@ -30,8 +30,8 @@ bool preview_pixels(const iptv_native_picture_t &p, ImagePixels *pixels)
     {
         if (component == 1)
             return source[offset];
-        // P010 stores its ten bits in the high bits of each little-endian word.
-        return source[offset * 2 + 1];
+        // VideoDec2 returns low-aligned ten-bit words, unlike standard P010.
+        return (unsigned(source[offset * 2]) | (unsigned(source[offset * 2 + 1]) << 8)) & 1023u;
     };
     const auto byte = [](int value)
     { return static_cast<std::uint8_t>(std::clamp(value, 0, 255)); };
@@ -41,10 +41,23 @@ bool preview_pixels(const iptv_native_picture_t &p, ImagePixels *pixels)
         for (int x = 0; x < pixels->width; ++x)
         {
             const unsigned sx = unsigned(x) * p.width / unsigned(pixels->width);
-            const int yy = sample(std::size_t(sy) * p.pitch + sx) - 16;
+            const int raw_y = sample(std::size_t(sy) * p.pitch + sx);
             const std::size_t uv = luma + std::size_t(sy / 2) * p.pitch + (sx & ~1u);
-            const int u = sample(uv) - 128, v = sample(uv + 1) - 128;
+            const int raw_u = sample(uv), raw_v = sample(uv + 1);
             auto *out = pixels->rgba.data() + (std::size_t(y) * pixels->width + x) * 4;
+            if (component == 2 && (iptv_color_is_hdr10(p.color) || iptv_color_is_hlg(p.color)))
+            {
+                const float y = float(raw_y - 64) / 876, cb = float(raw_u - 512) / 896,
+                            cr = float(raw_v - 512) / 896;
+                const auto convert =
+                    iptv_color_is_hlg(p.color) ? iptv_color_hlg_to_srgb : iptv_color_pq_to_srgb;
+                convert(y + 1.4746f * cr, y - .164553f * cb - .571353f * cr, y + 1.8814f * cb, out);
+                out[3] = 255;
+                continue;
+            }
+            const unsigned shift = component == 2 ? 2 : 0;
+            const int yy = (raw_y >> shift) - 16, u = (raw_u >> shift) - 128,
+                      v = (raw_v >> shift) - 128;
             // Broadcast HD uses limited-range BT.709; SD uses BT.601.
             const bool hd = p.width >= 1280 || p.height > 576;
             out[0] = byte((298 * yy + (hd ? 459 : 409) * v + 128) >> 8);

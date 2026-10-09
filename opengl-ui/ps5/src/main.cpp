@@ -454,7 +454,8 @@ bool run_menu(ptv::Model &model, ptv::Settings *settings, const LastPlayback &la
             }
         }
         app.configure_images(
-            [&renderer](const ptv::ImagePixels &pixels) {
+            [&renderer](const ptv::ImagePixels &pixels)
+            {
                 return renderer.batch().create_texture(pixels.width, pixels.height,
                                                        pixels.rgba.data());
             },
@@ -1238,6 +1239,11 @@ int main()
         say("[TV] scripted run: the controller is not read");
         // dev/force-field-blend.txt: time the interlaced blend with any channel.
         std::string unused;
+        const bool force_sdr =
+            save::read_file(tv::storage::app_file("dev/force-sdr.txt"), &unused, 64);
+        const bool color_samples =
+            save::read_file(tv::storage::app_file("dev/color-samples.txt"), &unused, 64);
+        iptv_native_agc_set_color_test(force_sdr, color_samples);
         if (save::read_file(tv::storage::app_file("dev/force-field-blend.txt"), &unused, 64))
         {
             iptv_native_backend_force_field_blend(1);
@@ -1365,13 +1371,13 @@ int main()
             iptv_native_agc_set_osd(
                 [](void *context, void *surface, std::size_t bytes, std::uint32_t pitch,
                    std::uint32_t sh, std::uint32_t width, std::uint32_t height, std::uint32_t depth,
-                   std::uint64_t pts) -> int
+                   std::uint64_t pts, int hdr) -> int
                 {
                     const auto subtitles = iptv::player_subtitles().at(
                         pts <= INT64_MAX ? static_cast<std::int64_t>(pts) : -1);
                     return static_cast<ptv::PlaybackOsd *>(context)->draw(
                                surface, bytes, pitch, sh, width, height, depth,
-                               ptv::platform::monotonic_us(), subtitles)
+                               ptv::platform::monotonic_us(), subtitles, hdr)
                                ? 1
                                : 0;
                 },
