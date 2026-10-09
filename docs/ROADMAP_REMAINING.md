@@ -535,7 +535,7 @@ work. These changes have not been installed on a console.
 Native baseline acceptance (2026-10-08): candidate `2a46313`, disposable title
 `PPSA88266`, passed 12-second playback of synthetic TS, MP4, Matroska and
 external-rendition HLS on the verified-idle console `.30`. Each produced
-260–281 video frames and 524–563 decoded audio frames, with requested stop,
+260â€“281 video frames and 524â€“563 decoded audio frames, with requested stop,
 clean native cleanup and healthy services after title exit. All 52 uploaded
 files matched the frozen package. Evidence: `results/roadmap/console-14/validation.json`.
 The generic runner flagged the settings label `hide_failed=0`; the scoped
@@ -586,3 +586,5 @@ synchronization, switching latency and resource cost remain pending.
 - 2026-10-09 | fields | c32f6ff | .30 PPSA88292 | pass: 3105 fields,50/s,no queue gaps,max40.1ms gap,healthy teardown | ../psiptv/results/roadmap/console-54/result.json | PAFF camera
 
 - 2026-10-09 | fields | 8ef56e1 | .30 PPSA88293 | pass: PAFF hardware495 pictures/989 fields,EOF,no queue gaps,healthy teardown | ../psiptv/results/roadmap/console-55/result.json | HDR
+
+- 2026-10-09 | HDR | 7a587be | .30 PPSA88295 | pass: Main10 HDR10 output/readback,750decoded,EOF,healthy teardown | ../psiptv/results/roadmap/console-57/result.json | transitions/fallback
