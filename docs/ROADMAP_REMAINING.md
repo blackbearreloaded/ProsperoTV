@@ -827,7 +827,16 @@ so earlier pictures were never cleared and filled the title's 337 MB of
 storage: each run now keeps the list of its pictures and the next one removes
 them (`dev/clear.txt` names more).
 
+Later the same day, with a USB drive in the console and a test playlist
+served from a PC on the same network:
+
+- **USB on a real drive:** the backup was written (`ProsperoTV-backup.sqlite3`,
+  73 KB), the volume changed from 100 to 85, the restore brought it back to
+  100, and the failure report was written (`ProsperoTV-failure.txt`).
+- **Catch-up:** the guide marked the programme of the hour before as
+  "Catch-up available"; Cross on it asked the playlist's archive address for
+  exactly that hour (`start` and `end` one hour apart) and played it.
+
 Still open, each needing a person or equipment: the system keyboard itself
-(the script answers in its place), a physical USB drive for backup, restore
-and the failure report, catch-up (this provider keeps no archive), HDR on a
-display, and a second console user.
+(the script answers in its place), HDR on a display, and a second console
+user.
