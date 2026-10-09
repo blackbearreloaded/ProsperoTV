@@ -38,6 +38,7 @@ class PlaybackOsd
     void set_audio_state(const iptv_player_audio_state_t &state);
     std::optional<std::uint32_t> take_audio_selection();
     void set_subtitle_state(const iptv::SubtitleState &state);
+    void set_live_state(const iptv_player_live_state_t &state);
     std::optional<std::uint32_t> take_subtitle_selection();
     std::optional<unsigned> selected_channel() const
     {
@@ -57,6 +58,7 @@ class PlaybackOsd
     std::string current_id_, title_, now_, next_;
     bool live_ = false, list_ = false, dirty_ = true, started_ = false;
     bool audio_menu_ = false;
+    iptv_player_live_state_t history_{};
     unsigned audio_focus_ = 0;
     iptv_player_audio_state_t audio_{};
     std::optional<std::uint32_t> audio_selection_;

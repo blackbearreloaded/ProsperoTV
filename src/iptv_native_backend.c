@@ -281,9 +281,13 @@ typedef struct backend_state
     uint32_t magic;
     iptv_native_state_t state;
     _Atomic int stop_requested;
+    _Atomic int paused;
+    _Atomic int discard_input;
     _Atomic uint32_t stream_generation;
     _Atomic uint64_t presented_frame_count;
     _Atomic uint64_t presented_pts_us;
+    _Atomic uint32_t presented_generation;
+    iptv_native_picture_t pause_picture;
     const native_video_mode_t *mode;
     iptv_native_open_config_t config;
     iptv_native_telemetry_t telemetry;
@@ -338,6 +342,7 @@ typedef struct backend_state
     _Atomic int video_worker_done;
     _Atomic int video_worker_result;
     _Atomic int playback_started;
+    _Atomic int programme_draining;
     _Atomic uint64_t playback_gate_started_us;
 
     uint64_t open_started_us;
@@ -368,7 +373,7 @@ typedef struct backend_state
     uint8_t video_drained;
     uint8_t pace_active;
     uint32_t video_generation;
-    uint32_t audio_generation;
+    _Atomic uint32_t audio_generation;
 } backend_state_t;
 
 _Static_assert(sizeof(backend_state_t) <= IPTV_NATIVE_BACKEND_STORAGE_BYTES,
@@ -954,6 +959,36 @@ static int32_t audio_drain(backend_state_t *state)
     return first_result;
 }
 
+static int32_t create_aac_decoder(backend_state_t *state)
+{
+    state->audio_param =
+        (sce_audiodec_param_aac_t){sizeof(state->audio_param), AUDIODEC_WORD_S16, 1, 4, 2, 1};
+    memset(&state->audio_info, 0, sizeof(state->audio_info));
+    memset(&state->audio_au, 0, sizeof(state->audio_au));
+    memset(&state->audio_pcm_item, 0, sizeof(state->audio_pcm_item));
+    state->audio_info.size = sizeof(state->audio_info);
+    state->audio_au.size = sizeof(state->audio_au);
+    state->audio_pcm_item.size = sizeof(state->audio_pcm_item);
+    state->audio_ctrl.param = &state->audio_param;
+    state->audio_ctrl.stream_info = &state->audio_info;
+    state->audio_ctrl.au_info = &state->audio_au;
+    state->audio_ctrl.pcm_item = &state->audio_pcm_item;
+    state->audio_decoder = sceAudiodecCreateDecoder(&state->audio_ctrl, AUDIODEC_AAC);
+    return state->audio_decoder < 0 ? state->audio_decoder : 0;
+}
+
+static int32_t reset_native_audio_decoder(backend_state_t *state)
+{
+    if (state->audio_decoder < 0 || state->software_audio)
+        return 0;
+    // Recreate the AAC context so overlap and prediction state cannot cross a seek.
+    const int32_t result = sceAudiodecDeleteDecoder(state->audio_decoder);
+    if (result < 0)
+        return result;
+    state->audio_decoder = -1;
+    return create_aac_decoder(state);
+}
+
 static int32_t initialize_audio(backend_state_t *state)
 {
     if (iptv_audio_software_type(state->config.audio_stream_type))
@@ -973,18 +1008,7 @@ static int32_t initialize_audio(backend_state_t *state)
         return result;
     state->audio_library_initialized = 1;
 
-    state->audio_param =
-        (sce_audiodec_param_aac_t){sizeof(state->audio_param), AUDIODEC_WORD_S16, 1, 4, 2, 1};
-    memset(&state->audio_info, 0, sizeof(state->audio_info));
-    state->audio_info.size = sizeof(state->audio_info);
-    state->audio_au.size = sizeof(state->audio_au);
-    state->audio_pcm_item.size = sizeof(state->audio_pcm_item);
-    state->audio_ctrl.param = &state->audio_param;
-    state->audio_ctrl.stream_info = &state->audio_info;
-    state->audio_ctrl.au_info = &state->audio_au;
-    state->audio_ctrl.pcm_item = &state->audio_pcm_item;
-    state->audio_decoder = sceAudiodecCreateDecoder(&state->audio_ctrl, AUDIODEC_AAC);
-    return state->audio_decoder < 0 ? state->audio_decoder : 0;
+    return create_aac_decoder(state);
 }
 
 static int32_t release_audio(backend_state_t *state)
@@ -1401,6 +1425,8 @@ static int32_t complete_pending_presentation(backend_state_t *state)
     state->telemetry.last_presented_video_pts_us = state->pending_present_pts_us;
     atomic_store_explicit(&state->presented_pts_us, state->pending_present_pts_us,
                           memory_order_release);
+    atomic_store_explicit(&state->presented_generation, state->video_generation,
+                          memory_order_release);
     rate_now = monotonic_us();
     if (state->last_present_monotonic_us != 0)
     {
@@ -1621,6 +1647,10 @@ static int32_t present_video_output(backend_state_t *state, const videodec2_fram
     if (result != 0)
         goto failed;
     state->pending_present_pts_us = presentation_pts_us;
+    state->pause_picture = (iptv_native_picture_t){
+        output->buffer,          (size_t)output->buffer_size, output->pitch,
+        output->height,          state->config.visible_width, state->config.visible_height,
+        state->config.bit_depth, presentation_pts_us};
     state->pending_present_source = output->buffer;
     state->pending_present_from_drain = (uint8_t)(from_drain != 0);
     state->presentation_pending = 1;
@@ -1766,6 +1796,9 @@ static int media_span_ready(uint32_t count, uint64_t first, uint64_t last)
 
 static int playback_queues_ready(const backend_state_t *state)
 {
+    // A programme boundary has no more old input to fill a startup buffer.
+    if (atomic_load_explicit(&state->programme_draining, memory_order_acquire))
+        return 1;
     const uint32_t video_read =
         atomic_load_explicit(&state->video_queue_read, memory_order_acquire);
     const uint32_t video_write =
@@ -1777,16 +1810,20 @@ static int playback_queues_ready(const backend_state_t *state)
     const uint64_t gate_started_us =
         atomic_load_explicit(&state->playback_gate_started_us, memory_order_acquire);
     const uint64_t now = monotonic_us();
+    const uint32_t generation = atomic_load(&state->stream_generation);
+    const int current_audio =
+        audio_write != audio_read && atomic_load(&state->audio_generation) == generation;
     const int timed_out = gate_started_us != 0 && now >= gate_started_us &&
                           now - gate_started_us >= PLAYBACK_START_TIMEOUT_US;
     // Release on queue pressure too: the single demux producer may be blocked
     // before it can deliver the other track. Never wait for an impossible fill.
     const int pressure = video_write - video_read >= VIDEO_QUEUE_CAPACITY - 1u ||
-                         audio_write - audio_read >= AUDIO_QUEUE_CAPACITY - 1u ||
+                         (current_audio && audio_write - audio_read >= AUDIO_QUEUE_CAPACITY - 1u) ||
                          atomic_load_explicit(&state->video_queue_bytes, memory_order_acquire) >=
                              VIDEO_QUEUE_MAX_BYTES - INPUT_SLOT_BYTES;
     const int video_ready =
         video_write != video_read &&
+        state->video_queue[video_read % VIDEO_QUEUE_CAPACITY].generation == generation &&
         (timed_out || pressure ||
          media_span_ready(
              video_write - video_read,
@@ -1799,12 +1836,18 @@ static int playback_queues_ready(const backend_state_t *state)
     const uint32_t audio_samples = (audio_type == 0x03u || audio_type == 0x04u) ? 1152u
                                    : audio_type == 0x81u                        ? 1536u
                                                                                 : 1024u;
-    const int audio_ready = !audio_type || atomic_load(&state->audio_sync_pending) || timed_out ||
-                            pressure ||
-                            (audio_rate && (uint64_t)(audio_write - audio_read) * audio_samples *
-                                                   UINT64_C(1000000) / audio_rate >=
-                                               PLAYBACK_BUFFER_US);
+    const int audio_ready =
+        !audio_type || atomic_load(&state->audio_sync_pending) || timed_out || pressure ||
+        (current_audio && audio_rate &&
+         (uint64_t)(audio_write - audio_read) * audio_samples * UINT64_C(1000000) / audio_rate >=
+             PLAYBACK_BUFFER_US);
     return video_ready && audio_ready;
+}
+
+static void restart_playback_buffer(backend_state_t *state)
+{
+    atomic_store(&state->playback_gate_started_us, monotonic_us());
+    atomic_store_explicit(&state->playback_started, 0, memory_order_release);
 }
 
 static void release_queued_video(backend_state_t *state)
@@ -1827,6 +1870,47 @@ static void release_queued_video(backend_state_t *state)
     atomic_store_explicit(&state->video_queue_bytes, 0, memory_order_relaxed);
 }
 
+static int32_t pause_video(backend_state_t *state)
+{
+    if (!atomic_load(&state->paused))
+        return 0;
+    const uint64_t started = monotonic_us();
+    uint64_t redrawn = 0;
+    int32_t result = complete_pending_presentation(state);
+    if (result)
+        return result;
+    while (atomic_load(&state->paused) && !atomic_load(&state->stop_requested) &&
+           !atomic_load(&state->video_worker_stop))
+    {
+        const uint64_t now = monotonic_us();
+        const iptv_native_picture_t *picture = &state->pause_picture;
+        // The decoder is idle on this same thread, so its last picture remains
+        // valid. Redraw the OSD on the presenter's copy without counting another
+        // decoded/displayed programme frame or changing the subtitle timestamp.
+        if (picture->data && !state->config.picture && now - redrawn >= UINT64_C(100000))
+        {
+            const iptv_native_video_overlay_t overlay = {
+                state->config.codec,    picture->width,      picture->height,
+                state->frame_rate_x100, state->bitrate_kbps, 0,
+                picture->pts_us};
+            result = iptv_native_agc_present_yuv_deferred(
+                picture->data, picture->bytes, picture->pitch, picture->surface_height,
+                picture->width, picture->height, picture->bit_depth, &overlay);
+            if (!result)
+                result = iptv_native_agc_present_finish_frame();
+            if (result)
+                return atomic_load(&state->stop_requested) ? 0 : result;
+            redrawn = now;
+        }
+        (void)sceKernelUsleep(5000u);
+    }
+    if (state->pace_active)
+        state->pace_base_clock_us += monotonic_us() - started;
+    state->last_present_monotonic_us = 0;
+    state->frame_rate_window_frames = 0;
+    return 0;
+}
+
 static void *video_worker_entry(void *argument)
 {
     backend_state_t *state = argument;
@@ -1836,8 +1920,19 @@ static void *video_worker_entry(void *argument)
 
     for (;;)
     {
+        if (atomic_load(&state->paused))
+        {
+            const int32_t result = pause_video(state);
+            starved_since_us = 0;
+            if (result)
+            {
+                atomic_store(&state->video_worker_result, result);
+                break;
+            }
+        }
         if (atomic_load_explicit(&state->playback_started, memory_order_acquire) &&
-            !atomic_load(&state->video_worker_stop) && !atomic_load(&state->stop_requested))
+            !atomic_load(&state->video_worker_stop) && !atomic_load(&state->stop_requested) &&
+            !atomic_load(&state->programme_draining))
         {
             const int empty =
                 atomic_load(&state->video_queue_read) == atomic_load(&state->video_queue_write) ||
@@ -1853,22 +1948,9 @@ static void *video_worker_entry(void *argument)
                 starved_since_us = now;
             else if (now - starved_since_us >= PLAYBACK_UNDERRUN_GRACE_US)
             {
-                atomic_store(&state->playback_gate_started_us, now);
-                atomic_store_explicit(&state->playback_started, 0, memory_order_release);
+                restart_playback_buffer(state);
                 starved_since_us = 0;
             }
-        }
-        if (!atomic_load_explicit(&state->playback_started, memory_order_acquire) &&
-            !atomic_load_explicit(&state->video_worker_stop, memory_order_acquire) &&
-            !atomic_load_explicit(&state->stop_requested, memory_order_relaxed))
-        {
-            if (!playback_queues_ready(state))
-            {
-                (void)sceKernelUsleep(1000u);
-                continue;
-            }
-            state->pace_active = 0;
-            atomic_store_explicit(&state->playback_started, 1, memory_order_release);
         }
         const uint32_t read = atomic_load_explicit(&state->video_queue_read, memory_order_relaxed);
         const uint32_t write =
@@ -1878,7 +1960,8 @@ static void *video_worker_entry(void *argument)
             if (atomic_load_explicit(&state->video_worker_stop, memory_order_acquire) ||
                 atomic_load_explicit(&state->stop_requested, memory_order_relaxed))
                 break;
-            if (had_data && !empty_reported)
+            if (had_data && !empty_reported && atomic_load(&state->playback_started) &&
+                !atomic_load(&state->programme_draining))
             {
                 ++state->telemetry.video_queue_underruns;
                 empty_reported = 1;
@@ -1915,8 +1998,25 @@ static void *video_worker_entry(void *argument)
                 break;
             }
             discard_pending_video(state);
+            state->pause_picture = (iptv_native_picture_t){0};
             state->pace_active = 0;
             state->video_generation = generation;
+            // Old entries must be discarded before waiting for fresh media.
+            // A seek to live needs the same cushion as initial playback.
+            restart_playback_buffer(state);
+            starved_since_us = 0;
+        }
+        if (!atomic_load_explicit(&state->playback_started, memory_order_acquire) &&
+            !atomic_load_explicit(&state->video_worker_stop, memory_order_acquire) &&
+            !atomic_load_explicit(&state->stop_requested, memory_order_relaxed))
+        {
+            if (!playback_queues_ready(state))
+            {
+                (void)sceKernelUsleep(1000u);
+                continue;
+            }
+            state->pace_active = 0;
+            atomic_store_explicit(&state->playback_started, 1, memory_order_release);
         }
         const int32_t result =
             submit_coded_frame(state, item->data, bytes, item->pts_us, item->displayable);
@@ -1995,9 +2095,13 @@ static int32_t queue_coded_frame(backend_state_t *state, const void *coded_frame
     uint32_t read;
     uint32_t write;
     uint64_t queued_bytes;
+    const uint32_t generation =
+        atomic_load_explicit(&state->stream_generation, memory_order_acquire);
 
     for (;;)
     {
+        if (atomic_load_explicit(&state->discard_input, memory_order_acquire))
+            return 0;
         const int32_t worker_result =
             atomic_load_explicit(&state->video_worker_result, memory_order_acquire);
         if (worker_result != 0)
@@ -2023,7 +2127,7 @@ static int32_t queue_coded_frame(backend_state_t *state, const void *coded_frame
     video_queue_item_t *item = &state->video_queue[write % VIDEO_QUEUE_CAPACITY];
     item->pts_us = pts_us;
     item->bytes = (uint32_t)frame_bytes;
-    item->generation = atomic_load_explicit(&state->stream_generation, memory_order_acquire);
+    item->generation = generation;
     item->displayable = displayable ? 1u : 0u;
     item->data = copy;
     queued_bytes =
@@ -2226,6 +2330,25 @@ failed:
     return result;
 }
 
+// Positive waits, negative discards an old audio frame, zero starts playback.
+static int audio_sync_action(const backend_state_t *state, uint64_t pts, uint64_t waited_us)
+{
+    if (atomic_load(&state->audio_worker_stop) || waited_us >= UINT64_C(30000000))
+        return 0;
+    // A rewind's audio cannot align against the picture from before the seek.
+    if (atomic_load_explicit(&state->presented_generation, memory_order_acquire) !=
+        atomic_load_explicit(&state->stream_generation, memory_order_acquire))
+        return 1;
+    const uint64_t video_pts = atomic_load_explicit(&state->presented_pts_us, memory_order_acquire);
+    if (pts == UINT64_MAX || video_pts == UINT64_MAX)
+        return 0;
+    if (pts > video_pts && pts - video_pts > UINT64_C(50000))
+        return 1;
+    if (video_pts > pts && video_pts - pts > UINT64_C(100000))
+        return -1;
+    return 0;
+}
+
 static void *audio_worker_entry(void *argument)
 {
     backend_state_t *state = argument;
@@ -2238,11 +2361,10 @@ static void *audio_worker_entry(void *argument)
         if (atomic_load_explicit(&state->stop_requested, memory_order_relaxed) ||
             atomic_load_explicit(&state->audio_worker_discard, memory_order_acquire))
             break;
-        if (!atomic_load_explicit(&state->playback_started, memory_order_acquire) &&
-            !atomic_load_explicit(&state->audio_worker_stop, memory_order_acquire))
+        if (atomic_load(&state->paused) && !atomic_load(&state->audio_worker_stop))
         {
-            // The video worker owns the common A/V buffering gate.
-            (void)sceKernelUsleep(1000u);
+            sync_started = 0;
+            (void)sceKernelUsleep(5000u);
             continue;
         }
         const uint32_t read = atomic_load_explicit(&state->audio_queue_read, memory_order_relaxed);
@@ -2252,7 +2374,8 @@ static void *audio_worker_entry(void *argument)
         {
             if (atomic_load_explicit(&state->audio_worker_stop, memory_order_acquire))
                 break;
-            if (had_data && !empty_reported)
+            if (had_data && !empty_reported && atomic_load(&state->playback_started) &&
+                !atomic_load(&state->programme_draining))
             {
                 ++state->telemetry.audio_queue_underruns;
                 empty_reported = 1;
@@ -2271,6 +2394,12 @@ static void *audio_worker_entry(void *argument)
         }
         if (state->audio_generation != generation)
         {
+            const int32_t reset = reset_native_audio_decoder(state);
+            if (reset < 0)
+            {
+                atomic_store_explicit(&state->audio_worker_result, reset, memory_order_release);
+                break;
+            }
             mp3dec_init(&state->mp2_decoder);
             iptv_audio_decoder_reset(state->software_audio);
             state->audio_staged_bytes = 0;
@@ -2279,31 +2408,34 @@ static void *audio_worker_entry(void *argument)
             state->audio_sink.input_index = 0;
             state->audio_sink.next_output_position = 0;
             state->audio_generation = generation;
+            sync_started = 0;
+        }
+        if (!atomic_load_explicit(&state->playback_started, memory_order_acquire) &&
+            !atomic_load_explicit(&state->programme_draining, memory_order_acquire) &&
+            !atomic_load_explicit(&state->audio_worker_stop, memory_order_acquire))
+        {
+            // Drain stale entries before waiting, so they cannot fill the queue
+            // and block the producer from delivering the new video's buffer.
+            (void)sceKernelUsleep(1000u);
+            continue;
         }
         if (atomic_load(&state->audio_sync_pending))
         {
-            const uint64_t video_pts =
-                atomic_load_explicit(&state->presented_pts_us, memory_order_acquire);
             const uint64_t now = monotonic_us();
             if (!sync_started)
                 sync_started = now;
             // Track changes reach the demuxer ahead of the displayed picture.
             // Wait for video to catch up, bounded for broken/missing timestamps.
-            if (!atomic_load_explicit(&state->audio_worker_stop, memory_order_acquire) &&
-                item->pts_us != UINT64_MAX && video_pts != UINT64_MAX &&
-                now - sync_started < UINT64_C(30000000))
+            const int sync = audio_sync_action(state, item->pts_us, now - sync_started);
+            if (sync > 0)
             {
-                if (item->pts_us > video_pts && item->pts_us - video_pts > UINT64_C(50000))
-                {
-                    (void)sceKernelUsleep(1000u);
-                    continue;
-                }
-                if (video_pts > item->pts_us && video_pts - item->pts_us > UINT64_C(100000))
-                {
-                    atomic_store_explicit(&state->audio_queue_read, read + 1u,
-                                          memory_order_release);
-                    continue;
-                }
+                (void)sceKernelUsleep(1000u);
+                continue;
+            }
+            if (sync < 0)
+            {
+                atomic_store_explicit(&state->audio_queue_read, read + 1u, memory_order_release);
+                continue;
             }
             atomic_store(&state->audio_sync_pending, 0);
         }
@@ -2381,6 +2513,10 @@ int32_t iptv_native_backend_submit_audio(iptv_native_backend_t *backend, const v
         return IPTV_NATIVE_E_ARGUMENT;
     if (state->state != IPTV_NATIVE_STATE_OPEN || state->drain_started)
         return IPTV_NATIVE_E_STATE;
+    const uint32_t generation =
+        atomic_load_explicit(&state->stream_generation, memory_order_acquire);
+    if (atomic_load_explicit(&state->discard_input, memory_order_acquire))
+        return 0;
     const int mp2 =
         state->config.audio_stream_type == 0x03u || state->config.audio_stream_type == 0x04u;
     if (!state->config.enable_audio)
@@ -2440,6 +2576,8 @@ int32_t iptv_native_backend_submit_audio(iptv_native_backend_t *backend, const v
 
     for (;;)
     {
+        if (atomic_load_explicit(&state->discard_input, memory_order_acquire))
+            return 0;
         read = atomic_load_explicit(&state->audio_queue_read, memory_order_acquire);
         write = atomic_load_explicit(&state->audio_queue_write, memory_order_relaxed);
         if (write - read < AUDIO_QUEUE_CAPACITY)
@@ -2455,7 +2593,7 @@ int32_t iptv_native_backend_submit_audio(iptv_native_backend_t *backend, const v
     atomic_store(&state->audio_queue_sample_rate, rate);
     item->pts_us = pts_us;
     item->bytes = (uint32_t)frame_bytes;
-    item->generation = atomic_load_explicit(&state->stream_generation, memory_order_acquire);
+    item->generation = generation;
     memcpy(item->data, adts_frame, frame_bytes);
     atomic_store_explicit(&state->audio_queue_write, write + 1u, memory_order_release);
     if (write - read + 1u > state->telemetry.audio_queue_max_frames)
@@ -2474,6 +2612,43 @@ int32_t iptv_native_backend_disable_audio(iptv_native_backend_t *backend)
     if (!state->config.enable_audio)
         return 0;
     return disable_audio_internal(state, IPTV_NATIVE_E_AUDIO_FRAME);
+}
+
+int32_t iptv_native_backend_programme_boundary(iptv_native_backend_t *backend)
+{
+    backend_state_t *state = state_from(backend);
+    if (!state || state->magic != BACKEND_MAGIC)
+        return IPTV_NATIVE_E_ARGUMENT;
+    if (state->state != IPTV_NATIVE_STATE_OPEN || state->drain_started)
+        return IPTV_NATIVE_E_STATE;
+    int32_t result = 0;
+    uint64_t started = monotonic_us();
+    atomic_store_explicit(&state->programme_draining, 1, memory_order_release);
+    while (atomic_load(&state->video_queue_read) != atomic_load(&state->video_queue_write) ||
+           (atomic_load(&state->audio_buffer_type) &&
+            atomic_load(&state->audio_queue_read) != atomic_load(&state->audio_queue_write)))
+    {
+        // The main/control thread remains active while this demux thread waits.
+        // A seek or stop discards this boundary; a pause retains it until resume.
+        if (atomic_load(&state->discard_input) || atomic_load(&state->stop_requested))
+            break;
+        result = atomic_load(&state->video_worker_result);
+        if (!result && atomic_load(&state->audio_buffer_type))
+            result = atomic_load(&state->audio_worker_result);
+        if (result)
+            break;
+        const uint64_t now = monotonic_us();
+        if (atomic_load(&state->paused))
+            started = now;
+        else if (now - started > UINT64_C(30000000))
+        {
+            result = IPTV_NATIVE_E_STATE;
+            break;
+        }
+        (void)sceKernelUsleep(1000u);
+    }
+    atomic_store_explicit(&state->programme_draining, 0, memory_order_release);
+    return result;
 }
 
 int32_t iptv_native_backend_select_audio(iptv_native_backend_t *backend, uint32_t stream_type)
@@ -2521,7 +2696,47 @@ int32_t iptv_native_backend_discontinuity(iptv_native_backend_t *backend)
     if (state->state != IPTV_NATIVE_STATE_OPEN || state->drain_started)
         return IPTV_NATIVE_E_STATE;
     atomic_fetch_add_explicit(&state->stream_generation, 1u, memory_order_acq_rel);
+    atomic_store(&state->audio_sync_pending, state->config.enable_audio != 0);
+    atomic_store_explicit(&state->discard_input, 0, memory_order_release);
     return 0;
+}
+
+void iptv_native_backend_set_paused(iptv_native_backend_t *backend, int paused)
+{
+    backend_state_t *state = state_from(backend);
+    if (state && state->magic == BACKEND_MAGIC)
+        atomic_store_explicit(&state->paused, paused != 0, memory_order_release);
+}
+int iptv_native_backend_paused(const iptv_native_backend_t *backend)
+{
+    const backend_state_t *state = const_state_from(backend);
+    return state && state->magic == BACKEND_MAGIC && atomic_load(&state->paused);
+}
+void iptv_native_backend_request_reposition(iptv_native_backend_t *backend)
+{
+    backend_state_t *state = state_from(backend);
+    if (state && state->magic == BACKEND_MAGIC && state->state == IPTV_NATIVE_STATE_OPEN)
+    {
+        atomic_store_explicit(&state->discard_input, 1, memory_order_release);
+        atomic_fetch_add_explicit(&state->stream_generation, 1u, memory_order_acq_rel);
+        atomic_store_explicit(&state->paused, 0, memory_order_release);
+    }
+}
+uint64_t iptv_native_backend_presented_pts(const iptv_native_backend_t *backend)
+{
+    const backend_state_t *state = const_state_from(backend);
+    if (!state || state->magic != BACKEND_MAGIC)
+        return UINT64_MAX;
+    const uint32_t generation =
+        atomic_load_explicit(&state->stream_generation, memory_order_acquire);
+    if (atomic_load_explicit(&state->discard_input, memory_order_acquire) ||
+        atomic_load_explicit(&state->presented_generation, memory_order_acquire) != generation)
+        return UINT64_MAX;
+    const uint64_t pts = atomic_load_explicit(&state->presented_pts_us, memory_order_acquire);
+    return atomic_load_explicit(&state->stream_generation, memory_order_acquire) == generation &&
+                   !atomic_load_explicit(&state->discard_input, memory_order_acquire)
+               ? pts
+               : UINT64_MAX;
 }
 
 void iptv_native_backend_request_stop(iptv_native_backend_t *backend)
@@ -2783,9 +2998,47 @@ int32_t iptv_native_backend_close(iptv_native_backend_t *backend)
 #ifdef IPTV_NATIVE_BACKEND_STATE_TEST
 static int test_volume_calls, test_volume_left, test_volume_right;
 static int test_control_polls, test_join_calls;
+static int test_audio_creates, test_audio_deletes, test_audio_deleted_handle;
+static int test_audio_create_result = 51, test_audio_delete_result;
+static iptv_native_backend_t *test_reposition_on_sleep;
+static backend_state_t *test_programme_drain_on_sleep;
+static unsigned test_programme_drain_steps;
+int sceAudiodecCreateDecoder(sce_audiodec_ctrl_t *ctrl, uint32_t codec_type)
+{
+    assert(codec_type == AUDIODEC_AAC);
+    assert(ctrl->param && ctrl->stream_info && ctrl->au_info && ctrl->pcm_item);
+    assert(!ctrl->au_info->address && !ctrl->au_info->length);
+    assert(!ctrl->pcm_item->address && !ctrl->pcm_item->length);
+    ++test_audio_creates;
+    return test_audio_create_result;
+}
+int sceAudiodecDeleteDecoder(int handle)
+{
+    test_audio_deleted_handle = handle;
+    ++test_audio_deletes;
+    return test_audio_delete_result;
+}
 int sceKernelUsleep(uint32_t microseconds)
 {
     (void)microseconds;
+    if (test_programme_drain_on_sleep)
+    {
+        backend_state_t *state = test_programme_drain_on_sleep;
+        assert(atomic_load(&state->programme_draining));
+        assert(playback_queues_ready(state));
+        if (++test_programme_drain_steps == 1)
+            atomic_store(&state->video_queue_read, atomic_load(&state->video_queue_write));
+        else
+        {
+            atomic_store(&state->audio_queue_read, atomic_load(&state->audio_queue_write));
+            test_programme_drain_on_sleep = NULL;
+        }
+    }
+    if (test_reposition_on_sleep)
+    {
+        iptv_native_backend_request_reposition(test_reposition_on_sleep);
+        test_reposition_on_sleep = NULL;
+    }
     return 0;
 }
 int scePthreadJoin(void *thread, void **result)
@@ -2817,6 +3070,72 @@ int sceAudioOutSetVolume(int handle, int flags, const int *volumes)
 
 int main(void)
 {
+    backend_state_t audio_reset = {0};
+    audio_reset.audio_decoder = 43;
+    audio_reset.audio_au.address = audio_reset.audio_pcm;
+    audio_reset.audio_au.length = 64;
+    audio_reset.audio_pcm_item.address = audio_reset.audio_pcm;
+    audio_reset.audio_pcm_item.length = 4096;
+    assert(reset_native_audio_decoder(&audio_reset) == 0);
+    assert(test_audio_deleted_handle == 43 && audio_reset.audio_decoder == 51);
+    assert(test_audio_deletes == 1 && test_audio_creates == 1);
+    test_audio_delete_result = -101;
+    assert(reset_native_audio_decoder(&audio_reset) == -101);
+    assert(audio_reset.audio_decoder == 51 && test_audio_creates == 1);
+    test_audio_delete_result = 0;
+    test_audio_create_result = -102;
+    assert(reset_native_audio_decoder(&audio_reset) == -102);
+    assert(audio_reset.audio_decoder == -102 && test_audio_creates == 2);
+    assert(reset_native_audio_decoder(&audio_reset) == 0); // No native context to reset.
+    assert(test_audio_deletes == 3);
+    audio_reset.audio_decoder = 52;
+    audio_reset.software_audio = (iptv_audio_decoder_t *)(uintptr_t)1;
+    assert(reset_native_audio_decoder(&audio_reset) == 0); // Software fallback owns its reset.
+    assert(audio_reset.audio_decoder == 52 && test_audio_deletes == 3);
+    iptv_native_backend_t seeking = {0};
+    assert(iptv_native_backend_init(&seeking) == 0);
+    backend_state_t *seek = state_from(&seeking);
+    // Restoring history before the replacement decoder opens has no old
+    // submissions to cancel. No discontinuity callback will clear this flag.
+    iptv_native_backend_request_reposition(&seeking);
+    assert(!atomic_load(&seek->discard_input));
+    assert(atomic_load(&seek->stream_generation) == 1);
+    atomic_store(&seek->stream_generation, 0);
+    seek->magic = BACKEND_MAGIC;
+    seek->state = IPTV_NATIVE_STATE_OPEN;
+    seek->config.enable_audio = 1;
+    seek->video_queue = calloc(VIDEO_QUEUE_CAPACITY, sizeof(*seek->video_queue));
+    assert(seek->video_queue);
+    atomic_store(&seek->presented_pts_us, 123456);
+    assert(iptv_native_backend_presented_pts(&seeking) == 123456);
+    iptv_native_backend_set_paused(&seeking, 1);
+    assert(iptv_native_backend_paused(&seeking));
+    // A seek must release the demuxer even if pause filled the decoder queue.
+    atomic_store(&seek->video_queue_write, VIDEO_QUEUE_CAPACITY);
+    test_reposition_on_sleep = &seeking;
+    const uint8_t frame[] = {0, 0, 1, 0x65};
+    assert(queue_coded_frame(seek, frame, sizeof(frame), 123456, 1) == 0);
+    assert(!test_reposition_on_sleep && !iptv_native_backend_paused(&seeking));
+    assert(atomic_load(&seek->discard_input));
+    assert(atomic_load(&seek->video_queue_write) == VIDEO_QUEUE_CAPACITY);
+    assert(atomic_load(&seek->stream_generation) == 1);
+    assert(iptv_native_backend_presented_pts(&seeking) == UINT64_MAX);
+    assert(iptv_native_backend_discontinuity(&seeking) == 0);
+    assert(!atomic_load(&seek->discard_input) && atomic_load(&seek->audio_sync_pending));
+    assert(audio_sync_action(seek, 100000, 0) == 1); // Old picture cannot release rewound audio.
+    assert(iptv_native_backend_presented_pts(&seeking) == UINT64_MAX);
+    atomic_store(&seek->presented_generation, 2);
+    assert(iptv_native_backend_presented_pts(&seeking) == 123456);
+    assert(audio_sync_action(seek, 100000, 0) == 0);
+    assert(audio_sync_action(seek, 200000, 0) == 1);
+    assert(audio_sync_action(seek, 0, 0) == -1);
+    assert(audio_sync_action(seek, 200000, 30000000) == 0); // Bad timestamps stay bounded.
+    atomic_store(&seek->video_queue_write, 0);
+    assert(queue_coded_frame(seek, frame, sizeof(frame), 100000, 1) == 0);
+    assert(seek->video_queue[0].generation == 2);
+    assert(seek->video_queue[0].pts_us == 100000);
+    release_queued_video(seek);
+    free(seek->video_queue);
     backend_state_t draining = {0};
     draining.video_thread = &draining;
     draining.config.poll_controls = test_drain_controls;
@@ -2872,8 +3191,55 @@ int main(void)
     atomic_store(&gate.audio_buffer_type, 0x0f);
     atomic_store(&gate.playback_gate_started_us, monotonic_us() - PLAYBACK_START_TIMEOUT_US);
     assert(playback_queues_ready(&gate)); // Bounded fallback for bad timestamps.
+    // A live seek must not reuse the old gate deadline or old audio pressure.
+    atomic_store(&gate.playback_started, 1);
+    atomic_store(&gate.stream_generation, 1);
+    atomic_store(&gate.audio_sync_pending, 1);
+    gate.video_queue[0].generation = gate.video_queue[1].generation = 1;
+    atomic_store(&gate.video_queue[1].pts_us, 40000);
+    atomic_store(&gate.audio_queue_write, AUDIO_QUEUE_CAPACITY - 1);
+    restart_playback_buffer(&gate);
+    assert(!atomic_load(&gate.playback_started));
+    assert(!playback_queues_ready(&gate)); // Stale audio can drain while video waits.
+    atomic_store(&gate.audio_generation, 1);
+    assert(playback_queues_ready(&gate)); // Fresh queue pressure still releases the producer.
+    atomic_store(&gate.audio_queue_write, 2);
+    assert(!playback_queues_ready(&gate));
+    atomic_store(&gate.video_queue[1].pts_us, PLAYBACK_BUFFER_US);
+    assert(playback_queues_ready(&gate)); // Fresh video has its full startup cushion.
+    atomic_store(&gate.stream_generation, 2);
+    assert(!playback_queues_ready(&gate)); // Another seek invalidates the queued window.
     free(gate.audio_queue);
     free(gate.video_queue);
+    iptv_native_backend_t programme_backend;
+    assert(iptv_native_backend_init(&programme_backend) == 0);
+    backend_state_t *programme = state_from(&programme_backend);
+    programme->state = IPTV_NATIVE_STATE_OPEN;
+    atomic_store(&programme->video_queue_write, 2);
+    atomic_store(&programme->audio_queue_write, 3);
+    atomic_store(&programme->audio_buffer_type, 0x0f);
+    test_programme_drain_on_sleep = programme;
+    assert(iptv_native_backend_programme_boundary(&programme_backend) == 0);
+    assert(test_programme_drain_steps == 2); // Wait for both queues, not just video.
+    assert(!atomic_load(&programme->programme_draining));
+    atomic_store(&programme->paused, 1);
+    atomic_store(&programme->video_queue_write, 4);
+    test_reposition_on_sleep = &programme_backend;
+    assert(iptv_native_backend_programme_boundary(&programme_backend) == 0);
+    assert(atomic_load(&programme->video_queue_read) == 2); // Seek cancels a paused barrier.
+    assert(!atomic_load(&programme->programme_draining));
+    atomic_store(&programme->discard_input, 0);
+    atomic_store(&programme->video_worker_result, -7);
+    assert(iptv_native_backend_programme_boundary(&programme_backend) == -7);
+    assert(!atomic_load(&programme->programme_draining));
+    atomic_store(&programme->stop_requested, 1);
+    assert(iptv_native_backend_programme_boundary(&programme_backend) == 0);
+    atomic_store(&programme->stop_requested, 0);
+    atomic_store(&programme->video_worker_result, 0);
+    atomic_store(&programme->video_queue_read, 4);
+    atomic_store(&programme->audio_queue_write, 6);
+    atomic_store(&programme->audio_buffer_type, 0);
+    assert(iptv_native_backend_programme_boundary(&programme_backend) == 0);
     pending_pts_t pending = {0};
     uint64_t pts_us;
     int displayable;

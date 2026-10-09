@@ -25,6 +25,8 @@ typedef enum {
     IPTV_INPUT_DOWN,
     IPTV_INPUT_LEFT,
     IPTV_INPUT_RIGHT,
+    IPTV_INPUT_PLAY_PAUSE,
+    IPTV_INPUT_GO_LIVE,
     IPTV_INPUT_COUNT
 } iptv_input_action_t;
 

@@ -29,6 +29,7 @@ typedef struct iptv_vp9_frame_flags {
     uint8_t show_frame;
     uint8_t show_existing_frame;
     uint8_t displayable;
+    uint8_t keyframe;
 } iptv_vp9_frame_flags_t;
 
 /* Splits a raw coded packet using the standard trailing VP9 superframe index.

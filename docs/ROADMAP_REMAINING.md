@@ -10,17 +10,12 @@ and relevant checks work.
 | --- | --- | --- |
 | Local TV sources | Add HDHomeRun and Tvheadend servers, browse and play their channels | Implemented; host checks, PS5 build and console fixture playback pass; physical tuner untested |
 | Phone source management | Add and edit saved playlists/accounts through the paired browser | Implemented; HTTP, persistence, mobile browser and native paired-source acceptance pass |
-| Zapping | Next, previous and previously watched channel during playback | Pending |
-| Playback channel list | Select a channel from a list over the playing video | Pending |
-| Channel banner | Brief channel/guide banner on tune and on request | Pending |
-| Local TV sources | Add HDHomeRun and Tvheadend servers, browse and play their channels | Implemented; host checks and PS5 build pass, console case pending |
-| Phone source management | Add and edit saved playlists/accounts through the paired browser | Implemented; HTTP, persistence and mobile browser checks pass, console case pending |
 | Zapping | Next, previous and previously watched channel during playback | Implemented; 140 UI sanitizer tests and PS5 build pass; console case pending |
 | Playback channel list | Select a channel from a list over the playing video | Implemented; host input/render checks and PS5 build pass; console case pending |
 | Channel banner | Brief channel/guide banner on tune and on request | Implemented; mapped guide, timing and rendered image checks pass; console case pending |
 | Audio/subtitles | Select available language tracks and render subtitles | Embedded/HLS audio and container/DVB/WebVTT subtitles implemented with host checks; live-provider and native acceptance pending |
 | Sleep timer | Stop playback at a selected deadline | Implemented; 134 UI sanitizer tests and PS5 build pass; console case pending |
-| Live pause/rewind | Pause and replay several minutes of the current live channel | Pending |
+| Live pause/rewind | Pause and replay several minutes of the current live channel | Implemented for TS/HLS and direct VP9 WebM; 119 core tests, media/subtitle checks, PS5 build and native controls/expiry/format-change cases pass; native caption visibility and subjective sync remain acceptance checks |
 | Deinterlacing | Preserve field-rate motion on interlaced broadcast video | Pending |
 | HDR | Preserve HDR metadata and output HDR on compatible displays | Pending |
 | Multiview | Two or four simultaneous channels, within measured decoder limits | Pending |
@@ -33,6 +28,177 @@ and relevant checks work.
 Completion also requires host checks, a PS5 build, bounded testing on an idle
 192.168.4.30 or 192.168.4.40, an updated deliverable, and a pull request. Console
 tests retain the workspace lock and sandbox-only test-title protocol.
+
+## Live pause and rewind foundations
+
+The transport history retains up to five minutes or 512 MiB, whichever limit is
+reached first. It indexes one selected video clock, handles timestamp wrap and
+provider timeline resets, and seeks to random-access packets when available.
+When those flags are absent, it starts earlier so the stream parser can find a
+decodable picture. Reads copy bytes while holding the history lock, preventing
+network writes from replacing data still being parsed. Expired positions are
+reported explicitly.
+
+History storage now uses its own bounded anonymous mapping instead of allocating
+512 MiB from the application's 512 MiB heap. Its lifetime remains scoped to the
+history owner, and allocation failure leaves it unavailable. All six existing
+history tests pass under ASan/UBSan with the mapped storage, and the native
+application build passes. Foreground integration and hardware acceptance remain
+pending for this change.
+
+Native control primitives pause both workers, redraw the frozen picture for the
+overlay, and adjust video pacing on resume. Repositioning releases submissions
+blocked by full queues and discards packets from the previous playback
+generation. Audio waits for a picture from the new generation before aligning
+its timestamps. Foreground integration is now being implemented on the local
+timeshift branch; no console installation or functional acceptance is claimed.
+
+The 93-test core sanitizer suite includes six history tests covering fragmented
+input, time/byte limits, overwrite detection, clock wrap, multiple programme
+clocks, unflagged seeking and concurrent download/playback. All 29 tooling tests
+pass, including native full-queue cancellation and audio alignment checks.
+The final application-only PS5 cross-build also passes; its local executable
+SHA-256 is `4e769dcb7ba6cf7fb65accaf5e10d2e62174ccb4bd4c4260699048bb01fc0de0`.
+This checkpoint has not been packaged or installed on a console.
+The transport reposition API now restores the retained video's extended clock
+and resets parser buffers and subtitle timing. A regression replays forwards and
+backwards across two timestamp wraps, including an exact wrap, and checks the
+video, audio and subtitle timestamps without reopening the decoder. All 95 core
+tests pass under ASan/UBSan on the VOD-fixes baseline. The native application
+also compiles and links with the reposition API.
+
+The foreground transport path now copies arriving input into history while the
+decoder is paused. It has controller and phone requests for pause/resume,
+30-second seeks and return to live, plus a paused/behind-live banner. The
+channel and track menus retain their own directional controls; playback-only
+phone actions are ignored by the main menu. A provider timeline boundary
+expires the old bytes even when the replacement stream uses identical timestamps.
+Pause-aware progress checks keep an intentionally frozen picture from triggering
+the normal video-stall watchdog. History allocation failure falls back to ordinary
+playback.
+
+The stream parser now retains parameter sets by their codec IDs, capped at
+64 KiB, and supplies missing sets with the first random-access picture after a
+reset. The combined picture and setup must fit the existing access-unit limit.
+Real H.264 and HEVC regression fixtures remove the keyframe's headers, pass it
+through reposition, then decode it in a fresh host decoder and compare its pixels
+with the original. The 97-test core and 20-test media sanitizer suites and PS5
+application build pass. Historical configuration retention is described below;
+native decoder acceptance is still pending.
+
+Same-timeline subtitle seeks now rebuild the selected decoder from retained raw
+packets. Retention covers the five-minute video window plus the maximum cue
+duration, while preserving the 2,048-packet and 16 MiB bounds. Repeated transport
+and WebVTT packets are deduplicated; provider timeline resets clear old captions.
+Text, language/Off selection, DVB bitmap replay and timed clearing pass in the
+21-test media/subtitle sanitizer suite, and the PS5 application builds. Ordering
+between new provider timelines and subtitles downloaded ahead of demux still
+needs validation.
+
+Repeated seek requests now accumulate from the pending target until a picture
+from the new decoder timeline arrives. Old generations and frames discarded
+during reset cannot acknowledge that target. Controls and parser reposition
+share their existing owner mutex; pause/seek input is applied in event order,
+and a pause requested after a seek is preserved through the parser reset.
+The 99-test core sanitizer suite covers queued/in-flight targets, actual
+keyframe acknowledgement, moving retention bounds and arithmetic limits. The
+native queue-state host check and full-assembly PS5 application build also pass.
+Responsiveness and presentation timing still require console acceptance.
+
+Decoder configuration snapshots now preserve parameter IDs across previously
+decoded history. They retain the five-minute window and its preceding setup,
+bounded by 256 snapshots and a 4 MiB payload/table budget. Expiry moves the
+transport seek boundary with the configuration boundary; a provider reset
+cannot apply the old timeline's boundary to new bytes. Snapshot allocation uses
+the native build's non-throwing path and failure expires optional history.
+Pictures now select their timestamp at the first VCL NAL, preventing delimiters
+left from the previous PES from assigning the previous picture's time.
+
+The configuration tests replay both directions across real H.264 and HEVC setup
+changes, strip in-band headers, and compare pixels decoded by fresh decoders.
+They also cover bounded retention, rejected expired seeks, untimed changes and
+provider resets. This applies to compatible decoder formats: resolution/profile
+changes still require decoder reopen work.
+All 103 core and 21 media/subtitle sanitizer tests and the application-only PS5
+build pass at 289d250. No native configuration-replay acceptance is claimed.
+
+Forward seeks now scan skipped retained bytes in bounded chunks before resetting
+the decoder. Scanning retains configuration changes without submitting video or
+audio, flushes the last pending picture at the target boundary, and yields to
+new controls between chunks. Copies carry their timeline generation so a
+concurrent provider reset cannot feed bytes from a different timeline. The
+watchdog excludes this intentional scan. All 105 core and 21 media/subtitle
+sanitizer tests and the application-only PS5 build pass at 1c8e33e; the core
+regression also checks a configuration change held in the final pending picture.
+
+This remains incomplete: provider timeline/subtitle ordering, direct WebM live
+playback and native pause/rewind/expiry, synchronization
+and resource acceptance still need work. The earlier 146-test UI sanitizer suite,
+13 phone remote integration tests, native queue-state host check and PS5
+application build pass. The foreground changes
+have a frozen earlier test package (446ca92, PPSA88273). Case31 launched on .30
+and rendered the pairing screen, but its code expired before the playback
+controls connected, leaving native timeshift acceptance inconclusive.
+No timeshift PR is open.
+
+Case32 installed the forward-scan build as PPSA88274 and paired successfully.
+The synthetic playlist played for 155 seconds (3,797 presented pictures,
+7,155 decoded audio frames, clean player teardown), but history never became
+available. The channel request used the reconnect flag to enable history;
+custom playlists intentionally do not reconnect automatically. Live requests
+now carry a separate flag, enabled for channel playback and disabled for movies
+and archived programmes.
+All 146 UI sanitizer tests and the PS5 application-only build pass. The request
+tests distinguish a playlist channel, a movie, a past programme and the currently
+airing programme. Evidence: `../psiptv/results/roadmap/timeshift-live-result.json`.
+
+Case33 (c6e6afb, PPSA88275) validates native custom-playlist pause/resume,
+cumulative rewind, forward seek and return to live. Presentation stayed fixed
+for a 20-second pause while history advanced, and remained within 0.72 seconds
+of the buffered live position after returning. The app returned to browsing and
+exited cleanly with healthy services. All 52 installed file hashes matched.
+The receipt has 1,985 presented frames and 3,741 decoded audio frames; three
+audio and two video queue underruns occurred across transitions. Their impact,
+audio/subtitle synchronization, expiry, changing formats and 4K/HEVC history
+remain unverified. Evidence: `../psiptv/results/roadmap/console-33/result.json`.
+
+Native AAC now recreates its decoder when the audio timeline changes, matching
+the existing software-decoder reset. The ASan/UBSan state regression covers
+success, stale-buffer clearing, delete/create failures and software fallback;
+the PS5 application build passes. Case34 (f442b03, PPSA88276) confirms all four
+seek commands created fresh AAC contexts, with 1,957 presented pictures, 3,690
+decoded audio frames and clean teardown. Three audio/three video queue gaps
+remain; audible impact and A/V synchronization are not proven by these checks.
+Evidence: `../psiptv/results/roadmap/console-34/result.json`.
+
+Download-history replay foundation (8eb5e7e): a playback parser can now restore
+configuration from an independent download parser, without retaining pointers
+into its lifetime. Missing, expired and not-yet-scanned positions are rejected
+before playback resets. A successful restore replaces stale local configuration
+history; older positions still require the download parser's history.
+The regression overwrites unread configuration headers in a small transport ring
+while playback remains paused, then resumes headerless pictures with the correct
+configuration. All 107 core checks pass with explicit ASan/UBSan flags. The real
+H.264/HEVC replay test also passes under sanitizers, comparing decoded pixels
+across both local and independent-parser restoration.
+The application-only PS5 build passes at 8eb5e7e; no new console package was
+installed. Evidence: `../psiptv/results/roadmap/timeshift-download-result.json`.
+StreamRunner now retains metadata on download (e0c3ec8), before transport bytes
+expire. Case35 validates native pause expiry/recovery and basic seeking. Historical
+settings also initialize a fresh parser after programme/codec headers expire
+(46a2196); 111 core and 21 real-media/subtitle sanitizer tests and the PS5 build
+pass. Native changing-format and timing acceptance remain open.
+
+- 2026-10-08 | rewind | 4c63161 | host/PS5 build | partial-pass: mapped history and clock replay | ../psiptv/results/roadmap/timeshift-clock-native-result.json | integrate foreground controls
+- 2026-10-08 | rewind | ec377c9 | host/PS5 build | partial-pass: foreground controls | ../psiptv/results/roadmap/timeshift-player-result.json | decoder/subtitle replay, native acceptance
+- 2026-10-08 | rewind | 7ef62d8 | host/PS5 build | partial-pass: parameter replay | ../psiptv/results/roadmap/timeshift-parameters-result.json | configuration versions, native acceptance
+- 2026-10-08 | rewind | 04eb912 | host/PS5 build | partial-pass: subtitle replay | ../psiptv/results/roadmap/timeshift-subtitles-result.json | timeline ordering, native acceptance
+- 2026-10-08 | rewind | b2bf8dd | host/PS5 build | partial-pass: seek/control ordering | ../psiptv/results/roadmap/timeshift-seek-controls-result.json | bounded native TS case
+- 2026-10-08 | rewind | 289d250 | host/PS5 build | partial-pass: historical decoder setup | ../psiptv/results/roadmap/timeshift-config-result.json | forward scan and native acceptance
+- 2026-10-08 | rewind | 1c8e33e | host/PS5 build | partial-pass: forward configuration scan | ../psiptv/results/roadmap/timeshift-scan-result.json | native acceptance and remaining formats
+- 2026-10-08 | rewind | c6e6afb | .30 PPSA88275 | partial-pass: native pause/seek/live controls | ../psiptv/results/roadmap/console-33/result.json | sync, expiry and remaining formats
+- 2026-10-08 | rewind | f442b03 | .30 PPSA88276 | partial-pass: native AAC seek reset | ../psiptv/results/roadmap/console-34/result.json | timing, expiry and remaining formats
+- 2026-10-08 | rewind | 8eb5e7e | host/PS5 build | partial-pass: independent download configuration replay | ../psiptv/results/roadmap/timeshift-download-result.json | connect producer loop, timeline ordering, native expiry acceptance
 
 ## Source additions
 
@@ -352,10 +518,40 @@ work. These changes have not been installed on a console.
 Native baseline acceptance (2026-10-08): candidate `2a46313`, disposable title
 `PPSA88266`, passed 12-second playback of synthetic TS, MP4, Matroska and
 external-rendition HLS on the verified-idle console `.30`. Each produced
-260–281 video frames and 524–563 decoded audio frames, with requested stop,
+260â€“281 video frames and 524â€“563 decoded audio frames, with requested stop,
 clean native cleanup and healthy services after title exit. All 52 uploaded
 files matched the frozen package. Evidence: `results/roadmap/console-14/validation.json`.
 The generic runner flagged the settings label `hide_failed=0`; the scoped
 validator checked all four receipts and complete installed hashes independently.
 This proves baseline playback only. Track selection, subtitle visibility and
 synchronization, switching latency and resource cost remain pending.
+
+- 2026-10-09 | rewind | e0c3ec8 | .30 PPSA88277 | partial-pass: download metadata, 330s expiry/recovery, seek/live, clean teardown | ../psiptv/results/roadmap/console-35/result.json | formats/sync
+
+- 2026-10-09 | rewind | 46a2196 | host/PS5 build | partial-pass: fresh parser restores expired programme/codec headers | ../psiptv/results/roadmap/timeshift-startup-result.json | native 4K/timing
+
+- 2026-10-09 | rewind | 46a2196 | .30 PPSA88278 | partial-pass: 4K HEVC controls/teardown, no heap failures; timing gaps remain | ../psiptv/results/roadmap/console-36/result.json | diagnose pacing
+
+- 2026-10-09 | rewind | 08b8a46 | host/PS5 build | partial-pass: seek refill and stale queue regression | ../psiptv/results/roadmap/timeshift-rebuffer-result.json | native 4K comparison
+
+- 2026-10-09 | rewind | 08b8a46 | .30 PPSA88279 | pass: 4K seek refill; video gaps124->1, late122->1, clean teardown | ../psiptv/results/roadmap/console-37/result.json | formats/metadata/sync
+
+- 2026-10-09 | rewind | 6eb86e1 | host/PS5 build | partial-pass: programme tracks follow historical video PES; 112 core/21 media checks | ../psiptv/results/roadmap/timeshift-programme-result.json | native tracks
+
+- 2026-10-09 | rewind | 72a1254 | .30 PPSA88280 | failed: programme tracks change before queued video; clean teardown | ../psiptv/results/roadmap/console-38/result.json | preserve queued programme media
+
+- 2026-10-09 | rewind | 911f3b2 | .30 PPSA88281 | pass: A/B tracks across pause/seek/live, zero queue gaps, clean teardown | ../psiptv/results/roadmap/console-39/result.json | natural transition
+
+- 2026-10-09 | rewind | 911f3b2 | .30 PPSA88281 | partial-pass: natural track transition; one video queue gap unclassified | ../psiptv/results/roadmap/console-42/result.json | timing/formats
+
+- 2026-10-09 | rewind | f79f9e5 | .30 PPSA88282 | pass: natural transition gap81.5ms, none>250ms; clean teardown | ../psiptv/results/roadmap/console-43/result.json | formats/timeline/subtitle sync
+
+- 2026-10-09 | rewind | 0c13eff | .30 PPSA88283 | failed: replacement decoder discarded input before opening; native-state regression reproduces | ../psiptv/results/roadmap/console-44/result.json | idle decoder cancellation
+
+- 2026-10-09 | rewind | d7db0b4 | .30 PPSA88284 | pass: 360p/720p native reopen, bidirectional history seeks, live continuation, one connection and clean teardown; 115 core/21 media/native-state checks | ../psiptv/results/roadmap/console-45/result.json | codec/timeline/subtitle/WebM coverage
+
+- 2026-10-09 | rewind | 34c39e6 | .30 PPSA88285 | pass: paused H264-toHEVC change expires retired timeline; resume/rewind/live and clean teardown; 117 core/21 media checks | ../psiptv/results/roadmap/console-46/result.json | timestamp reset/subtitle/WebM coverage
+
+- 2026-10-09 | rewind | 2a58893 | .30 PPSA88286 | pass: HLS clock reset, pause/seek/live; 22 media/13 remote checks | ../psiptv/results/roadmap/console-47/result.json | WebM/native captions
+
+- 2026-10-09 | rewind | 3545a66 | .30 PPSA88287 | pass: VP9 WebM pause/seek/live, 119 core sanitizer checks | ../psiptv/results/roadmap/console-48/result.json | field-rate deinterlacing

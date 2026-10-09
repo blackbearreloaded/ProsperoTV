@@ -196,7 +196,16 @@ extern "C"
     /* Stream owner's thread only, serialized with submit_audio. Discard the old
      * audio queue and reopen only audio; zero type selects Off. */
     int32_t iptv_native_backend_select_audio(iptv_native_backend_t *backend, uint32_t stream_type);
+    int32_t iptv_native_backend_programme_boundary(iptv_native_backend_t *backend);
     int32_t iptv_native_backend_discontinuity(iptv_native_backend_t *backend);
+    /* Control-thread requests while an opened backend remains alive; only
+     * atomic state is touched. Reposition releases
+     * blocked submissions. The stream owner must then reset its timeline. */
+    void iptv_native_backend_set_paused(iptv_native_backend_t *backend, int paused);
+    int iptv_native_backend_paused(const iptv_native_backend_t *backend);
+    void iptv_native_backend_request_reposition(iptv_native_backend_t *backend);
+    /* UINT64_MAX until a picture from the current playback timeline is presented. */
+    uint64_t iptv_native_backend_presented_pts(const iptv_native_backend_t *backend);
     void iptv_native_backend_request_stop(iptv_native_backend_t *backend);
     int iptv_native_backend_stop_requested(const iptv_native_backend_t *backend);
     int32_t iptv_native_backend_drain(iptv_native_backend_t *backend);

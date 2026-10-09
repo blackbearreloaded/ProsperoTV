@@ -229,6 +229,19 @@ std::optional<std::uint32_t> PlaybackOsd::take_subtitle_selection()
     return result;
 }
 
+void PlaybackOsd::set_live_state(const iptv_player_live_state_t &state)
+{
+    std::lock_guard lock(mutex_);
+    const auto behind = [](const iptv_player_live_state_t &value) {
+        return value.last_us > value.position_us ? (value.last_us - value.position_us) / 1000000
+                                                 : 0;
+    };
+    if (state.available != history_.available || state.paused != history_.paused ||
+        state.expired != history_.expired || behind(state) != behind(history_))
+        dirty_ = true;
+    history_ = state;
+}
+
 int PlaybackOsd::input(int action, std::uint64_t now)
 {
     std::lock_guard lock(mutex_);
@@ -300,6 +313,12 @@ int PlaybackOsd::input(int action, std::uint64_t now)
     }
     if (!live_)
         return 0;
+    if (!list_ && (action == IPTV_INPUT_PLAY_PAUSE || action == IPTV_INPUT_GO_LIVE ||
+                   action == IPTV_INPUT_LEFT || action == IPTV_INPUT_RIGHT))
+    {
+        banner_until_ = now + 5000000;
+        return 0; // The player owns the live-history request.
+    }
     if (action == IPTV_INPUT_SQUARE)
     {
         if (const auto previous = model_.previous_channel(current_id_))
@@ -465,15 +484,31 @@ void PlaybackOsd::paint()
     }
     else
     {
-        panel_.reset(80, 770, 1760, 230);
+        panel_.reset(80, history_.available ? 690 : 770, 1760, history_.available ? 310 : 230);
         line(title_, 30, 52, 36, 1700);
         line(now_, 30, 101, 28, 1700);
         line(next_, 30, 143, 28, 1700);
+        if (history_.available)
+        {
+            const auto seconds = history_.last_us > history_.position_us
+                                     ? (history_.last_us - history_.position_us) / 1000000
+                                     : 0;
+            std::string position = history_.paused ? "Paused" : seconds <= 3 ? "Live" : "Replay";
+            if (seconds > 3)
+                position += "  " + std::to_string(seconds / 60) + ":" +
+                            (seconds % 60 < 10 ? "0" : "") + std::to_string(seconds % 60) +
+                            " behind live";
+            if (history_.expired)
+                position += "  Earlier video is no longer retained";
+            line(position, 30, 187, 24, 1700);
+            line("L2 Pause / resume  |  Left / Right 30 seconds  |  R2 Back to live", 30, 231, 24,
+                 1700);
+        }
         line(live_
                  ? "Up/Down Channel · Square Last · Cross List · Options Tracks · Triangle Info · "
                    "Circle Back"
                  : "Options Tracks · Triangle Info · Circle Back",
-             30, 204, 24, 1700);
+             30, history_.available ? 281 : 204, 24, 1700);
     }
     dirty_ = false;
 }
@@ -540,7 +575,7 @@ bool PlaybackOsd::draw(void *surface, std::size_t bytes, unsigned pitch, unsigne
         started_ = true;
         banner_until_ = now + 5000000;
     }
-    const bool overlay = list_ || audio_menu_ || now < banner_until_;
+    const bool overlay = list_ || audio_menu_ || history_.paused || now < banner_until_;
     const bool captions = !list_ && !audio_menu_ && !subtitles.empty();
     if (!overlay && !captions)
     {
@@ -564,7 +599,8 @@ bool PlaybackOsd::draw(void *surface, std::size_t bytes, unsigned pitch, unsigne
                     drawn;
         if (subtitle_panel_.height)
         {
-            subtitle_panel_.y = (overlay ? 740 : 1030) - subtitle_panel_.height;
+            subtitle_panel_.y =
+                (overlay ? (history_.available ? 660 : 740) : 1030) - subtitle_panel_.height;
             drawn = subtitle_panel_.composite(surface, bytes, pitch, sh, vw, vh, depth) || drawn;
         }
     }

@@ -234,8 +234,8 @@ int main() {
 
     def test_probe_preserves_attempt_before_cleanup(self):
         player = (ROOT / "src/iptv_player.cpp").read_text()
-        close = player.split("    int Close()", 1)[1].split("    std::uint64_t PlayerCleanupCount", 1)[0]
-        self.assertLess(close.index("StopReadAhead(false)"), close.index("SaveReceipt("))
+        close = player.split("    int Close(", 1)[1].split("    std::uint64_t PlayerCleanupCount", 1)[0]
+        self.assertLess(close.index("StopReadAhead("), close.index("SaveReceipt("))
         self.assertLess(close.index("SaveReceipt("), close.index("iptv_stream_cleanup("))
         self.assertIn("video_codec != IPTV_STREAM_VIDEO_UNKNOWN", close)
         self.assertIn('std::remove("/download0/iptv-attempt-receipt.txt")', player)

@@ -2,6 +2,7 @@
 // Copyright (C) 2026 BlackBearReloaded
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "iptv_subtitles.h"
+#include "iptv_timeshift.h"
 extern "C"
 {
 #include <libavcodec/avcodec.h>
@@ -218,12 +219,19 @@ struct Subtitles::State
             }
             else
                 ++it;
-        // Retain a short history for bitmap composition and cues that span a
-        // language change. Downloads can run ahead while subtitles are Off.
-        while (packets && !buffered.empty() && buffered.front().pts < clock - 60000000)
+        // Cover the video history plus a cue that began before that window.
+        // Packet count and byte caps remain independent of this time bound.
+        const auto oldest =
+            clock - static_cast<std::int64_t>(Timeshift::max_duration_us) - kMaxDuration;
+        for (auto it = buffered.begin(); packets && it != buffered.end();)
         {
-            buffered_bytes -= buffered.front().data.size();
-            buffered.pop_front();
+            if (it->pts < oldest)
+            {
+                buffered_bytes -= it->data.size();
+                it = buffered.erase(it);
+            }
+            else
+                ++it;
         }
     }
 };
@@ -300,14 +308,27 @@ bool Subtitles::select(std::uint32_t id)
     if (id == s.selected && s.error == SubtitleError::none)
         return true;
     s.selected = id;
+    return replay_locked();
+}
+bool Subtitles::replay_locked()
+{
+    auto &s = *state_;
     if (!s.open())
         return false;
-    if (id)
+    if (s.selected)
         for (const auto &packet : s.buffered)
-            if (packet.id == id)
-                (void)decode_locked(id, packet.data.data(), packet.data.size(), packet.pts,
+            if (packet.id == s.selected)
+                (void)decode_locked(s.selected, packet.data.data(), packet.data.size(), packet.pts,
                                     packet.duration);
     return true;
+}
+bool Subtitles::seek(std::int64_t pts)
+{
+    if (pts < 0 || pts > std::numeric_limits<std::int64_t>::max() - kMaxDuration)
+        return false;
+    std::lock_guard lock(state_->mutex);
+    state_->clock = pts;
+    return replay_locked();
 }
 void Subtitles::reset_timeline()
 {
@@ -344,10 +365,9 @@ bool Subtitles::push(std::uint32_t id, const std::uint8_t *data, std::size_t byt
     }
     if (pts_us < 0 || pts_us > std::numeric_limits<std::int64_t>::max() - kMaxDuration)
         return true;
-    // HLS repeats a WebVTT cue in every segment it overlaps. Cache/decode it once,
-    // including while captions are Off, so language changes cannot double it.
-    if (track->info.codec == SubtitleCodec::webvtt &&
-        std::any_of(s.buffered.begin(), s.buffered.end(),
+    // HLS overlap and TS history replay can deliver the same packet again.
+    // Seeking has already rebuilt the decoder from the retained packets.
+    if (std::any_of(s.buffered.begin(), s.buffered.end(),
                     [&](const auto &packet)
                     {
                         return packet.id == id && packet.pts == pts_us &&

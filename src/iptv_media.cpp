@@ -13,7 +13,6 @@ extern "C"
 #include <charconv>
 #include <cstdio>
 #include <cstring>
-#include <limits>
 #include <memory>
 #include <mutex>
 #include <string_view>
@@ -600,7 +599,7 @@ int ReadMedia(const MediaInput &input, const MediaOutput &output, std::string *e
     // Give video, audio and separate subtitle packets one explicit timeline.
     // A positive lead-in accommodates normal B-frame decoding timestamps.
     const auto origin = r.demux->start_time == AV_NOPTS_VALUE ? INT64_C(0) : r.demux->start_time;
-    if (origin < INT64_C(2000000) - std::numeric_limits<std::int64_t>::max())
+    if (origin < -INT64_MAX / 4 || origin > INT64_MAX / 4)
         return fail("This video's timestamps are not supported.");
     const auto timestamp_offset = INT64_C(2000000) - origin;
     r.mux->output_ts_offset = timestamp_offset;
@@ -679,12 +678,94 @@ int ReadMedia(const MediaInput &input, const MediaOutput &output, std::string *e
     int result = 0;
     auto video_clock = origin;
     bool first_video = true;
+    struct Clock
+    {
+        std::int64_t last = AV_NOPTS_VALUE, next = AV_NOPTS_VALUE;
+    };
+    std::vector<Clock> clocks(mapping.size());
+    std::int64_t discontinuity_offset = 0;
+    const auto shift = [](std::int64_t &stamp, std::int64_t delta)
+    {
+        if (stamp == AV_NOPTS_VALUE)
+            return true;
+        if ((delta > 0 && stamp > INT64_MAX - delta) || (delta < 0 && stamp < INT64_MIN - delta))
+            return false;
+        stamp += delta;
+        return stamp != AV_NOPTS_VALUE;
+    };
+    struct PendingSubtitle
+    {
+        unsigned id;
+        std::vector<std::uint8_t> data;
+        std::int64_t pts, duration, offset;
+    };
+    std::vector<PendingSubtitle> pending_subtitles;
+    std::size_t pending_subtitle_bytes = 0;
+    const auto emit_subtitle = [&](unsigned id, const std::uint8_t *data, std::size_t bytes,
+                                   std::int64_t pts, std::int64_t duration)
+    {
+        if (shift(pts, timestamp_offset))
+            output.subtitle_packet(output.context, id, data, bytes, pts, duration);
+    };
     while (!r.cancelled() && (result = av_read_frame(r.demux, r.packet)) >= 0)
     {
         const int source = r.packet->stream_index;
         if (source < 0 || static_cast<std::size_t>(source) >= mapping.size() ||
             r.packet->size < 0 || r.packet->size > 8 * 1024 * 1024)
             return fail("The video contains an invalid media packet.");
+        if (hls)
+        {
+            const auto time_base = r.demux->streams[source]->time_base;
+            if (time_base.num <= 0 || time_base.den <= 0)
+                return fail("This video's timestamps are not supported.");
+            const auto apply_offset = [&](std::int64_t us)
+            {
+                const auto ticks = av_rescale_q(us, AVRational{1, AV_TIME_BASE}, time_base);
+                return ticks != INT64_MIN && shift(r.packet->dts, ticks) &&
+                       shift(r.packet->pts, ticks);
+            };
+            if (!apply_offset(discontinuity_offset))
+                return fail("This video's timestamps are not supported.");
+            if (mapping[source] >= 0 && r.packet->dts != AV_NOPTS_VALUE)
+            {
+                auto dts = av_rescale_q(r.packet->dts, time_base, AVRational{1, AV_TIME_BASE});
+                const auto duration =
+                    av_rescale_q(r.packet->duration, time_base, AVRational{1, AV_TIME_BASE});
+                constexpr auto bound = INT64_MAX / 4;
+                if (dts < -bound || dts > bound || duration < 0 || duration > bound)
+                    return fail("This video's timestamps are not supported.");
+                const auto step = std::max(
+                    duration, std::max<std::int64_t>(
+                                  1, av_rescale_q(1, time_base, AVRational{1, AV_TIME_BASE})));
+                auto &clock = clocks[source];
+                // As in FFmpeg's input discontinuity correction, shift every
+                // track by the same delta, preserving PTS/DTS reorder delay.
+                // Repair provider resets before MPEG-TS rejects decreasing DTS.
+                if (clock.next != AV_NOPTS_VALUE &&
+                    (dts - clock.next > 10000000 || dts - clock.next < -10000000 ||
+                     dts < clock.last - 100000))
+                {
+                    const auto correction = clock.next - dts;
+                    if (!shift(discontinuity_offset, correction) || discontinuity_offset < -bound ||
+                        discontinuity_offset > bound || !apply_offset(correction))
+                        return fail("This video's timestamps are not supported.");
+                    dts = clock.next;
+                }
+                // Encoder padding at a segment boundary can overlap by less
+                // than a frame. Keep that track monotonic without moving every
+                // other track's clock back and forth.
+                if (clock.last != AV_NOPTS_VALUE && dts <= clock.last)
+                {
+                    if (!apply_offset(clock.next - dts))
+                        return fail("This video's timestamps are not supported.");
+                    dts = clock.next;
+                }
+                clock.last = dts;
+                if (dts < -bound || step > bound || dts > bound - step)
+                    return fail("This video's timestamps are not supported.");
+                clock.next = dts + step;
+            }
+        }
         if (mapping[source] >= 0)
         {
             if (source == video && first_video)
@@ -698,8 +779,25 @@ int ReadMedia(const MediaInput &input, const MediaOutput &output, std::string *e
                     r.packet->dts = AV_NOPTS_VALUE;
             }
             if (source == video && r.packet->pts != AV_NOPTS_VALUE)
+            {
                 video_clock = av_rescale_q(r.packet->pts, r.demux->streams[source]->time_base,
                                            AVRational{1, AV_TIME_BASE});
+                if (video_clock < -INT64_MAX / 4 || video_clock > INT64_MAX / 4)
+                    return fail("This video's timestamps are not supported.");
+                for (auto it = pending_subtitles.begin(); it != pending_subtitles.end();)
+                {
+                    auto pts = it->pts;
+                    if (shift(pts, discontinuity_offset - it->offset) &&
+                        pts >= video_clock - 10000000)
+                    {
+                        emit_subtitle(it->id, it->data.data(), it->data.size(), pts, it->duration);
+                        pending_subtitle_bytes -= it->data.size();
+                        it = pending_subtitles.erase(it);
+                    }
+                    else
+                        ++it;
+                }
+            }
             r.packet->stream_index = mapping[source];
             av_packet_rescale_ts(r.packet, r.demux->streams[source]->time_base,
                                  r.mux->streams[r.packet->stream_index]->time_base);
@@ -733,11 +831,27 @@ int ReadMedia(const MediaInput &input, const MediaOutput &output, std::string *e
             const auto duration =
                 av_rescale_q(r.packet->duration, r.demux->streams[source]->time_base,
                              AVRational{1, AV_TIME_BASE});
-            if ((timestamp_offset >= 0 && base <= INT64_MAX - timestamp_offset) ||
-                (timestamp_offset < 0 && base >= INT64_MIN - timestamp_offset))
-                output.subtitle_packet(output.context, static_cast<unsigned>(source) + 1,
-                                       r.packet->data, static_cast<std::size_t>(r.packet->size),
-                                       base + timestamp_offset, duration);
+            const auto bytes = static_cast<std::size_t>(r.packet->size);
+            if (hls && base < video_clock - 10000000)
+            {
+                // HLS can deliver the next segment's WebVTT before the video
+                // packet that reveals its reset clock. Hold it until that
+                // correction is known, with bounded optional caption storage.
+                // ponytail: 512 packets/1 MiB; raise only for measured caption bursts.
+                if (pending_subtitles.size() < 512 && bytes <= Subtitles::max_packet &&
+                    bytes <= kMaxWebVttBytes - pending_subtitle_bytes)
+                {
+                    pending_subtitles.push_back({static_cast<unsigned>(source) + 1,
+                                                 {r.packet->data, r.packet->data + bytes},
+                                                 base,
+                                                 duration,
+                                                 discontinuity_offset});
+                    pending_subtitle_bytes += bytes;
+                }
+            }
+            else
+                emit_subtitle(static_cast<unsigned>(source) + 1, r.packet->data, bytes, base,
+                              duration);
         }
         av_packet_unref(r.packet);
     }

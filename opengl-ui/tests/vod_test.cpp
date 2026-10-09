@@ -197,6 +197,7 @@ TEST_F(VodTest, ControllerBrowsesChildrenAndStartsAMovieWithoutChangingLiveHisto
     EXPECT_EQ(request.channel_name, "Alpha movie");
     EXPECT_FALSE(request.record_channel_result);
     EXPECT_FALSE(request.reconnect_live);
+    EXPECT_FALSE(request.live);
     EXPECT_TRUE(model.find(request.channel_id).has_value());
     EXPECT_EQ(model.group_size(ptv::Group::recent), 0u);
     ASSERT_TRUE(model.hide_category("US", true));

@@ -133,8 +133,10 @@ int iptv_vp9_read_frame_flags(const void *data, size_t bytes, uint32_t expected_
         return 0;
     }
 
-    /* frame_type is not needed for queueing, but precedes show_frame. */
-    if (!read_bit(&reader, &value) || !read_bit(&reader, &value))
+    if (!read_bit(&reader, &value))
+        return -1;
+    flags->keyframe = value == 0u;
+    if (!read_bit(&reader, &value))
         return -1;
     flags->show_frame = (uint8_t)value;
     flags->displayable = (uint8_t)value;

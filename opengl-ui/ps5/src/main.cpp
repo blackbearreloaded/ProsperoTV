@@ -883,7 +883,7 @@ PlaybackOutcome play_candidates(const ptv::PlayRequest &request, unsigned stop_a
             request.referrer.empty() ? nullptr : request.referrer.c_str(),
             request.authorization.empty() ? nullptr : request.authorization.c_str(),
             request.credential_origin.empty() ? nullptr : request.credential_origin.c_str(),
-            stop_after_ms, request.reconnect_live ? 1 : 0);
+            stop_after_ms, request.reconnect_live ? 1 : 0, request.live ? 1 : 0);
         if (archive_path != nullptr)
         {
             append_autotest_receipt(archive_path, kLatestReceiptPath);
@@ -1330,7 +1330,28 @@ int main()
                     iptv_player_audio_state_t audio{};
                     iptv_player_audio_state(&audio);
                     osd.set_audio_state(audio);
-                    osd.set_subtitle_state(iptv::player_subtitles().state());
+                    const auto subtitle_state = iptv::player_subtitles().state();
+                    osd.set_subtitle_state(subtitle_state);
+                    iptv_player_live_state_t live{};
+                    iptv_player_live_state(&live);
+                    osd.set_live_state(live);
+                    if (TV_DEV_SCRIPTS != 0 && live.available)
+                    {
+                        static std::uint64_t last_sample = 0;
+                        const auto now = ptv::platform::monotonic_us();
+                        if (now - last_sample >= 1000000)
+                        {
+                            last_sample = now;
+                            say("[TV] live-history first=%llu last=%llu position=%llu paused=%u "
+                                "expired=%u audio=%u audio_track=%u subtitle_track=%u",
+                                static_cast<unsigned long long>(live.first_us),
+                                static_cast<unsigned long long>(live.last_us),
+                                static_cast<unsigned long long>(live.position_us), live.paused,
+                                live.expired, audio.selected_pid,
+                                audio.count ? audio.tracks[0].pid : 0u,
+                                subtitle_state.tracks.empty() ? 0u : subtitle_state.tracks[0].id);
+                        }
+                    }
                     const int handled = osd.input(action, ptv::platform::monotonic_us());
                     if (const auto selected = osd.take_audio_selection())
                         (void)iptv_player_select_audio(*selected);

@@ -19,10 +19,11 @@ extern "C"
     int iptv_player_run_with_headers(const char *url, const char *channel_name,
                                      const char *user_agent, const char *referrer,
                                      int reconnect_live);
+    /* Live history is independent of reconnect policy; disable it for VOD/catch-up. */
     int iptv_player_run_authenticated(const char *url, const char *channel_name,
                                       const char *user_agent, const char *referrer,
                                       const char *authorization, const char *credential_origin,
-                                      unsigned stop_after_ms, int reconnect_live);
+                                      unsigned stop_after_ms, int reconnect_live, int live);
     const char *iptv_player_last_error(void);
     /* Monotonic deadline shared across channel switches and URL retries; 0 disables it. */
     void iptv_player_set_sleep_deadline(uint64_t deadline_usec);
@@ -45,6 +46,16 @@ extern "C"
      * between chunks. Selection never accesses its session concurrently. */
     void iptv_player_audio_state(iptv_player_audio_state_t *state);
     int iptv_player_select_audio(uint32_t pid);
+    typedef struct iptv_player_live_state
+    {
+        uint64_t first_us, last_us, position_us;
+        uint32_t available, paused, expired;
+    } iptv_player_live_state_t;
+    /* Thread-safe requests, applied by the foreground control thread. */
+    void iptv_player_live_state(iptv_player_live_state_t *state);
+    int iptv_player_pause_live(int paused);
+    int iptv_player_seek_live(int seconds);
+    int iptv_player_go_live(void);
     /* Runs the same foreground path with a bounded automatic stop. A zero timeout
  * disables the
      * deadline. This is used by controlled hardware acceptance. */

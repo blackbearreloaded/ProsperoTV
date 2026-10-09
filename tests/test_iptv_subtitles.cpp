@@ -153,6 +153,40 @@ TEST(Subtitles, SelectingAfterReadAheadReplaysTheCaptionForTheCurrentPicture)
     EXPECT_EQ(subtitles.at(6000000)[0]->text, "Next");
 }
 
+TEST(Subtitles, RewindRestoresExpiredTextAndLanguagesWithoutDuplicateCues)
+{
+    iptv::Subtitles subtitles;
+    subtitles.set_tracks(
+        {track(iptv::SubtitleCodec::webvtt), track(iptv::SubtitleCodec::webvtt, 2)});
+    ASSERT_TRUE(subtitles.select(1));
+    ASSERT_TRUE(text(subtitles, "First", 1000000, 3000000, 1));
+    ASSERT_TRUE(text(subtitles, "Primero", 1000000, 3000000, 2));
+    ASSERT_EQ(subtitles.at(2000000).size(), 1u);
+    EXPECT_TRUE(subtitles.at(290000000).empty()); // Almost five minutes later.
+    ASSERT_TRUE(subtitles.seek(2000000));
+    ASSERT_EQ(subtitles.at(2000000).size(), 1u);
+    EXPECT_EQ(subtitles.at(2000000)[0]->text, "First");
+    ASSERT_TRUE(text(subtitles, "First", 1000000, 3000000, 1));
+    EXPECT_EQ(subtitles.at(2000000).size(), 1u);
+    ASSERT_TRUE(subtitles.select(2));
+    ASSERT_EQ(subtitles.at(2000000).size(), 1u);
+    EXPECT_EQ(subtitles.at(2000000)[0]->text, "Primero");
+    ASSERT_TRUE(subtitles.select(0));
+    ASSERT_TRUE(subtitles.seek(2000000));
+    EXPECT_TRUE(subtitles.at(2000000).empty());
+    ASSERT_TRUE(subtitles.select(1));
+    EXPECT_EQ(subtitles.at(2000000).size(), 1u);
+    EXPECT_FALSE(subtitles.seek(-1));
+    EXPECT_EQ(subtitles.at(2000000).size(), 1u);
+    subtitles.reset_timeline();
+    ASSERT_TRUE(subtitles.seek(2000000));
+    EXPECT_TRUE(subtitles.at(2000000).empty()); // A provider reset is not a rewind.
+    ASSERT_TRUE(text(subtitles, "New timeline", 1000000, 3000000, 1));
+    (void)subtitles.at(1000000000);
+    ASSERT_TRUE(subtitles.seek(2000000));
+    EXPECT_TRUE(subtitles.at(2000000).empty()); // Time retention is still bounded.
+}
+
 TEST(Subtitles, DecodesDvbBitmapPaletteCoordinatesAndTimedClear)
 {
     iptv::Subtitles subtitles;
@@ -183,6 +217,15 @@ TEST(Subtitles, DecodesDvbBitmapPaletteCoordinatesAndTimedClear)
     EXPECT_EQ(subtitles.at(2999999).size(), 1u);
     EXPECT_TRUE(subtitles.at(3000000).empty());
     EXPECT_TRUE(subtitles.at(4000000).empty());
+    (void)subtitles.at(290000000);
+    ASSERT_TRUE(subtitles.seek(2000000));
+    const auto replay = subtitles.at(2000000);
+    ASSERT_EQ(replay.size(), 1u);
+    ASSERT_EQ(replay[0]->bitmaps.size(), 1u);
+    EXPECT_EQ(replay[0]->bitmaps[0].argb, bitmap.argb);
+    ASSERT_TRUE(subtitles.push(1, packet.data(), packet.size(), 1000000, 0));
+    EXPECT_EQ(subtitles.at(2000000).size(), 1u); // TS replay must not duplicate display state.
+    EXPECT_TRUE(subtitles.at(3000000).empty());  // The retained clear still ends the display.
 }
 TEST(Subtitles, MalformedPacketsAndResourceLimitsAreRecoverable)
 {

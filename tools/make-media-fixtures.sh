@@ -12,6 +12,7 @@ fi
 command -v ffmpeg >/dev/null || { echo 'Install the FFmpeg command-line tools to generate test fixtures.' >&2; exit 1; }
 mkdir -p "$output"
 ffmpeg -hide_banner -loglevel error -y -f lavfi -i testsrc2=size=320x180:rate=25 -f lavfi -i sine=frequency=440:sample_rate=48000 -t 1 -c:v libx264 -threads 2 -profile:v high -pix_fmt yuv420p -c:a aac -b:a 64k "$output/h264-aac.mp4"
+ffmpeg -hide_banner -loglevel error -y -f lavfi -i testsrc2=size=320x180:rate=25 -f lavfi -i sine=frequency=440:sample_rate=48000 -t 1 -c:v libx264 -threads 2 -profile:v high -pix_fmt yuv420p -x264-params ref=2 -c:a aac -b:a 64k "$output/h264-config.mp4"
 ffmpeg -hide_banner -loglevel error -y -i "$output/h264-aac.mp4" -c copy "$output/h264-aac.mkv"
 ffmpeg -hide_banner -loglevel error -y -i "$output/h264-aac.mp4" -c copy -movflags +faststart "$output/h264-aac-fast.mp4"
 ffmpeg -hide_banner -loglevel error -y -i "$output/h264-aac.mp4" -f lavfi -i sine=frequency=880:sample_rate=48000 -t 1 -map 0:v -map 0:a -map 1:a -c:v copy -c:a aac -b:a 64k -metadata:s:a:0 language=eng -metadata:s:a:1 language=spa "$output/two-audio.mp4"
@@ -81,6 +82,42 @@ CAPTIONS
 video.m3u8
 MASTER
 done
+dir="$output/hls-reset"
+mkdir -p "$dir"
+for epoch in old new; do
+    offset=20
+    [[ $epoch != new ]] || offset=0
+    ffmpeg -hide_banner -loglevel error -y -i "$output/h264-aac.mp4" -c copy \
+        -output_ts_offset "$offset" "$dir/$epoch.ts"
+    first_pts=$(ffprobe -v error -select_streams v:0 -show_entries stream=start_time \
+        -of default=nw=1:nk=1 "$dir/$epoch.ts" | awk '{printf "%.0f", $1 * 90000; exit}')
+    cat > "$dir/$epoch.vtt" <<CAPTIONS
+WEBVTT
+X-TIMESTAMP-MAP=LOCAL:00:00:10.000,MPEGTS:$first_pts
+
+00:00:10.200 --> 00:00:10.600
+$epoch timeline
+CAPTIONS
+done
+for extension in ts vtt; do
+    cat > "$dir/$extension.m3u8" <<PLAYLIST
+#EXTM3U
+#EXT-X-TARGETDURATION:1
+#EXT-X-MEDIA-SEQUENCE:0
+#EXTINF:1,
+old.$extension
+#EXT-X-DISCONTINUITY
+#EXTINF:1,
+new.$extension
+#EXT-X-ENDLIST
+PLAYLIST
+done
+cat > "$dir/master.m3u8" <<'MASTER'
+#EXTM3U
+#EXT-X-MEDIA:TYPE=SUBTITLES,GROUP-ID="captions",NAME="English",LANGUAGE="eng",URI="vtt.m3u8"
+#EXT-X-STREAM-INF:BANDWIDTH=500000,SUBTITLES="captions"
+ts.m3u8
+MASTER
 cat > "$output/english.srt" <<'CAPTIONS'
 1
 00:00:00,200 --> 00:00:00,600
@@ -111,5 +148,6 @@ done
 ffmpeg -hide_banner -loglevel error -y -i "$output/many-subtitles-40.mkv" -map 0 \
     -c copy -c:s mov_text "$output/many-subtitles-40.mp4"
 ffmpeg -hide_banner -loglevel error -y -f lavfi -i testsrc2=size=160x96:rate=10 -t 0.5 -c:v libx265 -x265-params pools=1:frame-threads=1:log-level=error -an "$output/hevc.mp4"
+ffmpeg -hide_banner -loglevel error -y -f lavfi -i testsrc2=size=160x96:rate=10 -t 0.5 -c:v libx265 -x265-params pools=1:frame-threads=1:log-level=error:sao=0 -an "$output/hevc-config.mp4"
 ffmpeg -hide_banner -loglevel error -y -f lavfi -i testsrc2=size=160x96:rate=10 -t 0.5 -c:v libx265 -x265-params pools=1:frame-threads=1:log-level=error:repeat-headers=1 -an "$output/hevc-inband.mkv"
 printf '%s\n' "$stamp" > "$output/.complete"

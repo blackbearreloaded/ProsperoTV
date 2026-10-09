@@ -127,6 +127,9 @@ typedef struct iptv_stream_backend {
     void (*subtitle_packet)(void *context, const iptv_stream_subtitle_track_t *track,
                             const uint8_t *data, size_t bytes, uint64_t pts_us);
     void (*subtitle_reset)(void *context);
+    /* Optional barrier before an automatic PMT change. Present queued media
+     * before replacing its tracks; seeks bypass this barrier. */
+    int (*programme_boundary)(void *context);
 } iptv_stream_backend_t;
 
 typedef struct iptv_stream_telemetry {
@@ -168,6 +171,7 @@ typedef struct iptv_stream_telemetry {
     int32_t last_cleanup_result;
     uint64_t last_video_pts_us;
     uint64_t last_audio_pts_us;
+    uint64_t reopen_pts_us; /* First changed setup's clock, or PTS_UNKNOWN. */
 } iptv_stream_telemetry_t;
 
 typedef struct iptv_stream_session {
@@ -183,7 +187,33 @@ int iptv_stream_open(iptv_stream_session_t *session,
 int iptv_stream_start(iptv_stream_session_t *session);
 int iptv_stream_push(iptv_stream_session_t *session,
                      const void *data, size_t bytes);
+/* Parse skipped transport without submitting audio/video or opening the video backend.
+ * Continue from the current parser cursor. finish requires an access-unit
+ * boundary and retains the final unit's setup before reposition discards it.
+ * Owner-thread only, after interrupting the native submission queues. */
+int iptv_stream_scan(iptv_stream_session_t *session, const void *data, size_t bytes, int finish);
 int iptv_stream_discontinuity(iptv_stream_session_t *session);
+/* Reset buffered transport for replay at an extended video-clock position.
+ * The timestamp comes from retained history, including its wrap epoch.
+ * Run on the stream owner's thread after interrupting blocked native submits. */
+int iptv_stream_reposition(iptv_stream_session_t *session, uint64_t pts_us);
+/* Restore video configuration and programme tracks retained by an independent download
+ * parser. Both sessions must be exclusively owned for the call, on the same
+ * provider timeline. Reject missing/expired/not-yet-scanned configurations
+ * before resetting playback. The source is neither mutated nor retained.
+ * Local configuration history restarts at the restored version; earlier
+ * positions remain available only through the source's retained history.
+ * Incompatible restored settings return REOPEN_REQUIRED; retry the retained
+ * position with a fresh playback session, never the incompatible backend. */
+int iptv_stream_reposition_from(iptv_stream_session_t *session, const iptv_stream_session_t *source,
+                                uint64_t pts_us);
+/* Earliest replay timestamp after bounded configuration history expires.
+ * Owner-thread only; older repositions are rejected without resetting playback. */
+uint64_t iptv_stream_replay_start(const iptv_stream_session_t *session);
+/* Configuration-backed interval for an independent download parser. Returns
+ * one when available, zero otherwise. Ownership rules match replay_start(). */
+int iptv_stream_replay_range(const iptv_stream_session_t *session, uint64_t *first_pts_us,
+                             uint64_t *last_pts_us);
 /* Like push(), these run on the stream owner's thread, not concurrently.
  * Returns the total available count, copying at most capacity entries. */
 size_t iptv_stream_audio_tracks(const iptv_stream_session_t *session,

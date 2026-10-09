@@ -303,12 +303,14 @@ TEST_F(GuideTest, DownloadSearchPlaybackAndFailedRefreshWorkTogether)
     ptv::PlayRequest request;
     ASSERT_TRUE(model.take_play_request(&request));
     EXPECT_FALSE(request.reconnect_live);
+    EXPECT_FALSE(request.live);
     EXPECT_FALSE(request.record_channel_result);
     EXPECT_NE(request.urls[0].find("archive.invalid"), request.urls[0].npos);
     EXPECT_FALSE(model.play_programme(index, entries[2]));
     ASSERT_TRUE(model.play_programme(index, entries[1]));
     ASSERT_TRUE(model.take_play_request(&request));
     EXPECT_TRUE(request.record_channel_result);
+    EXPECT_TRUE(request.live);
     EXPECT_EQ(request.urls[0], model.channel(index).url);
     host::set_network(false, "");
     model.refresh_guide();

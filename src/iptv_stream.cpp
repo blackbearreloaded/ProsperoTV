@@ -6,9 +6,12 @@
 #include "iptv_mp2.h"
 #include "iptv_audio_frame.h"
 
+#include <algorithm>
+#include <array>
 #include <cstdio>
 #include <cstring>
 #include <limits>
+#include <memory>
 #include <new>
 
 namespace
@@ -27,6 +30,39 @@ constexpr size_t kPacketBufferBytes = IPTV_STREAM_TS_PACKET_BYTES * 4u;
 constexpr size_t kNoOffset = static_cast<size_t>(-1);
 constexpr uint64_t kPtsModulus = UINT64_C(1) << 33;
 constexpr uint64_t kPtsHalf = UINT64_C(1) << 32;
+constexpr size_t kVideoParameterBytes = 65536;
+constexpr size_t kVideoParameterSlots = 32 + 256; // H.264 SPS/PPS IDs; HEVC uses 16/16/64.
+
+struct video_parameter_t
+{
+    std::unique_ptr<uint8_t[]> data;
+    size_t size = 0;
+};
+
+using video_parameters_t = std::array<video_parameter_t, kVideoParameterSlots>;
+struct programme_t
+{
+    std::array<uint8_t, kPsiBytes> data;
+    size_t bytes;
+};
+
+static bool same_programme(const programme_t &a, const programme_t &b)
+{
+    return a.bytes == b.bytes && std::memcmp(a.data.data(), b.data.data(), a.bytes) == 0;
+}
+
+struct video_configuration_t
+{
+    uint64_t pts_us;
+    size_t bytes;
+    programme_t programme;
+    std::array<uint32_t, kVideoParameterSlots> sizes;
+    std::unique_ptr<uint8_t[]> data;
+    std::unique_ptr<video_configuration_t> next;
+};
+constexpr size_t kVideoHistoryBytes = 4u * 1024u * 1024u;
+constexpr size_t kVideoHistoryCount = 256;
+constexpr uint64_t kVideoHistoryDuration = 300000000;
 
 struct buffer_t
 {
@@ -61,13 +97,16 @@ struct pts_marker_t
 {
     size_t offset;
     uint64_t pts_us;
+    // A PMT can change while the preceding picture is still incomplete.
+    // Retain the table seen with this PES, alongside its presentation time.
+    programme_t programme;
 };
 
 struct marker_list_t
 {
     pts_marker_t items[kPtsMarkers];
     size_t count;
-    uint64_t base_pts;
+    pts_marker_t base;
 };
 
 struct pes_t
@@ -107,6 +146,7 @@ struct impl_t
     iptv_stream_backend_t backend;
     bool has_backend;
     bool started;
+    bool scanning;
     bool backend_open;
     bool backend_ever_opened;
     bool pat_seen;
@@ -131,15 +171,111 @@ struct impl_t
     continuity_t continuity[kContinuityEntries];
     psi_t pat;
     psi_t pmt;
+    programme_t programme;
     pes_t video_pes;
     pes_t audio_pes;
     timestamp_t video_time;
     timestamp_t audio_time;
     buffer_t video_es;
+    video_parameters_t video_parameters;
+    size_t video_parameter_bytes;
+    std::unique_ptr<video_configuration_t> video_configurations;
+    video_configuration_t *video_configuration_tail;
+    size_t video_history_bytes, video_history_count;
+    uint64_t video_history_floor, video_high_water;
+    bool video_replaying;
     buffer_t audio_es;
     marker_list_t video_markers;
     marker_list_t audio_markers;
 };
+
+static void discard_video_configurations(impl_t *impl)
+{
+    impl->video_configurations.reset();
+    impl->video_configuration_tail = nullptr;
+    impl->video_history_bytes = impl->video_history_count = 0;
+}
+
+static void clear_video_history(impl_t *impl)
+{
+    discard_video_configurations(impl);
+    impl->video_history_floor = impl->video_high_water = 0;
+    impl->video_replaying = false;
+}
+
+static void remember_video_configuration(impl_t *impl, bool changed, uint64_t pts,
+                                         const programme_t &programme)
+{
+    changed |= impl->video_configuration_tail &&
+               !same_programme(impl->video_configuration_tail->programme, programme);
+    if (impl->video_replaying)
+    {
+        if (pts == IPTV_STREAM_PTS_UNKNOWN || pts <= impl->video_high_water)
+            return; // Replaying existing bytes must not replace their later versions.
+        impl->video_replaying = false;
+    }
+    if (pts == IPTV_STREAM_PTS_UNKNOWN)
+    {
+        if (changed && impl->video_configurations)
+        {
+            // There is no reliable boundary for this change. Expire the old
+            // configurations rather than attach a guessed timestamp to them.
+            discard_video_configurations(impl);
+            impl->video_history_floor = impl->video_high_water + 1;
+        }
+        return;
+    }
+    impl->video_high_water = std::max(impl->video_high_water, pts);
+    auto &history = impl->video_configurations;
+    if (impl->video_parameter_bytes && (changed || !history))
+    {
+        const auto bytes = sizeof(video_configuration_t) + impl->video_parameter_bytes;
+        std::unique_ptr<video_configuration_t> saved(new (std::nothrow) video_configuration_t{});
+        if (saved)
+            saved->data.reset(new (std::nothrow) uint8_t[impl->video_parameter_bytes]);
+        if (!saved || !saved->data)
+        {
+            // The native build has no exceptions. A failed optional history
+            // allocation must leave ordinary live playback working.
+            discard_video_configurations(impl);
+            impl->video_history_floor = impl->video_high_water;
+            return;
+        }
+        saved->pts_us = impl->video_high_water;
+        saved->bytes = bytes;
+        saved->programme = programme;
+        size_t at = 0;
+        for (size_t i = 0; i < kVideoParameterSlots; ++i)
+        {
+            const auto &parameter = impl->video_parameters[i];
+            saved->sizes[i] = static_cast<uint32_t>(parameter.size);
+            if (parameter.size)
+                std::memcpy(saved->data.get() + at, parameter.data.get(), parameter.size);
+            at += parameter.size;
+        }
+        auto *tail = saved.get();
+        if (impl->video_configuration_tail)
+            impl->video_configuration_tail->next = std::move(saved);
+        else
+            history = std::move(saved);
+        impl->video_configuration_tail = tail;
+        impl->video_history_bytes += bytes;
+        ++impl->video_history_count;
+    }
+    const auto first = impl->video_high_water > kVideoHistoryDuration
+                           ? impl->video_high_water - kVideoHistoryDuration
+                           : 0;
+    while (history && history->next &&
+           (history->next->pts_us <= first || impl->video_history_count > kVideoHistoryCount ||
+            impl->video_history_bytes > kVideoHistoryBytes))
+    {
+        impl->video_history_bytes -= history->bytes;
+        --impl->video_history_count;
+        auto next = std::move(history->next);
+        history = std::move(next);
+        impl->video_history_floor = history->pts_us;
+    }
+}
 
 static bool valid_session(const iptv_stream_session_t *session)
 {
@@ -205,37 +341,43 @@ static void buffer_erase(buffer_t *buffer, size_t bytes)
     buffer->size -= bytes;
 }
 
-static uint64_t marker_at(const marker_list_t *markers, size_t offset)
+static const pts_marker_t *marker_at(const marker_list_t *markers, size_t offset)
 {
-    uint64_t result = markers->base_pts;
+    const auto *result = &markers->base;
     for (size_t i = 0; i < markers->count && markers->items[i].offset <= offset; ++i)
-        result = markers->items[i].pts_us;
+        result = &markers->items[i];
     return result;
 }
 
-static bool marker_add(marker_list_t *markers, size_t offset, uint64_t pts_us)
+static bool marker_add(marker_list_t *markers, size_t offset, uint64_t pts_us, bool video,
+                       const programme_t *programme)
 {
-    if (pts_us == IPTV_STREAM_PTS_UNKNOWN)
+    if (pts_us == IPTV_STREAM_PTS_UNKNOWN && !video)
         return true;
+    const auto *previous = marker_at(markers, offset);
+    if (previous->pts_us == pts_us &&
+        (!programme || same_programme(previous->programme, *programme)))
+        return true;
+    const pts_marker_t marker{offset, pts_us, programme ? *programme : programme_t{}};
     if (offset == 0 && markers->count == 0)
     {
-        markers->base_pts = pts_us;
+        markers->base = marker;
         return true;
     }
     if (markers->count && markers->items[markers->count - 1u].offset == offset)
     {
-        markers->items[markers->count - 1u].pts_us = pts_us;
+        markers->items[markers->count - 1u] = marker;
         return true;
     }
     if (markers->count >= kPtsMarkers)
         return false;
-    markers->items[markers->count++] = {offset, pts_us};
+    markers->items[markers->count++] = marker;
     return true;
 }
 
 static void marker_erase(marker_list_t *markers, size_t bytes, uint64_t next_pts)
 {
-    uint64_t base = marker_at(markers, bytes);
+    auto base = *marker_at(markers, bytes);
     size_t out = 0;
     bool exact = false;
     for (size_t i = 0; i < markers->count; ++i)
@@ -244,7 +386,7 @@ static void marker_erase(marker_list_t *markers, size_t bytes, uint64_t next_pts
             continue;
         if (markers->items[i].offset == bytes)
         {
-            base = markers->items[i].pts_us;
+            base = markers->items[i];
             exact = true;
             continue;
         }
@@ -253,13 +395,17 @@ static void marker_erase(marker_list_t *markers, size_t bytes, uint64_t next_pts
         ++out;
     }
     markers->count = out;
-    markers->base_pts = !exact && next_pts != IPTV_STREAM_PTS_UNKNOWN ? next_pts : base;
+    base.offset = 0;
+    if (!exact && next_pts != IPTV_STREAM_PTS_UNKNOWN)
+        base.pts_us = next_pts;
+    markers->base = base;
 }
 
 static void marker_clear(marker_list_t *markers)
 {
     markers->count = 0;
-    markers->base_pts = IPTV_STREAM_PTS_UNKNOWN;
+    markers->base = {};
+    markers->base.pts_us = IPTV_STREAM_PTS_UNKNOWN;
 }
 
 static void update_buffered(iptv_stream_session_t *session, const impl_t *impl)
@@ -655,7 +801,8 @@ static bool video_config_ready(const impl_t *impl)
 
 static int maybe_activate(iptv_stream_session_t *session, impl_t *impl)
 {
-    if (!impl->pmt_seen || !video_config_ready(impl) || !impl->started || impl->backend_open)
+    if (!impl->pmt_seen || !video_config_ready(impl) || !impl->started || impl->backend_open ||
+        impl->scanning)
         return IPTV_STREAM_OK;
     if (!impl->has_backend)
     {
@@ -792,10 +939,10 @@ static void update_subtitle_tracks(impl_t *impl, const iptv_stream_subtitle_trac
 }
 
 static int parse_pmt_section(iptv_stream_session_t *session, impl_t *impl, const uint8_t *section,
-                             size_t bytes)
+                             size_t bytes, bool programme_boundary = true)
 {
-    if (bytes < 16u || section[0] != 0x02u || (section[1] & 0x80u) == 0 || (section[5] & 1u) == 0 ||
-        crc32_mpeg(section, bytes) != 0 ||
+    if (bytes < 16u || bytes > kPsiBytes || section[0] != 0x02u || (section[1] & 0x80u) == 0 ||
+        (section[5] & 1u) == 0 || crc32_mpeg(section, bytes) != 0 ||
         static_cast<uint16_t>(section[3] << 8 | section[4]) != impl->format.program_number)
         return fail(session, IPTV_STREAM_MALFORMED_TS, "invalid PMT section");
 
@@ -942,15 +1089,29 @@ static int parse_pmt_section(iptv_stream_session_t *session, impl_t *impl, const
     const bool same_video = impl->pmt_seen && same_video_program(&impl->format, &next);
     const bool same_audio = impl->pmt_seen && impl->format.audio_pid == next.audio_pid &&
                             impl->format.audio_stream_type == next.audio_stream_type;
+    if (programme_boundary && same_video && impl->backend_open && !impl->scanning &&
+        impl->backend.programme_boundary &&
+        (impl->programme.bytes != bytes ||
+         std::memcmp(impl->programme.data.data(), section, bytes) != 0) &&
+        impl->backend.programme_boundary(impl->backend.context) != 0)
+        return fail(session, IPTV_STREAM_NATIVE_ERROR, "programme playback boundary failed");
     if (impl->pmt_seen && !same_video)
     {
         if (impl->backend_ever_opened)
-            return fail(session, IPTV_STREAM_UNSUPPORTED_FORMAT,
-                        "PMT video changed after native backend open");
+        {
+            session->telemetry.reopen_pts_us = session->telemetry.last_video_pts_us;
+            if (session->telemetry.reopen_pts_us != IPTV_STREAM_PTS_UNKNOWN)
+                ++session->telemetry.reopen_pts_us;
+            return fail(session, IPTV_STREAM_REOPEN_REQUIRED, "PMT video changed; reopen required");
+        }
         impl->video_sps = false;
         impl->video_pps = false;
         impl->video_vps = false;
         impl->video_random_access = false;
+        for (auto &parameter : impl->video_parameters)
+            parameter = {};
+        impl->video_parameter_bytes = 0;
+        clear_video_history(impl);
         impl->video_es.size = 0;
         impl->audio_es.size = 0;
         marker_clear(&impl->video_markers);
@@ -1014,6 +1175,8 @@ static int parse_pmt_section(iptv_stream_session_t *session, impl_t *impl, const
     }
     update_subtitle_tracks(impl, subtitle_tracks, kept);
     impl->pmt_seen = true;
+    std::memcpy(impl->programme.data.data(), section, bytes);
+    impl->programme.bytes = bytes;
     session->telemetry.format = impl->format;
     ++session->telemetry.pmt_sections;
     return IPTV_STREAM_OK;
@@ -1188,7 +1351,7 @@ static int inspect_video_nal(iptv_stream_session_t *session, impl_t *impl, const
 
 static int process_audio(iptv_stream_session_t *session, impl_t *impl);
 
-static int video_access_unit_type(const impl_t *impl, size_t bytes)
+static int video_access_unit_type(const impl_t *impl, size_t bytes, size_t *picture_offset)
 {
     size_t at = 0;
     while (at < bytes)
@@ -1202,13 +1365,19 @@ static int video_access_unit_type(const impl_t *impl, size_t bytes)
         {
             const uint8_t type = nal[0] & 0x1fu;
             if (type >= 1u && type <= 5u)
+            {
+                *picture_offset = start;
                 return type;
+            }
         }
         if (impl->format.video_codec == IPTV_STREAM_VIDEO_HEVC)
         {
             const uint8_t type = (nal[0] >> 1) & 0x3fu;
             if (type <= 31u)
+            {
+                *picture_offset = start;
                 return type;
+            }
         }
         at = start + prefix_bytes;
     }
@@ -1232,10 +1401,107 @@ static uint32_t hevc_parameter_mask(const uint8_t *data, size_t bytes)
     return mask;
 }
 
+static size_t video_parameter_slot(bool hevc, const uint8_t *nal, size_t bytes)
+{
+    const size_t header = hevc ? 2u : 1u;
+    if (bytes <= header)
+        return kNoOffset;
+    const unsigned type = hevc ? (nal[0] >> 1) & 0x3fu : nal[0] & 0x1fu;
+    uint8_t rbsp[1024];
+    const size_t count = make_rbsp(nal + header, bytes - header, rbsp, sizeof(rbsp));
+    bit_reader_t bits{rbsp, count * 8u, 0};
+    uint32_t id = 0;
+    if (!hevc)
+    {
+        if (type == 7 && !skip_bits(&bits, 24))
+            return kNoOffset;
+        if (!read_ue(&bits, &id) || id >= (type == 7 ? 32u : 256u))
+            return kNoOffset;
+        return (type == 7 ? 0u : 32u) + id;
+    }
+    if (type == 32)
+        return read_bits(&bits, 4, &id) ? id : kNoOffset;
+    if (type == 33)
+    {
+        uint32_t layers = 0, profile[7]{}, level[7]{};
+        if (!skip_bits(&bits, 4) || !read_bits(&bits, 3, &layers) || !skip_bits(&bits, 1 + 96))
+            return kNoOffset;
+        for (unsigned i = 0; i < layers; ++i)
+            if (!read_bits(&bits, 1, &profile[i]) || !read_bits(&bits, 1, &level[i]))
+                return kNoOffset;
+        if (layers && !skip_bits(&bits, (8 - layers) * 2))
+            return kNoOffset;
+        for (unsigned i = 0; i < layers; ++i)
+            if ((profile[i] && !skip_bits(&bits, 88)) || (level[i] && !skip_bits(&bits, 8)))
+                return kNoOffset;
+    }
+    if (!read_ue(&bits, &id) || id >= (type == 33 ? 16u : 64u))
+        return kNoOffset;
+    return (type == 33 ? 16u : 32u) + id;
+}
+
+static int cache_video_parameters(iptv_stream_session_t *session, impl_t *impl, size_t bytes,
+                                  bool *present, uint64_t pts, const programme_t &programme)
+{
+    const bool hevc = impl->format.video_codec == IPTV_STREAM_VIDEO_HEVC;
+    bool changed = false;
+    for (size_t at = 0; at < bytes;)
+    {
+        size_t prefix = 0, next_prefix = 0;
+        const auto start = find_start_code(impl->video_es.data, bytes, at, &prefix);
+        if (start == kNoOffset || start + prefix >= bytes)
+            break;
+        auto next = find_start_code(impl->video_es.data, bytes, start + prefix, &next_prefix);
+        if (next == kNoOffset)
+            next = bytes;
+        const auto *nal = impl->video_es.data + start + prefix;
+        const unsigned type = hevc ? (nal[0] >> 1) & 0x3fu : nal[0] & 0x1fu;
+        if (hevc ? type >= 32 && type <= 34 : type == 7 || type == 8)
+        {
+            const size_t size = next - start - prefix;
+            const size_t slot = video_parameter_slot(hevc, nal, size);
+            if (slot >= kVideoParameterSlots)
+                return fail(session, IPTV_STREAM_MALFORMED_TS, "invalid video parameter-set ID");
+            auto &parameter = impl->video_parameters[slot];
+            present[slot] = true;
+            if (size != parameter.size || std::memcmp(parameter.data.get(), nal, size) != 0)
+            {
+                const size_t retained = impl->video_parameter_bytes - parameter.size;
+                if (size > kVideoParameterBytes - retained)
+                    return fail(session, IPTV_STREAM_BUFFER_LIMIT, "video parameter cache full");
+                std::unique_ptr<uint8_t[]> copy(new (std::nothrow) uint8_t[size]);
+                if (!copy)
+                    return fail(session, IPTV_STREAM_BUFFER_LIMIT,
+                                "video parameter allocation failed");
+                std::memcpy(copy.get(), nal, size);
+                parameter.data = std::move(copy);
+                parameter.size = size;
+                impl->video_parameter_bytes = retained + size;
+                changed = true;
+            }
+        }
+        at = next;
+    }
+    remember_video_configuration(impl, changed, pts, programme);
+    return IPTV_STREAM_OK;
+}
+
 static int emit_video(iptv_stream_session_t *session, impl_t *impl, size_t bytes)
 {
     if (!bytes || bytes > impl->video_es.size)
         return fail(session, IPTV_STREAM_MALFORMED_TS, "invalid video access-unit boundary");
+    // Retain sets from this access unit, including pictures dropped while waiting
+    // for an IDR/CRA. Inspecting the next unit must not replace this one's setup.
+    bool present[kVideoParameterSlots]{};
+    size_t picture_offset = 0;
+    const int picture_type = video_access_unit_type(impl, bytes, &picture_offset);
+    // Delimiters left at the end of the previous PES may precede this picture.
+    // Its VCL start, not those older prefix bytes, selects the timestamp.
+    const auto *marker = marker_at(&impl->video_markers, picture_offset);
+    const auto pts = marker->pts_us;
+    int result = cache_video_parameters(session, impl, bytes, present, pts, marker->programme);
+    if (result != IPTV_STREAM_OK)
+        return result;
     if (!video_config_ready(impl))
     {
         ++session->telemetry.dropped_payloads;
@@ -1243,9 +1509,9 @@ static int emit_video(iptv_stream_session_t *session, impl_t *impl, size_t bytes
         buffer_erase(&impl->video_es, bytes);
         return IPTV_STREAM_OK;
     }
-    const int picture_type = video_access_unit_type(impl, bytes);
     const bool hevc = impl->format.video_codec == IPTV_STREAM_VIDEO_HEVC;
     const bool random_access = hevc ? picture_type >= 16 && picture_type <= 21 : picture_type == 5;
+    const bool first_picture = !impl->video_random_access;
     if (!impl->video_random_access)
     {
         if (!random_access)
@@ -1276,13 +1542,55 @@ static int emit_video(iptv_stream_session_t *session, impl_t *impl, size_t bytes
         update_buffered(session, impl);
         return IPTV_STREAM_OK;
     }
-    int result = maybe_activate(session, impl);
+    result = maybe_activate(session, impl);
     if (result != IPTV_STREAM_OK)
         return result;
-    if (impl->backend_open)
+    if (impl->backend_open && !impl->scanning)
     {
-        result = impl->backend.submit_video(impl->backend.context, impl->video_es.data, bytes,
-                                            impl->video_markers.base_pts);
+        const uint8_t *data = impl->video_es.data;
+        size_t submitted = bytes, setup = 0;
+        std::unique_ptr<uint8_t[]> replay;
+        if (first_picture)
+            for (size_t i = 0; i < kVideoParameterSlots; ++i)
+                if (!present[i] && impl->video_parameters[i].size)
+                    setup += 4 + impl->video_parameters[i].size;
+        if (setup)
+        {
+            if (setup > impl->config.max_pes_bytes - bytes)
+                return fail(session, IPTV_STREAM_BUFFER_LIMIT,
+                            "video replay exceeds access-unit limit");
+            submitted += setup;
+            replay.reset(new (std::nothrow) uint8_t[submitted]);
+            if (!replay)
+                return fail(session, IPTV_STREAM_BUFFER_LIMIT, "video replay allocation failed");
+            // Preserve an initial access-unit delimiter ahead of its parameters.
+            size_t prefix = 0, next_prefix = 0, insert = 0;
+            if (find_start_code(data, bytes, 0, &prefix) == 0 && prefix < bytes &&
+                (hevc ? ((data[prefix] >> 1) & 0x3fu) == 35 : (data[prefix] & 0x1fu) == 9))
+            {
+                insert = find_start_code(data, bytes, prefix, &next_prefix);
+                if (insert == kNoOffset)
+                    insert = 0;
+            }
+            std::memcpy(replay.get(), data, insert);
+            size_t at = insert;
+            for (size_t i = 0; i < kVideoParameterSlots; ++i)
+            {
+                const auto &parameter = impl->video_parameters[i];
+                if (present[i] || !parameter.size)
+                    continue;
+                const uint8_t start[] = {0, 0, 0, 1};
+                std::memcpy(replay.get() + at, start, sizeof(start));
+                at += sizeof(start);
+                std::memcpy(replay.get() + at, parameter.data.get(), parameter.size);
+                at += parameter.size;
+            }
+            std::memcpy(replay.get() + at, data + insert, bytes - insert);
+            data = replay.get();
+        }
+        if (first_picture && hevc)
+            session->telemetry.first_rap_hevc_parameter_mask = hevc_parameter_mask(data, submitted);
+        result = impl->backend.submit_video(impl->backend.context, data, submitted, pts);
         if (result != 0)
         {
             char error[96];
@@ -1293,7 +1601,7 @@ static int emit_video(iptv_stream_session_t *session, impl_t *impl, size_t bytes
     }
     ++session->telemetry.video_access_units;
     session->telemetry.video_bytes += bytes;
-    session->telemetry.last_video_pts_us = impl->video_markers.base_pts;
+    session->telemetry.last_video_pts_us = pts;
     marker_erase(&impl->video_markers, bytes, IPTV_STREAM_PTS_UNKNOWN);
     buffer_erase(&impl->video_es, bytes);
     update_buffered(session, impl);
@@ -1363,7 +1671,12 @@ static int process_video(iptv_stream_session_t *session, impl_t *impl, bool flus
             const int inspect = inspect_video_nal(session, impl, impl->video_es.data + nal_at,
                                                   next - nal_at, &vcl, &first_slice, &aud, &prefix);
             if (inspect != IPTV_STREAM_OK)
+            {
+                if (inspect == IPTV_STREAM_REOPEN_REQUIRED)
+                    session->telemetry.reopen_pts_us =
+                        marker_at(&impl->video_markers, nal_at)->pts_us;
                 return inspect;
+            }
 
             size_t boundary = kNoOffset;
             if (seen_vcl && aud)
@@ -1508,11 +1821,11 @@ static int process_audio(iptv_stream_session_t *session, impl_t *impl)
 
         /* Keep complete frames bounded until video parameter sets permit the
          * backend to open. Parser-only sessions consume them immediately. */
-        if (impl->has_backend && !impl->backend_open)
+        if (impl->has_backend && !impl->backend_open && !impl->scanning)
             return IPTV_STREAM_OK;
 
-        const uint64_t pts = impl->audio_markers.base_pts;
-        if (impl->backend_open)
+        const uint64_t pts = impl->audio_markers.base.pts_us;
+        if (impl->backend_open && !impl->scanning)
         {
             const int result =
                 impl->backend.submit_audio(impl->backend.context, data, frame_bytes, pts);
@@ -1545,7 +1858,8 @@ static int append_es(iptv_stream_session_t *session, impl_t *impl, bool video, p
     marker_list_t *markers = video ? &impl->video_markers : &impl->audio_markers;
     if (!pes->marker_added)
     {
-        if (!marker_add(markers, buffer->size, pes->pts_us))
+        if (!marker_add(markers, buffer->size, pes->pts_us, pes->video,
+                        video ? &impl->programme : nullptr))
         {
             if (!video)
                 return disable_audio(session, impl,
@@ -2115,6 +2429,7 @@ void iptv_stream_init(iptv_stream_session_t *session)
     session->telemetry.state = IPTV_STREAM_STATE_IDLE;
     session->telemetry.last_video_pts_us = IPTV_STREAM_PTS_UNKNOWN;
     session->telemetry.last_audio_pts_us = IPTV_STREAM_PTS_UNKNOWN;
+    session->telemetry.reopen_pts_us = IPTV_STREAM_PTS_UNKNOWN;
 }
 
 int iptv_stream_open(iptv_stream_session_t *session, const iptv_stream_config_t *config,
@@ -2166,6 +2481,7 @@ int iptv_stream_open(iptv_stream_session_t *session, const iptv_stream_config_t 
     session->telemetry.max_pes_bytes = impl->config.max_pes_bytes;
     session->telemetry.last_video_pts_us = IPTV_STREAM_PTS_UNKNOWN;
     session->telemetry.last_audio_pts_us = IPTV_STREAM_PTS_UNKNOWN;
+    session->telemetry.reopen_pts_us = IPTV_STREAM_PTS_UNKNOWN;
     return IPTV_STREAM_OK;
 }
 
@@ -2209,7 +2525,20 @@ int iptv_stream_push(iptv_stream_session_t *session, const void *data, size_t by
     return IPTV_STREAM_OK;
 }
 
-int iptv_stream_discontinuity(iptv_stream_session_t *session)
+int iptv_stream_scan(iptv_stream_session_t *session, const void *data, size_t bytes, int finish)
+{
+    if (!valid_session(session) || !get_impl(session))
+        return IPTV_STREAM_INVALID_ARGUMENT;
+    auto *impl = get_impl(session);
+    impl->scanning = true;
+    int result = iptv_stream_push(session, data, bytes);
+    if (result == IPTV_STREAM_OK && finish)
+        result = flush_streams(session, impl);
+    impl->scanning = false;
+    return result;
+}
+
+static int reset_transport(iptv_stream_session_t *session)
 {
     if (!valid_session(session) || !get_impl(session))
         return IPTV_STREAM_INVALID_ARGUMENT;
@@ -2248,6 +2577,158 @@ int iptv_stream_discontinuity(iptv_stream_session_t *session)
         impl->backend.subtitle_reset(impl->backend.context);
     ++session->telemetry.discontinuities;
     update_buffered(session, impl);
+    return IPTV_STREAM_OK;
+}
+
+int iptv_stream_discontinuity(iptv_stream_session_t *session)
+{
+    const int result = reset_transport(session);
+    if (result == IPTV_STREAM_OK)
+        clear_video_history(get_impl(session));
+    return result;
+}
+
+uint64_t iptv_stream_replay_start(const iptv_stream_session_t *session)
+{
+    const auto *impl =
+        valid_session(session) ? static_cast<const impl_t *>(session->_impl) : nullptr;
+    return impl ? impl->video_history_floor : 0;
+}
+
+int iptv_stream_reposition(iptv_stream_session_t *session, uint64_t pts_us)
+{
+    return iptv_stream_reposition_from(session, session, pts_us);
+}
+
+int iptv_stream_replay_range(const iptv_stream_session_t *session, uint64_t *first_pts_us,
+                             uint64_t *last_pts_us)
+{
+    const auto *impl =
+        valid_session(session) ? static_cast<const impl_t *>(session->_impl) : nullptr;
+    if (!impl || !impl->video_configurations || !first_pts_us || !last_pts_us)
+        return 0;
+    *first_pts_us = std::max(impl->video_history_floor, impl->video_configurations->pts_us);
+    *last_pts_us = impl->video_high_water;
+    return *first_pts_us <= *last_pts_us;
+}
+
+int iptv_stream_reposition_from(iptv_stream_session_t *session, const iptv_stream_session_t *source,
+                                uint64_t pts_us)
+{
+    if (!valid_session(session) || !get_impl(session) || !valid_session(source) || !source->_impl ||
+        pts_us == IPTV_STREAM_PTS_UNKNOWN || pts_us < iptv_stream_replay_start(source))
+        return IPTV_STREAM_INVALID_ARGUMENT;
+    auto *impl = get_impl(session);
+    const auto *history = static_cast<const impl_t *>(source->_impl);
+    if (session->telemetry.state != IPTV_STREAM_STATE_BUFFERING &&
+        session->telemetry.state != IPTV_STREAM_STATE_READY &&
+        session->telemetry.state != IPTV_STREAM_STATE_PLAYING)
+        return IPTV_STREAM_INVALID_STATE;
+    if (source != session)
+    {
+        if (!history->video_configurations)
+            return IPTV_STREAM_INVALID_STATE;
+        if (pts_us < history->video_configurations->pts_us || pts_us > history->video_high_water)
+            return IPTV_STREAM_INVALID_ARGUMENT;
+        if (impl->pmt_seen && !same_video_program(&impl->format, &history->format))
+        {
+            session->telemetry.reopen_pts_us = pts_us;
+            return fail(session, IPTV_STREAM_REOPEN_REQUIRED,
+                        "historical video programme changed; reopen required");
+        }
+    }
+    video_parameters_t restored;
+    programme_t programme{};
+    size_t restored_bytes = 0;
+    uint64_t restored_start = 0;
+    if (history->video_configurations)
+    {
+        const auto *chosen = history->video_configurations.get();
+        for (const auto *configuration = chosen; configuration;
+             configuration = configuration->next.get())
+        {
+            if (configuration->pts_us > pts_us)
+                break;
+            chosen = configuration;
+        }
+        size_t at = 0;
+        for (size_t i = 0; i < kVideoParameterSlots; ++i)
+        {
+            auto &parameter = restored[i];
+            parameter.size = chosen->sizes[i];
+            if (!parameter.size)
+                continue;
+            parameter.data.reset(new (std::nothrow) uint8_t[parameter.size]);
+            if (!parameter.data)
+                return IPTV_STREAM_BUFFER_LIMIT;
+            std::memcpy(parameter.data.get(), chosen->data.get() + at, parameter.size);
+            at += parameter.size;
+        }
+        restored_bytes = at;
+        programme = chosen->programme;
+        restored_start = std::max(chosen->pts_us, history->video_history_floor);
+    }
+    // Prepare the complete copy before discarding queued playback. The source
+    // can expire or close after this call without invalidating the decoder.
+    const int result = reset_transport(session);
+    if (result != IPTV_STREAM_OK)
+        return result;
+    if (programme.bytes)
+    {
+        if (!impl->pmt_seen)
+        {
+            impl->format.program_number = history->format.program_number;
+            impl->format.pmt_pid = history->format.pmt_pid;
+            impl->pat_seen = history->pat_seen;
+        }
+        const int parsed =
+            parse_pmt_section(session, impl, programme.data.data(), programme.bytes, false);
+        if (parsed != IPTV_STREAM_OK)
+            return parsed;
+    }
+    if (restored_bytes)
+    {
+        // Validate the selected historical sets even with an open decoder.
+        // Headerless replay must request the same reopen as an in-band change,
+        // rather than silently submitting incompatible settings to the backend.
+        impl->video_sps = impl->video_pps = impl->video_vps = false;
+        for (const auto &parameter : restored)
+        {
+            if (!parameter.size)
+                continue;
+            bool vcl, first, aud, prefix;
+            const int parsed = inspect_video_nal(session, impl, parameter.data.get(),
+                                                 parameter.size, &vcl, &first, &aud, &prefix);
+            if (parsed != IPTV_STREAM_OK)
+            {
+                if (parsed == IPTV_STREAM_REOPEN_REQUIRED)
+                    session->telemetry.reopen_pts_us = pts_us;
+                return parsed;
+            }
+        }
+        session->telemetry.format = impl->format;
+    }
+    if (restored_bytes)
+    {
+        impl->video_parameters = std::move(restored);
+        impl->video_parameter_bytes = restored_bytes;
+        if (source != session)
+        {
+            // The old local cache may omit configurations seen only by the
+            // download parser. Start local retention at the restored version;
+            // older seeks still require the authoritative download history.
+            clear_video_history(impl);
+            impl->video_history_floor = restored_start;
+            remember_video_configuration(impl, true, restored_start, impl->programme);
+        }
+    }
+    impl->video_replaying = true;
+    // History converts ticks to whole microseconds. Round back to the nearest
+    // tick so an exact wrap does not accidentally seed the preceding epoch.
+    const uint64_t ticks = (pts_us / 1000u) * 90u + ((pts_us % 1000u) * 90u + 500u) / 1000u;
+    impl->video_time = {ticks % kPtsModulus, ticks - ticks % kPtsModulus, true};
+    session->telemetry.last_video_pts_us = IPTV_STREAM_PTS_UNKNOWN;
+    session->telemetry.last_audio_pts_us = IPTV_STREAM_PTS_UNKNOWN;
     return IPTV_STREAM_OK;
 }
 
