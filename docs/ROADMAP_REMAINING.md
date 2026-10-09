@@ -534,3 +534,5 @@ synchronization, switching latency and resource cost remain pending.
 - 2026-10-09 | rewind | e0c3ec8 | .30 PPSA88277 | partial-pass: download metadata, 330s expiry/recovery, seek/live, clean teardown | ../psiptv/results/roadmap/console-35/result.json | formats/sync
 
 - 2026-10-09 | rewind | 46a2196 | host/PS5 build | partial-pass: fresh parser restores expired programme/codec headers | ../psiptv/results/roadmap/timeshift-startup-result.json | native 4K/timing
+
+- 2026-10-09 | rewind | 46a2196 | .30 PPSA88278 | partial-pass: 4K HEVC controls/teardown, no heap failures; timing gaps remain | ../psiptv/results/roadmap/console-36/result.json | diagnose pacing
