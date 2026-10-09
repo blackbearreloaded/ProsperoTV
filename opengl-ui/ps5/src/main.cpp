@@ -1349,21 +1349,30 @@ int main()
                     iptv_player_live_state_t live{};
                     iptv_player_live_state(&live);
                     osd.set_live_state(live);
-                    if (TV_DEV_SCRIPTS != 0 && live.available)
+                    if (TV_DEV_SCRIPTS != 0)
                     {
                         static std::uint64_t last_sample = 0;
                         const auto now = ptv::platform::monotonic_us();
                         if (now - last_sample >= 1000000)
                         {
                             last_sample = now;
-                            say("[TV] live-history first=%llu last=%llu position=%llu paused=%u "
-                                "expired=%u audio=%u audio_track=%u subtitle_track=%u",
-                                static_cast<unsigned long long>(live.first_us),
-                                static_cast<unsigned long long>(live.last_us),
-                                static_cast<unsigned long long>(live.position_us), live.paused,
-                                live.expired, audio.selected_pid,
-                                audio.count ? audio.tracks[0].pid : 0u,
-                                subtitle_state.tracks.empty() ? 0u : subtitle_state.tracks[0].id);
+                            say("[TV] playback-tracks audio=%u count=%u pending=%u result=%d "
+                                "disabled=%u subtitle=%u count=%zu error=%d",
+                                audio.selected_pid, audio.count, audio.pending, audio.result,
+                                audio.disabled, subtitle_state.selected,
+                                subtitle_state.tracks.size(),
+                                static_cast<int>(subtitle_state.error));
+                            if (live.available)
+                                say("[TV] live-history first=%llu last=%llu position=%llu "
+                                    "paused=%u "
+                                    "expired=%u audio=%u audio_track=%u subtitle_track=%u",
+                                    static_cast<unsigned long long>(live.first_us),
+                                    static_cast<unsigned long long>(live.last_us),
+                                    static_cast<unsigned long long>(live.position_us), live.paused,
+                                    live.expired, audio.selected_pid,
+                                    audio.count ? audio.tracks[0].pid : 0u,
+                                    subtitle_state.tracks.empty() ? 0u
+                                                                  : subtitle_state.tracks[0].id);
                         }
                     }
                     const int handled = osd.input(action, ptv::platform::monotonic_us());
@@ -1383,11 +1392,28 @@ int main()
                 {
                     const auto subtitles = iptv::player_subtitles().at(
                         pts <= INT64_MAX ? static_cast<std::int64_t>(pts) : -1);
-                    return static_cast<ptv::PlaybackOsd *>(context)->draw(
-                               surface, bytes, pitch, sh, width, height, depth,
-                               ptv::platform::monotonic_us(), subtitles, hdr)
-                               ? 1
-                               : 0;
+                    const bool drawn = static_cast<ptv::PlaybackOsd *>(context)->draw(
+                        surface, bytes, pitch, sh, width, height, depth,
+                        ptv::platform::monotonic_us(), subtitles, hdr);
+                    if (TV_DEV_SCRIPTS != 0)
+                    {
+                        static std::int64_t last_start = -1;
+                        static std::size_t last_count = 0;
+                        const auto start = subtitles.empty() ? -1 : subtitles.front()->start_us;
+                        if (start != last_start || subtitles.size() != last_count)
+                        {
+                            last_start = start;
+                            last_count = subtitles.size();
+                            say("[TV] playback-cues pts=%llu count=%zu start=%lld end=%lld "
+                                "drawn=%d",
+                                static_cast<unsigned long long>(pts), subtitles.size(),
+                                static_cast<long long>(start),
+                                static_cast<long long>(
+                                    subtitles.empty() ? -1 : subtitles.front()->end_us),
+                                drawn ? 1 : 0);
+                        }
+                    }
+                    return drawn ? 1 : 0;
                 },
                 &controls);
         }
