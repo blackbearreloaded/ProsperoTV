@@ -12,6 +12,35 @@ namespace
 {
 constexpr std::size_t packet_bytes = 188;
 }
+bool TimeshiftSeek::relative(std::uint64_t first, std::uint64_t last, std::uint64_t presented,
+                             int seconds)
+{
+    if (first > last)
+        return false;
+    const auto position = std::clamp(target_.value_or(presented), first, last);
+    const auto delta = static_cast<std::int64_t>(seconds) * 1000000;
+    target_ = delta < 0 ? position - std::min(position - first, static_cast<std::uint64_t>(-delta))
+                        : position + std::min(last - position, static_cast<std::uint64_t>(delta));
+    pending_ = true;
+    return true;
+}
+void TimeshiftSeek::live(std::uint64_t last)
+{
+    target_ = last;
+    pending_ = true;
+}
+std::optional<std::uint64_t> TimeshiftSeek::take()
+{
+    if (!pending_)
+        return {};
+    pending_ = false;
+    return target_;
+}
+void TimeshiftSeek::acknowledge(std::uint64_t presented)
+{
+    if (!pending_ && presented != UINT64_MAX)
+        target_.reset();
+}
 Timeshift::Timeshift(std::size_t bytes, std::uint64_t duration_us)
     : storage_(nullptr, Unmap{bytes}), capacity_(bytes), duration_(duration_us)
 {

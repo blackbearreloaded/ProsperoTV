@@ -130,7 +130,7 @@ constexpr std::uint64_t kVideoProgressTimeoutUsec = UINT64_C(15000000);
 std::mutex gLiveMutex;
 iptv_player_live_state_t gLiveState{};
 int gLivePauseRequest = -1;
-std::optional<std::uint64_t> gLiveSeekRequest;
+iptv::TimeshiftSeek gLiveSeekRequest;
 constexpr char kReceiptPath[] = "/download0/iptv-last-receipt.txt";
 #if IPTV_PROBE
 constexpr char kProbePath[] = "/download0/iptv-playback-probe.txt";
@@ -1085,16 +1085,19 @@ class StreamRunner
             if (event.action == IPTV_INPUT_PLAY_PAUSE)
             {
                 (void)iptv_player_pause_live(Paused() ? 0 : 1);
+                UpdateLiveControls();
                 continue;
             }
             if (event.action == IPTV_INPUT_GO_LIVE)
             {
                 (void)iptv_player_go_live();
+                UpdateLiveControls();
                 continue;
             }
             if (event.action == IPTV_INPUT_LEFT || event.action == IPTV_INPUT_RIGHT)
             {
                 (void)iptv_player_seek_live(event.action == IPTV_INPUT_LEFT ? -30 : 30);
+                UpdateLiveControls();
                 continue;
             }
             if (handled == 2 || event.action == IPTV_INPUT_CIRCLE ||
@@ -1230,7 +1233,7 @@ class StreamRunner
             std::lock_guard lock(gLiveMutex);
             gLiveState = {};
             gLivePauseRequest = -1;
-            gLiveSeekRequest.reset();
+            gLiveSeekRequest = {};
         }
         {
             std::lock_guard lock(gAudioMutex);
@@ -1271,8 +1274,7 @@ class StreamRunner
             std::lock_guard lock(gLiveMutex);
             pause = gLivePauseRequest;
             gLivePauseRequest = -1;
-            seek = gLiveSeekRequest;
-            gLiveSeekRequest.reset();
+            seek = gLiveSeekRequest.take();
         }
         const auto range = history_->range();
         if (seek)
@@ -1286,7 +1288,7 @@ class StreamRunner
                 iptv_native_backend_request_reposition(&adapter_.backend);
             }
         }
-        else if (pause >= 0)
+        if (pause >= 0)
         {
             paused_.store(pause != 0, std::memory_order_release);
             iptv_native_backend_set_paused(&adapter_.backend, pause);
@@ -1296,14 +1298,21 @@ class StreamRunner
         }
         const auto presented = iptv_native_backend_presented_pts(&adapter_.backend);
         std::lock_guard lock(gLiveMutex);
-        gLiveState = {range.first_pts_us, range.last_pts_us,
-                      presented == UINT64_MAX ? range.last_pts_us : presented,
-                      range.timed && HasPresentedVideo() ? 1u : 0u, Paused() ? 1u : 0u,
+        gLiveSeekRequest.acknowledge(presented);
+        gLiveState = {range.first_pts_us,
+                      range.last_pts_us,
+                      presented == UINT64_MAX ? gLiveState.position_us : presented,
+                      range.timed && HasPresentedVideo() ? 1u : 0u,
+                      Paused() ? 1u : 0u,
                       history_expired_.load(std::memory_order_acquire) ? 1u : 0u};
     }
 
     bool ReadHistory(std::uint64_t &read, std::size_t &chunk)
     {
+        // A newer control request must not be acknowledged by a picture from an
+        // older seek whose parser reset was still in flight. Use the same owner
+        // lock as UpdateLiveControls through dequeue, reset and cursor change.
+        std::lock_guard control_lock(control_mutex_);
         const auto range = history_->range();
         std::optional<iptv::Timeshift::Position> position;
         {
@@ -1327,7 +1336,6 @@ class StreamRunner
         }
         if (position)
         {
-            paused_.store(false, std::memory_order_release);
             iptv_native_backend_request_reposition(&adapter_.backend);
             const bool same_timeline = history_generation_ == position->generation;
             adapter_.preserve_subtitles = same_timeline;
@@ -1340,6 +1348,7 @@ class StreamRunner
             }
             if (same_timeline && position->pts_us <= INT64_MAX)
                 (void)gSubtitles.seek(static_cast<std::int64_t>(position->pts_us));
+            iptv_native_backend_set_paused(&adapter_.backend, Paused() ? 1 : 0);
             read = position->offset;
             history_generation_ = position->generation;
             read_ahead_read_.store(read, std::memory_order_release);
@@ -2634,14 +2643,10 @@ int iptv_player_seek_live(int seconds)
     std::lock_guard lock(gLiveMutex);
     if (!gLiveState.available)
         return IPTV_STREAM_INVALID_STATE;
-    const auto position = std::clamp(gLiveSeekRequest.value_or(gLiveState.position_us),
-                                     gLiveState.first_us, gLiveState.last_us);
-    const auto delta = static_cast<std::int64_t>(seconds) * 1000000;
-    gLiveSeekRequest = delta < 0
-                           ? position - std::min(position - gLiveState.first_us,
-                                                   static_cast<std::uint64_t>(-delta))
-                           : position + std::min(gLiveState.last_us - position,
-                                                   static_cast<std::uint64_t>(delta));
+    if (!gLiveSeekRequest.relative(gLiveState.first_us, gLiveState.last_us, gLiveState.position_us,
+                                   seconds))
+        return IPTV_STREAM_INVALID_STATE;
+    gLivePauseRequest = -1; // A seek resumes; a later pause request wins in turn.
     return IPTV_STREAM_OK;
 }
 int iptv_player_go_live()
@@ -2649,7 +2654,8 @@ int iptv_player_go_live()
     std::lock_guard lock(gLiveMutex);
     if (!gLiveState.available)
         return IPTV_STREAM_INVALID_STATE;
-    gLiveSeekRequest = gLiveState.last_us;
+    gLiveSeekRequest.live(gLiveState.last_us);
+    gLivePauseRequest = -1;
     return IPTV_STREAM_OK;
 }
 

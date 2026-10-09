@@ -203,6 +203,7 @@ extern "C"
     void iptv_native_backend_set_paused(iptv_native_backend_t *backend, int paused);
     int iptv_native_backend_paused(const iptv_native_backend_t *backend);
     void iptv_native_backend_request_reposition(iptv_native_backend_t *backend);
+    /* UINT64_MAX until a picture from the current playback timeline is presented. */
     uint64_t iptv_native_backend_presented_pts(const iptv_native_backend_t *backend);
     void iptv_native_backend_request_stop(iptv_native_backend_t *backend);
     int iptv_native_backend_stop_requested(const iptv_native_backend_t *backend);

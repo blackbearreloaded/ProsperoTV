@@ -76,4 +76,20 @@ class Timeshift
     bool synchronized_ = false, have_ticks_ = false;
     std::deque<Mark> marks_;
 };
+
+// Controls keep their requested position until a picture from the new decoder
+// timeline arrives. The caller serializes requests and acknowledgements.
+class TimeshiftSeek
+{
+  public:
+    bool relative(std::uint64_t first, std::uint64_t last, std::uint64_t presented, int seconds);
+    void live(std::uint64_t last);
+    std::optional<std::uint64_t> take();
+    // UINT64_MAX means there is no picture from the current decoder timeline yet.
+    void acknowledge(std::uint64_t presented);
+
+  private:
+    std::optional<std::uint64_t> target_;
+    bool pending_ = false;
+};
 } // namespace iptv

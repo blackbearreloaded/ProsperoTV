@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <limits>
 #include <thread>
 #include <vector>
 
@@ -44,6 +45,54 @@ std::vector<std::uint8_t> broadcast(unsigned count)
     }
     return bytes;
 }
+TEST(TimeshiftSeek, AccumulatesQueuedAndInFlightStepsUntilANewPictureArrives)
+{
+    constexpr std::uint64_t second = 1000000;
+    iptv::TimeshiftSeek seek;
+    EXPECT_FALSE(seek.take());
+    ASSERT_TRUE(seek.relative(0, 300 * second, 240 * second, -30));
+    seek.acknowledge(240 * second); // An old picture cannot cancel a queued request.
+    ASSERT_TRUE(seek.relative(0, 300 * second, 240 * second, -30));
+    EXPECT_EQ(seek.take(), 180 * second);
+    EXPECT_FALSE(seek.take());
+    seek.acknowledge(UINT64_MAX); // Decoder reset; no new picture yet.
+    ASSERT_TRUE(seek.relative(0, 300 * second, 240 * second, -30));
+    EXPECT_EQ(seek.take(), 150 * second);
+    seek.acknowledge(UINT64_MAX);
+    ASSERT_TRUE(seek.relative(0, 300 * second, 240 * second, 30));
+    EXPECT_EQ(seek.take(), 180 * second);
+    seek.acknowledge(178 * second); // Actual keyframe can precede the requested point.
+    ASSERT_TRUE(seek.relative(0, 300 * second, 179 * second, -30));
+    EXPECT_EQ(seek.take(), 149 * second);
+    seek.live(305 * second);
+    EXPECT_EQ(seek.take(), 305 * second);
+    seek.acknowledge(UINT64_MAX);
+    ASSERT_TRUE(seek.relative(0, 306 * second, 179 * second, -30));
+    EXPECT_EQ(seek.take(), 275 * second);
+    seek = {}; // A different channel must not inherit the previous target.
+    ASSERT_TRUE(seek.relative(0, 60 * second, 40 * second, -30));
+    EXPECT_EQ(seek.take(), 10 * second);
+}
+
+TEST(TimeshiftSeek, ClampsToMovingHistoryAndAvoidsArithmeticOverflow)
+{
+    iptv::TimeshiftSeek seek;
+    ASSERT_TRUE(seek.relative(1000000, 2000000, 1500000, std::numeric_limits<int>::min()));
+    EXPECT_EQ(seek.take(), 1000000u);
+    ASSERT_TRUE(seek.relative(1500000, 3000000, 1500000, -30));
+    EXPECT_EQ(seek.take(), 1500000u); // The old target expired while decoding.
+    ASSERT_TRUE(seek.relative(1500000, 3000000, 1500000, std::numeric_limits<int>::max()));
+    EXPECT_EQ(seek.take(), 3000000u);
+    seek = {};
+    ASSERT_TRUE(seek.relative(UINT64_MAX - 1000000, UINT64_MAX - 1, UINT64_MAX - 500000,
+                              std::numeric_limits<int>::max()));
+    EXPECT_EQ(seek.take(), UINT64_MAX - 1);
+    EXPECT_FALSE(seek.relative(20, 10, 15, 30));
+    EXPECT_FALSE(seek.take());
+    ASSERT_TRUE(seek.relative(0, 1000000, UINT64_MAX, 0));
+    EXPECT_EQ(seek.take(), 1000000u);
+}
+
 TEST(Timeshift, PreservesFragmentedTransportAndSeeksAtRandomAccessPictures)
 {
     const auto input = broadcast(20);

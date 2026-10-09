@@ -2639,7 +2639,18 @@ void iptv_native_backend_request_reposition(iptv_native_backend_t *backend)
 uint64_t iptv_native_backend_presented_pts(const iptv_native_backend_t *backend)
 {
     const backend_state_t *state = const_state_from(backend);
-    return state && state->magic == BACKEND_MAGIC ? atomic_load(&state->presented_pts_us) : UINT64_MAX;
+    if (!state || state->magic != BACKEND_MAGIC)
+        return UINT64_MAX;
+    const uint32_t generation =
+        atomic_load_explicit(&state->stream_generation, memory_order_acquire);
+    if (atomic_load_explicit(&state->discard_input, memory_order_acquire) ||
+        atomic_load_explicit(&state->presented_generation, memory_order_acquire) != generation)
+        return UINT64_MAX;
+    const uint64_t pts = atomic_load_explicit(&state->presented_pts_us, memory_order_acquire);
+    return atomic_load_explicit(&state->stream_generation, memory_order_acquire) == generation &&
+                   !atomic_load_explicit(&state->discard_input, memory_order_acquire)
+               ? pts
+               : UINT64_MAX;
 }
 
 void iptv_native_backend_request_stop(iptv_native_backend_t *backend)
@@ -2961,10 +2972,13 @@ int main(void)
     assert(atomic_load(&seek->discard_input));
     assert(atomic_load(&seek->video_queue_write) == VIDEO_QUEUE_CAPACITY);
     assert(atomic_load(&seek->stream_generation) == 1);
+    assert(iptv_native_backend_presented_pts(&seeking) == UINT64_MAX);
     assert(iptv_native_backend_discontinuity(&seeking) == 0);
     assert(!atomic_load(&seek->discard_input) && atomic_load(&seek->audio_sync_pending));
     assert(audio_sync_action(seek, 100000, 0) == 1); // Old picture cannot release rewound audio.
+    assert(iptv_native_backend_presented_pts(&seeking) == UINT64_MAX);
     atomic_store(&seek->presented_generation, 2);
+    assert(iptv_native_backend_presented_pts(&seeking) == 123456);
     assert(audio_sync_action(seek, 100000, 0) == 0);
     assert(audio_sync_action(seek, 200000, 0) == 1);
     assert(audio_sync_action(seek, 0, 0) == -1);
