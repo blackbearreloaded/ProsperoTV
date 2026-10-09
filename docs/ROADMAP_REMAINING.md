@@ -20,7 +20,7 @@ and relevant checks work.
 | Channel banner | Brief channel/guide banner on tune and on request | Implemented; mapped guide, timing and rendered image checks pass; console case pending |
 | Audio/subtitles | Select available language tracks and render subtitles | Embedded/HLS audio and container/DVB/WebVTT subtitles implemented with host checks; live-provider and native acceptance pending |
 | Sleep timer | Stop playback at a selected deadline | Implemented; 134 UI sanitizer tests and PS5 build pass; console case pending |
-| Live pause/rewind | Pause and replay several minutes of the current live channel | In progress: bounded transport history and native pause/seek primitives; player and UI integration pending |
+| Live pause/rewind | Pause and replay several minutes of the current live channel | In progress: transport history, foreground controls and phone/OSD integration; decoder/subtitle replay and native acceptance pending |
 | Deinterlacing | Preserve field-rate motion on interlaced broadcast video | Pending |
 | HDR | Preserve HDR metadata and output HDR on compatible displays | Pending |
 | Multiview | Two or four simultaneous channels, within measured decoder limits | Pending |
@@ -55,8 +55,8 @@ Native control primitives pause both workers, redraw the frozen picture for the
 overlay, and adjust video pacing on resume. Repositioning releases submissions
 blocked by full queues and discards packets from the previous playback
 generation. Audio waits for a picture from the new generation before aligning
-its timestamps. These primitives are not yet connected to foreground playback
-or controller/phone controls, so pause and rewind are not available in the app.
+its timestamps. Foreground integration is now being implemented on the local
+timeshift branch; no console installation or functional acceptance is claimed.
 
 The 93-test core sanitizer suite includes six history tests covering fragmented
 input, time/byte limits, overwrite detection, clock wrap, multiple programme
@@ -70,12 +70,27 @@ and resets parser buffers and subtitle timing. A regression replays forwards and
 backwards across two timestamp wraps, including an exact wrap, and checks the
 video, audio and subtitle timestamps without reopening the decoder. All 95 core
 tests pass under ASan/UBSan on the VOD-fixes baseline. The native application
-also compiles and links with the reposition API. Player calls to this API,
-decoder parameter replay, subtitle history,
-controls, watchdog handling and console acceptance remain to be implemented or
-validated before this roadmap item is complete.
+also compiles and links with the reposition API.
+
+The foreground transport path now copies arriving input into history while the
+decoder is paused. It has controller and phone requests for pause/resume,
+30-second seeks and return to live, plus a paused/behind-live banner. The
+channel and track menus retain their own directional controls; playback-only
+phone actions are ignored by the main menu. A provider timeline boundary
+expires the old bytes even when the replacement stream uses identical timestamps.
+Pause-aware progress checks keep an intentionally frozen picture from triggering
+the normal video-stall watchdog. History allocation failure falls back to ordinary
+playback.
+
+This remains incomplete: decoder parameter replay, retained subtitles on seek,
+direct WebM live playback, repeated seek requests and native pause/rewind/expiry
+acceptance still need work. The 96-test core and 146-test UI sanitizer suites,
+13 phone remote integration tests, native queue-state host check and PS5
+application build pass. The foreground changes
+have not been packaged or installed on a console, and no timeshift PR is open.
 
 - 2026-10-08 | rewind | 4c63161 | host/PS5 build | partial-pass: mapped history and clock replay | ../psiptv/results/roadmap/timeshift-clock-native-result.json | integrate foreground controls
+- 2026-10-08 | rewind | ec377c9 | host/PS5 build | partial-pass: foreground controls | ../psiptv/results/roadmap/timeshift-player-result.json | decoder/subtitle replay, native acceptance
 
 ## Source additions
 
