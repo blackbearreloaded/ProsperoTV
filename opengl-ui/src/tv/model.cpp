@@ -403,6 +403,12 @@ void Model::close()
     account_prompt_pending_ = false;
 }
 
+bool Model::close_for_storage()
+{
+    close();
+    return library_.close();
+}
+
 void Model::poll()
 {
     if (keyboard_ready_)

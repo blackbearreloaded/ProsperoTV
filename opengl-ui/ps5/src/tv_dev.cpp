@@ -192,11 +192,11 @@ void Script::closing(const char *why)
 
 void Script::menu_opened(std::uint64_t session)
 {
-    // A press that chose a channel closed the menu in its first frame: it is
-    // over, and must not press again in the menu that opens now.
+    // A channel or storage operation ended this press. It must not be
+    // repeated in the menu that opens now.
     if (active_ && at_ < steps_.size() && steps_[at_].kind == Kind::press && frame_ > 0)
     {
-        note("press %s: a channel started", steps_[at_].text.c_str());
+        note("press %s: menu reopened", steps_[at_].text.c_str());
         next();
     }
     session_ = session;
@@ -232,6 +232,8 @@ void Script::status_line(const ptv::Model &model, const ptv::App &app)
     if (position >= 0)
         focused = model.channel(model.visible(static_cast<unsigned>(position))).name;
     const int tab = app.tab();
+    note("settings volume=%d hide_failed=%d preview=%d", app.settings().volume,
+         app.settings().hide_failed ? 1 : 0, app.settings().live_preview ? 1 : 0);
     note("status tab=%s channels=%u visible=%u position=%d focused=\"%s\" letters=%d search=%d "
          "query=\"%s\" refreshing=%d level=%d frames=%d avg=%.2fms worst=%.2fms slow=%d",
          tab >= 0 && tab < 6 ? kTabNames[tab] : "?", model.channel_count(), model.visible_count(),

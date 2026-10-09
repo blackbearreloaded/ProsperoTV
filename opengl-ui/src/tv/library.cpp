@@ -124,7 +124,15 @@ const char *schedule_name(RefreshSchedule schedule)
 
 Library::~Library()
 {
-    sqlite3_close(db_);
+    close();
+}
+
+bool Library::close()
+{
+    if (sqlite3_close(db_) != SQLITE_OK)
+        return false;
+    db_ = nullptr;
+    return true;
 }
 
 bool Library::open(const std::string &path)

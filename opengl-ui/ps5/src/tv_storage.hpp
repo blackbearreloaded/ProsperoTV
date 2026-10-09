@@ -26,6 +26,8 @@ namespace tv::storage
 // settles every path, makes the folders, writes the carried files where the
 // new place has none, and moves the log.
 void initialize();
+// Select the launching console user's folders before any worker starts.
+bool select_profile(int user_id, std::string &error);
 
 // Whether filesystem access was granted, and what the request answered
 // (elevation::Status as a number; -1 when it was not asked).

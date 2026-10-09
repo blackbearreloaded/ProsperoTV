@@ -20,10 +20,10 @@ and relevant checks work.
 | HDR | Preserve HDR metadata and output HDR on compatible displays | Pending |
 | Multiview | Two or four simultaneous channels, within measured decoder limits | Pending |
 | Parental controls | PIN-protected adult categories and kids-only mode | Pending |
-| Profiles | Separate sources, favorites and history by signed-in console user | Pending |
+| Profiles | Separate sources, favorites and history by signed-in console user | Implemented; isolation/migration sanitizer tests and PS5 build pass, console case pending |
 | Interface languages | Follow the console language for menus | Pending |
-| Backup/restore | Export sources/favorites/settings to USB and restore them safely | Pending |
-| Failure reports | Export a useful redacted diagnostic report to USB in a normal build | Pending |
+| Backup/restore | Export sources/favorites/settings to USB and restore them safely | Implemented; sanitizer checks and PS5 build pass, console case pending |
+| Failure reports | Export a useful redacted diagnostic report to USB in a normal build | Implemented; sanitizer checks and PS5 build pass, console case pending |
 
 Completion also requires host checks, a PS5 build, bounded testing on an idle
 192.168.4.30 or 192.168.4.40, an updated deliverable, and a pull request. Console
@@ -69,3 +69,58 @@ frames and decoded 469 audio frames, then reported the requested stop and clean
 cleanup. Installed executable hashes matched the frozen candidate, the title
 closed, and all three development services remained healthy. This validates
 synthetic services on the console, not physical tuners or real provider accounts.
+
+## USB data handling
+
+Settings offers backup, restore and failure-report export, with a drive chooser
+when multiple readable USB mounts are present. The backup is
+`ProsperoTV-backup.sqlite3` on the selected drive; the confirmation explains that
+it includes provider passwords. It includes source records, visibility choices,
+favorite folders, favorites, history and interface settings. Pairing tokens and
+downloaded catalogues are excluded.
+
+The menu pauses model and remote mutations, closes the database and runs the
+storage operation on a worker while showing progress. Restore checks the complete
+bounded archive and checksums before replacing any settings. A rollback journal
+recovers the original files after an interrupted restore. The model and settings
+are reconstructed before browsing resumes. A failed recovery keeps the journal
+and prevents startup from changing the affected files.
+
+A normal build saves the last playback failure as numeric decoder/network
+evidence. Successful playback does not erase it. Export writes
+`ProsperoTV-failure.txt`, retaining version, time, result and attempt count while
+excluding channel names, URLs, provider responses and credentials. USB access uses
+the app's existing filesystem access; no extra access request is made by these
+actions.
+
+Validation: all 122 UI tests pass under ASan/UBSan, including backup round trips,
+corrupt/incomplete archive rejection, interrupted-restore recovery, retained
+pairing state, multiple drives, controller confirmation and report redaction.
+The PS5 production cross-build also passes. Physical USB validation remains open.
+
+## Console profiles
+
+The user who opens the title owns its profile. Sources, favorite folders, recent
+channels, settings, cache, pairing tokens and logs live under that user's folder.
+The account service and controllers use the same initial console user. Settings
+shows that person's console name. Reopen the app from another console user to use
+their profile; the application does not change the console's signed-in user.
+
+The first user to launch this version inherits the old shared settings once.
+Original files are retained. Other users start with empty personal libraries,
+and phones must be paired to the new profile. Interrupted migration resumes
+without replacing existing profile files. Missing user identity or a damaged
+migration record stops startup instead of exposing shared accounts.
+
+Validation: 125 UI tests under ASan/UBSan and the PS5 build pass. Profile tests
+cover two users, private pairing/settings paths, first-user-only migration,
+resuming an interrupted copy and retaining deliberate deletions after migration.
+Console profile discovery is supported by the test runner; changing console
+users is not automated.
+
+PR #11 validation after rebasing onto main: all 126 UI tests pass under
+ASan/UBSan. A filesystem obstruction during restore now has explicit coverage:
+the recovery journal survives a failed rollback, recovery succeeds after the
+obstruction is removed, and the backup can then be restored successfully.
+CI also passed for the rebased application at `60832ed`. Physical USB media and
+switching actual console users remain unverified.

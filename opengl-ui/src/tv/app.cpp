@@ -52,6 +52,10 @@ enum FormRow : int
     kRowHideFailed,
     kRowResume,
     kRowPreview,
+    kRowBackup,
+    kRowRestore,
+    kRowReport,
+    kRowProfile,
 };
 
 constexpr const char *kTabNames[] = {"Live TV",   "Favorites", "Sources",
@@ -171,6 +175,15 @@ App::App(Model &model, const ui::Fonts &fonts, std::uint32_t glass_texture,
     form_.add_header("Troubleshooting");
     form_.add_toggle(kRowDiagnostics, "Diagnostic log", settings.diagnostics).description =
         "Records what the app does in logs/debug-trace.txt, to send with a report.";
+    form_.add_action(kRowReport, "Export failure report to USB").description =
+        "Saves the most recent playback failure without account details or stream addresses.";
+    form_.add_header("Household");
+    form_.add_value(kRowProfile, "Console profile", "Current console user").description =
+        "Sources, favorites, history and paired phones belong to the console user who opened the "
+        "app.";
+    form_.add_header("Backup and restore");
+    form_.add_action(kRowBackup, "Back up to USB");
+    form_.add_action(kRowRestore, "Restore from USB");
     form_.set_bounds(kSettingsPanel.inset(22.0f));
     // The viewer's switch; a debug build or a scripted run keeps its own.
     diag::set_enabled(settings.diagnostics);
@@ -180,6 +193,8 @@ App::App(Model &model, const ui::Fonts &fonts, std::uint32_t glass_texture,
     failure_.style.width = 860.0f;
     failure_.style.body_lines = 5;
     failure_.style.scrim_color = tone::night;
+    storage_dialog_.style = failure_.style;
+    storage_dialog_.style.body_lines = 8;
 
     lean_.snap(tone::ember);
     lean_dark_.snap(tone::wine);
@@ -197,6 +212,11 @@ void App::set_volume(int volume)
     form_.set_slider(kRowVolume, static_cast<float>(shared_.settings.volume));
 }
 
+void App::set_profile_name(std::string name)
+{
+    form_.set_value_text(kRowProfile, name.empty() ? "Current console user" : std::move(name));
+}
+
 void App::remote_notice(const char *message)
 {
     diag::event("notice \"%s\"", message != nullptr ? message : "");
@@ -208,6 +228,45 @@ void App::phone_connected()
     diag::event("phone connected (pairing screen %s)", pairing_open_ ? "open" : "closed");
     if (std::exchange(pairing_open_, false))
         remote_notice("Phone connected");
+}
+
+void App::open_storage(StorageAction action, ui::Feedback &feedback)
+{
+    usb_drives_ = usb_drives(usb_root_);
+    if (usb_drives_.empty())
+    {
+        remote_notice("Connect a readable USB drive, then try again.");
+        return;
+    }
+    storage_action_ = action;
+    usb_choice_ = 0;
+    storage_question(feedback);
+}
+
+void App::storage_question(ui::Feedback &feedback)
+{
+    const bool restore = storage_action_ == StorageAction::restore;
+    const bool report = storage_action_ == StorageAction::report;
+    ui::DialogContent content;
+    content.title = restore  ? "Restore from USB?"
+                    : report ? "Export failure report?"
+                             : "Back up to USB?";
+    content.body = "Drive: " + usb_drives_[usb_choice_] + "\n";
+    content.body +=
+        restore ? "ProsperoTV-backup.sqlite3 will replace this profile's sources, favorites and "
+                  "settings."
+        : report
+            ? "Saves ProsperoTV-failure.txt. Account details and stream addresses are excluded."
+            : "Saves ProsperoTV-backup.sqlite3, replacing any previous backup on this drive. It "
+              "contains your provider passwords: keep the drive private.";
+    content.buttons = {{"Cancel"}};
+    if (usb_drives_.size() > 1)
+        content.buttons.push_back({"Next drive"});
+    content.buttons.push_back({restore  ? "Restore"
+                               : report ? "Export"
+                                        : "Back up",
+                               ui::ButtonKind::primary, restore});
+    storage_dialog_.open(std::move(content), feedback);
 }
 
 void App::set_pairing_info(std::string url, std::string code, unsigned seconds, unsigned phones)
@@ -477,6 +536,12 @@ void App::handle_screen(const InputFrame &input, ui::Feedback &feedback)
         }
         else if (event == ui::Event::activated && form_.changed_id() == kRowForgetPhones)
             forget_requested_ = true;
+        else if (event == ui::Event::activated && form_.changed_id() == kRowBackup)
+            open_storage(StorageAction::backup, feedback);
+        else if (event == ui::Event::activated && form_.changed_id() == kRowRestore)
+            open_storage(StorageAction::restore, feedback);
+        else if (event == ui::Event::activated && form_.changed_id() == kRowReport)
+            open_storage(StorageAction::report, feedback);
         break;
     }
     default:
@@ -508,8 +573,8 @@ void App::play_intro()
 
 bool App::accepts_remote_search() const
 {
-    return browsing() && !update_.is_open() && !failure_.is_open() && !library_sheet_.is_open() &&
-           !guide_sheet_.is_open();
+    return !storage_busy_ && !storage_dialog_.is_open() && browsing() && !update_.is_open() &&
+           !failure_.is_open() && !library_sheet_.is_open() && !guide_sheet_.is_open();
 }
 
 bool App::remote_search(const char *query)
@@ -543,6 +608,11 @@ void App::update(const InputFrame &input, float dt, ui::Feedback &feedback)
 
 void App::step(const InputFrame &input, float dt, ui::Feedback &feedback)
 {
+    if (storage_busy_)
+    {
+        shared_.clock += dt;
+        return;
+    }
     Model &model = shared_.model;
     if (diag::enabled() &&
         (input.pressed != 0 || (input.nav != Direction::none && !input.nav_repeat)))
@@ -616,7 +686,26 @@ void App::step(const InputFrame &input, float dt, ui::Feedback &feedback)
     // ---- input goes to whatever is on top ----
     if (input.pressed != 0 || input.nav != Direction::none)
         model.resume_last(false);
-    if (pairing_open_)
+    if (storage_dialog_.is_open())
+    {
+        const auto event = storage_dialog_.handle(input, feedback);
+        if (event == ui::Event::activated && storage_dialog_.choice() > 0)
+        {
+            if (usb_drives_.size() > 1 && storage_dialog_.choice() == 1)
+            {
+                usb_choice_ = (usb_choice_ + 1) % usb_drives_.size();
+                storage_question(feedback);
+            }
+            else
+            {
+                storage_request_ = {storage_action_, usb_drives_[usb_choice_]};
+                storage_busy_ = true;
+                stop_preview();
+                return;
+            }
+        }
+    }
+    else if (pairing_open_)
     {
         if (input.is_pressed(Action::back))
             pairing_open_ = false;
@@ -660,7 +749,8 @@ void App::step(const InputFrame &input, float dt, ui::Feedback &feedback)
         handle_screen(input, feedback);
     }
     if (intro_ < 0 && !update_.is_open() && !failure_.is_open() && !library_sheet_.is_open() &&
-        !guide_sheet_.is_open() && !search_.is_open() && !pairing_open_)
+        !guide_sheet_.is_open() && !search_.is_open() && !pairing_open_ &&
+        !storage_dialog_.is_open())
         model.resume_last(shared_.settings.resume_last && input.pressed == 0 &&
                           input.nav == Direction::none);
 
@@ -680,7 +770,7 @@ void App::step(const InputFrame &input, float dt, ui::Feedback &feedback)
     const bool preview_allowed = browsing() && shared_.settings.live_preview && intro_ < 0 &&
                                  !update_.is_open() && !failure_.is_open() && !search_.is_open() &&
                                  !library_sheet_.is_open() && !guide_sheet_.is_open() &&
-                                 !pairing_open_;
+                                 !pairing_open_ && !storage_dialog_.is_open();
     const auto focused = preview_allowed ? browse_.focused() : std::nullopt;
     shared_.preview.update(focused ? model.preview_request(focused->id) : std::nullopt, dt);
     if (tabs_.active() == kVod)
@@ -694,6 +784,8 @@ void App::step(const InputFrame &input, float dt, ui::Feedback &feedback)
     guide_sheet_.update();
     form_.update(dt);
     failure_.update(dt);
+    storage_dialog_.style.reduced_motion = reduced;
+    storage_dialog_.update(dt);
     update_.update(dt, feedback);
     shared_.toasts.update(dt, feedback);
     announcements_.update(dt, feedback);
@@ -1093,6 +1185,16 @@ void App::draw(Frame &frame) const
     guide_sheet_.draw(over);
     failure_.draw(over);
     update_.draw(over);
+    storage_dialog_.draw(over);
+    if (storage_busy_)
+    {
+        over.list.rounded_rect({0, 0, kWidth, kHeight}, 0, tone::night.with_alpha(0.94f));
+        ui::text(over.list, over.fonts.semibold, "Working with the USB drive...", kWidth / 2, 490,
+                 40, shared_.theme.text, gfx::Align::center);
+        ui::text(over.list, over.fonts.regular, "Keep the drive connected until this finishes.",
+                 kWidth / 2, 555, 26, shared_.theme.text_muted, gfx::Align::center);
+        over.list.arc(kWidth / 2, 635, 22, 4, shared_.clock * 4, 2.2f, tone::accent);
+    }
     if (pairing_open_)
         draw_pairing(over);
     frame.glass = !frame.overlay.empty();

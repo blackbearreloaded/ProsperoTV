@@ -132,6 +132,8 @@ class Model
     // survive.
     bool open();
     void close();
+    // A backup/restore ends this model's lifetime. Recreate it before browsing again.
+    bool close_for_storage();
     // Once per frame: keyboard answers, the steps of the account form, and
     // the result of a download.
     void poll();
