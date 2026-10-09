@@ -84,7 +84,8 @@ extern "C"
         uint32_t hdr;
         uint32_t enable_audio;
         uint32_t audio_stream_type; /* TS 0x03/0x04: MP2; zero/0x0f: AAC ADTS. */
-        /* Optional menu preview: disables audio and the full-screen presenter. */
+        /* Optional picture consumer: bypasses the full-screen presenter.
+         * Menu previews leave enable_audio zero; multiview may select one track. */
         void (*picture)(void *context, const iptv_native_picture_t *picture);
         void *picture_context;
         int (*picture_cancelled)(void *context);

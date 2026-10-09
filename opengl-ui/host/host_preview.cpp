@@ -32,7 +32,8 @@ unsigned preview_stops()
 namespace ptv::platform
 {
 void preview(const PlayRequest &, const iptv::http::RequestControl &control,
-             void (*picture)(void *, const iptv_native_picture_t *), void *context)
+             void (*picture)(void *, const iptv_native_picture_t *), void *context,
+             PreviewAudio *audio)
 {
     if (!enabled.load())
         return;
@@ -42,6 +43,13 @@ void preview(const PlayRequest &, const iptv::http::RequestControl &control,
     unsigned frame = 0;
     while (!control.cancelled(control.context))
     {
+        if (audio)
+        {
+            if (audio->requested.load() && audio->claim())
+                audio->active.store(true);
+            else
+                audio->release();
+        }
         for (unsigned y = 0; y < 54; ++y)
             for (unsigned x = 0; x < 96; ++x)
                 nv12[y * 96 + x] = static_cast<std::uint8_t>(32 + (x + y + frame) % 190);
@@ -51,6 +59,8 @@ void preview(const PlayRequest &, const iptv::http::RequestControl &control,
         ++frame;
         sleep_ms(20);
     }
+    if (audio)
+        audio->release();
     ++stops;
 }
 } // namespace ptv::platform

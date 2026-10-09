@@ -353,6 +353,7 @@ class Model
     // Queues the channel for the player; the frame loop takes the request,
     // closes the menu and plays it.
     bool play(unsigned catalog_index);
+    bool play_channel(std::string_view channel_id);
     // The most recent other channel, including outside the current search, but
     // never a hidden or parent-blocked channel.
     std::optional<unsigned> previous_channel(std::string_view current) const;

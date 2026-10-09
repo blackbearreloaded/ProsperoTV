@@ -832,6 +832,12 @@ std::optional<PlayRequest> Model::preview_request(std::string_view channel_id) c
                                                                   : std::optional{request};
 }
 
+bool Model::play_channel(std::string_view channel_id)
+{
+    const auto index = catalog_.Find(channel_id);
+    return index < catalog_.size() && play(static_cast<unsigned>(index));
+}
+
 std::optional<unsigned> Model::previous_channel(std::string_view current) const
 {
     for (const auto &id : user_.recent_channel_ids)

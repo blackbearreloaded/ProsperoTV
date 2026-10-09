@@ -13,6 +13,7 @@
 #include "tv/guide_sheet.hpp"
 #include "tv/vod_screen.hpp"
 #include "tv/backup.hpp"
+#include "tv/multiview.hpp"
 #include "ui/components/dialog.hpp"
 #include "ui/components/form.hpp"
 #include "ui/components/tabs.hpp"
@@ -47,11 +48,13 @@ class App
     }
     void configure_preview(LivePreview::Upload upload, ImageCache::Release release)
     {
-        shared_.preview.configure(std::move(upload), std::move(release));
+        shared_.preview.configure(upload, release);
+        multiview_.configure(std::move(upload), std::move(release));
     }
     void stop_preview()
     {
         shared_.preview.clear();
+        multiview_.stop();
     }
     bool accepts_remote_search() const;
     bool remote_search(const char *query);
@@ -202,6 +205,7 @@ class App
     void storage_question(ui::Feedback &feedback);
 
     Shared shared_;
+    Multiview multiview_;
     BrowseScreen browse_;
     SourcesScreen sources_;
     VodScreen vod_;

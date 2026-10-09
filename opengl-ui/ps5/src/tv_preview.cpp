@@ -27,6 +27,7 @@ struct Transfer
 {
     const iptv::http::RequestControl &control;
     const std::function<bool(const char *, std::size_t)> &sink;
+    const std::function<void()> &poll;
     long status = 0;
     std::size_t headers = 0;
 };
@@ -59,12 +60,15 @@ std::size_t receive(char *bytes, std::size_t size, std::size_t count, void *self
 }
 int progress(void *self, curl_off_t, curl_off_t, curl_off_t, curl_off_t)
 {
-    return cancelled(static_cast<Transfer *>(self)->control) ? 1 : 0;
+    auto &t = *static_cast<Transfer *>(self);
+    if (t.poll)
+        t.poll();
+    return cancelled(t.control) ? 1 : 0;
 }
 bool download(const std::string &original, const iptv::http::RequestHeaders &headers,
               const iptv::http::RequestControl &control,
               const std::function<bool(const char *, std::size_t)> &sink, std::string *effective,
-              long timeout_ms = 0)
+              long timeout_ms = 0, const std::function<void()> &poll = {})
 {
     if (tv_http_init(0, 0, 0) < 0)
         return false;
@@ -76,7 +80,7 @@ bool download(const std::string &original, const iptv::http::RequestHeaders &hea
         auto *curl = curl_easy_init();
         if (!curl)
             return false;
-        Transfer transfer{control, sink};
+        Transfer transfer{control, sink, poll};
         const auto scoped = iptv::http::HeadersForUrl(original.c_str(), url.c_str(), headers);
         curl_slist *fields = nullptr;
         for (const auto &[name, value] :
@@ -154,10 +158,13 @@ struct Decoder
     const iptv::http::RequestControl &control;
     void (*picture)(void *, const iptv_native_picture_t *);
     void *context;
+    PreviewAudio *audio;
+    const std::string &channel;
+    uint32_t audio_type = 0, selected_audio = 0;
     bool opened = false;
     Decoder(const iptv::http::RequestControl &c, void (*p)(void *, const iptv_native_picture_t *),
-            void *ctx)
-        : control(c), picture(p), context(ctx)
+            void *ctx, PreviewAudio *a, const std::string &id)
+        : control(c), picture(p), context(ctx), audio(a), channel(id)
     {
         iptv_native_backend_init(&native);
         iptv_stream_init(&stream);
@@ -166,6 +173,7 @@ struct Decoder
         backend.open = [](void *self, const iptv_stream_format_t *f)
         {
             auto &d = *static_cast<Decoder *>(self);
+            d.audio_type = f->audio_stream_type;
             if (cancelled(d.control) || (f->video_codec != IPTV_STREAM_VIDEO_H264 &&
                                          f->video_codec != IPTV_STREAM_VIDEO_HEVC))
                 return -1;
@@ -191,6 +199,7 @@ struct Decoder
             };
             const auto result = iptv_native_backend_open(&d.native, &config);
             d.opened = result == 0;
+            diag::event("preview open result=%d channel=%s", result, d.channel.c_str());
             return static_cast<int>(result);
         };
         backend.submit_video =
@@ -201,9 +210,34 @@ struct Decoder
                                         : static_cast<int>(iptv_native_backend_submit_video(
                                               &d.native, bytes, count, pts));
         };
-        backend.submit_audio = [](void *, const std::uint8_t *, std::size_t, std::uint64_t)
-        { return 0; };
-        backend.disable_audio = [](void *) { return 0; };
+        backend.submit_audio =
+            [](void *self, const std::uint8_t *bytes, std::size_t count, std::uint64_t pts)
+        {
+            auto &d = *static_cast<Decoder *>(self);
+            d.sync_audio();
+            if (d.audio && d.audio->active.load() &&
+                iptv_native_backend_submit_audio(&d.native, bytes, count, pts) != 0)
+            {
+                (void)iptv_native_backend_select_audio(&d.native, 0);
+                d.audio->release();
+                d.audio->failed.store(true);
+            }
+            return 0; // An unavailable audio track must not stop the other pictures.
+        };
+        backend.select_audio = [](void *self, uint32_t type)
+        {
+            auto &d = *static_cast<Decoder *>(self);
+            d.audio_type = type;
+            d.sync_audio();
+            return 0;
+        };
+        backend.disable_audio = [](void *self)
+        {
+            auto &d = *static_cast<Decoder *>(self);
+            d.audio_type = 0;
+            d.sync_audio();
+            return 0;
+        };
         backend.discontinuity = [](void *self)
         {
             return static_cast<int>(
@@ -222,23 +256,49 @@ struct Decoder
             const auto result = iptv_native_backend_close(&native);
             iptv_native_telemetry_t telemetry{};
             iptv_native_backend_get_telemetry(&native, &telemetry);
-            diag::event("preview decoded=%llu delivered=%llu audio=%llu cleanup=%d",
+            diag::event("preview decoded=%llu delivered=%llu audio=%llu cleanup=%d channel=%s",
                         static_cast<unsigned long long>(telemetry.decoded_frames),
                         static_cast<unsigned long long>(telemetry.presented_frames),
-                        static_cast<unsigned long long>(telemetry.decoded_audio_frames), result);
+                        static_cast<unsigned long long>(telemetry.decoded_audio_frames), result,
+                        channel.c_str());
         }
         iptv_stream_cleanup(&stream);
+        if (audio)
+            audio->release();
+    }
+    void sync_audio()
+    {
+        if (!audio || !opened)
+            return;
+        const uint32_t wanted = audio->requested.load() && !cancelled(control) ? audio_type : 0;
+        if (wanted == selected_audio)
+            return;
+        if (wanted && !audio->claim())
+            return; // Retry on the next packet after the other tile releases its port.
+        // The demux/download thread owns reconfiguration. The UI waits for the
+        // old tile's active flag to clear before requesting audio on another.
+        const int result = iptv_native_backend_select_audio(&native, wanted);
+        selected_audio = wanted; // Retry a failed track only after another user selection.
+        audio->failed.store(result != 0);
+        audio->active.store(wanted && result == 0);
+        if (!wanted || result != 0)
+            audio->release();
+        diag::event("multiview audio type=%u active=%d result=%d channel=%s", wanted,
+                    audio->active.load() ? 1 : 0, result, channel.c_str());
     }
     bool push(const char *bytes, std::size_t count)
     {
+        sync_audio();
         return !cancelled(control) && iptv_stream_push(&stream, bytes, count) == 0;
     }
 };
 
 void watch(std::string url, const PlayRequest &request, const iptv::http::RequestControl &control,
-           void (*picture)(void *, const iptv_native_picture_t *), void *context)
+           void (*picture)(void *, const iptv_native_picture_t *), void *context,
+           PreviewAudio *audio)
 {
-    auto decoder = std::make_unique<Decoder>(control, picture, context);
+    auto decoder = std::make_unique<Decoder>(control, picture, context, audio, request.channel_id);
+    const auto poll = [&] { decoder->sync_audio(); };
     iptv::http::RequestHeaders headers{request.user_agent.c_str(), request.referrer.c_str()};
     headers.authorization = request.authorization.c_str();
     headers.credential_origin =
@@ -268,7 +328,7 @@ void watch(std::string url, const PlayRequest &request, const iptv::http::Reques
                 }
                 return true;
             },
-            &effective);
+            &effective, 0, poll);
         if (transport && ok && decoder->opened)
             iptv_native_backend_drain(&decoder->native);
         if (!ok || transport)
@@ -316,7 +376,7 @@ void watch(std::string url, const PlayRequest &request, const iptv::http::Reques
             std::string location;
             if (!download(
                     segment.url, headers, control, [&](const char *bytes, std::size_t count)
-                    { return decoder->push(bytes, count); }, &location))
+                    { return decoder->push(bytes, count); }, &location, 0, poll))
                 return;
             next_sequence = segment.sequence + 1;
         }
@@ -328,14 +388,18 @@ void watch(std::string url, const PlayRequest &request, const iptv::http::Reques
         }
         const unsigned wait = std::clamp(playlist->target_duration_ms / 2, 250u, 2000u);
         for (unsigned slept = 0; slept < wait && !cancelled(control); slept += 20)
+        {
+            poll();
             sleep_ms(20);
+        }
         url = effective;
     }
 }
 } // namespace
 
 void preview(const PlayRequest &request, const iptv::http::RequestControl &control,
-             void (*picture)(void *, const iptv_native_picture_t *), void *context)
+             void (*picture)(void *, const iptv_native_picture_t *), void *context,
+             PreviewAudio *audio)
 {
     auto urls = request.urls;
     if (!request.portal_command.empty())
@@ -351,7 +415,7 @@ void preview(const PlayRequest &request, const iptv::http::RequestControl &contr
     {
         if (cancelled(control))
             break;
-        watch(url, request, control, picture, context);
+        watch(url, request, control, picture, context, audio);
     }
     diag::event("preview stopped");
 }

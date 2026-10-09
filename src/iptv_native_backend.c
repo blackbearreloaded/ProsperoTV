@@ -1350,8 +1350,6 @@ int32_t iptv_native_backend_open(iptv_native_backend_t *backend,
 
     state->mode = mode;
     state->config = *config;
-    if (config->picture)
-        state->config.enable_audio = 0;
     atomic_store(&state->audio_buffer_type,
                  state->config.enable_audio
                      ? (config->audio_stream_type ? config->audio_stream_type : 0x0fu)
@@ -2761,7 +2759,7 @@ int32_t iptv_native_backend_select_audio(iptv_native_backend_t *backend, uint32_
     backend_state_t *state = state_from(backend);
     if (!state || state->magic != BACKEND_MAGIC)
         return IPTV_NATIVE_E_ARGUMENT;
-    if (state->state != IPTV_NATIVE_STATE_OPEN || state->drain_started || state->config.picture)
+    if (state->state != IPTV_NATIVE_STATE_OPEN || state->drain_started)
         return IPTV_NATIVE_E_STATE;
     if (stream_type && stream_type != 0x0fu && stream_type != 0x03u && stream_type != 0x04u &&
         !iptv_audio_software_type(stream_type))
@@ -3035,7 +3033,9 @@ int32_t iptv_native_backend_close(iptv_native_backend_t *backend)
         return 0;
     first_result = state->telemetry.cleanup_result;
     result = iptv_native_backend_drain(backend);
-    if (first_result == 0 && result != 0)
+    /* Cancelling a pending picture is normal when closing a preview. Keep
+     * subsequent resource-release failures visible instead of masking them. */
+    if (first_result == 0 && result != 0 && result != IPTV_NATIVE_E_CANCELLED)
         first_result = result;
     state->state = IPTV_NATIVE_STATE_STOPPING;
     state->telemetry.state = state->state;
