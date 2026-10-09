@@ -1045,6 +1045,64 @@ TEST_F(AudioSelectionTest, InBandFormatChangeReportsItsOwnClockForHistoryRecover
     EXPECT_EQ(fake.opened_level, 42u);
 }
 
+TEST_F(AudioSelectionTest, VideoPidChangeReopensFromTheNewHistoryTimeline)
+{
+    iptv::Timeshift history(188 * 32);
+    ASSERT_TRUE(history.enable_replay());
+    const auto initial = StreamBytes(0x0f, ConfigurationPacket(0, 1, 1));
+    ASSERT_TRUE(history.append(initial.data(), initial.size()));
+    ASSERT_EQ(iptv_stream_push(&session, initial.data(), initial.size()), IPTV_STREAM_OK);
+    const auto old = history.seek(1000000);
+    ASSERT_TRUE(old);
+    auto programme = PmtSection(0x0f);
+    programme.resize(programme.size() - 4);
+    programme[9] = programme[14] = 0x20; // PCR and video move from 0x110 to 0x120.
+    AppendCrc(&programme);
+    const auto pmt = PsiPacket(0x100, programme, 1);
+    ASSERT_TRUE(history.append(pmt.data(), pmt.size()));
+    for (unsigned second = 2; second <= 6; ++second)
+    {
+        auto picture = ConfigurationPacket(second - 2, 2, second);
+        picture[2] = 0x20;
+        ASSERT_TRUE(history.append(picture.data(), picture.size()));
+    }
+    EXPECT_NE(history.range().generation, old->generation);
+    EXPECT_EQ(history.reposition(&session, *old), IPTV_STREAM_INVALID_ARGUMENT);
+    const auto next = history.seek_next(2000000);
+    ASSERT_TRUE(next);
+    ASSERT_EQ(history.reposition(&session, *next), IPTV_STREAM_REOPEN_REQUIRED);
+    EXPECT_EQ(session.telemetry.reopen_pts_us, next->pts_us);
+    ASSERT_EQ(iptv_stream_cleanup(&session), IPTV_STREAM_OK);
+    SetUp();
+    ASSERT_EQ(history.reposition(&session, *next), IPTV_STREAM_OK);
+    EXPECT_EQ(session.telemetry.format.video_pid, 0x120u);
+    for (unsigned i = 0; i < 3; ++i)
+    {
+        auto picture = StampedPacket(H264Packet(i, false), (2 + i) * 90000);
+        picture[2] = 0x20;
+        ASSERT_EQ(iptv_stream_push(&session, picture.data(), picture.size()), IPTV_STREAM_OK);
+    }
+    EXPECT_EQ(fake.opens, 2u);
+}
+
+TEST_F(AudioSelectionTest, CodecChangeExpiresHistoryAndRequestsNativeReopen)
+{
+    iptv::Timeshift history(188 * 32);
+    ASSERT_TRUE(history.enable_replay());
+    const auto initial = StreamBytes(0x0f, ConfigurationPacket(0, 1, 1));
+    ASSERT_TRUE(history.append(initial.data(), initial.size()));
+    ASSERT_EQ(iptv_stream_push(&session, initial.data(), initial.size()), IPTV_STREAM_OK);
+    const auto generation = history.range().generation;
+    const auto pmt = PsiPacket(0x100, PmtSection(0x0f, 0x111, 0x24), 1);
+    ASSERT_TRUE(history.append(pmt.data(), pmt.size()));
+    EXPECT_NE(history.range().generation, generation);
+    EXPECT_FALSE(history.range().timed); // Wait for the new codec's complete setup.
+    EXPECT_EQ(history.range().replay_result, IPTV_STREAM_OK);
+    ASSERT_EQ(iptv_stream_push(&session, pmt.data(), pmt.size()), IPTV_STREAM_REOPEN_REQUIRED);
+    EXPECT_EQ(session.telemetry.reopen_pts_us, 1000001u);
+    EXPECT_EQ(fake.opens, 1u);
+}
+
 TEST_F(SubtitleStreamTest, HistoryRestoresProgrammeTracksWithoutRetainedTables)
 {
     iptv::Timeshift history(188 * 32);

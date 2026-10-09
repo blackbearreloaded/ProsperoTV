@@ -1098,8 +1098,12 @@ static int parse_pmt_section(iptv_stream_session_t *session, impl_t *impl, const
     if (impl->pmt_seen && !same_video)
     {
         if (impl->backend_ever_opened)
-            return fail(session, IPTV_STREAM_UNSUPPORTED_FORMAT,
-                        "PMT video changed after native backend open");
+        {
+            session->telemetry.reopen_pts_us = session->telemetry.last_video_pts_us;
+            if (session->telemetry.reopen_pts_us != IPTV_STREAM_PTS_UNKNOWN)
+                ++session->telemetry.reopen_pts_us;
+            return fail(session, IPTV_STREAM_REOPEN_REQUIRED, "PMT video changed; reopen required");
+        }
         impl->video_sps = false;
         impl->video_pps = false;
         impl->video_vps = false;
@@ -2627,7 +2631,11 @@ int iptv_stream_reposition_from(iptv_stream_session_t *session, const iptv_strea
         if (pts_us < history->video_configurations->pts_us || pts_us > history->video_high_water)
             return IPTV_STREAM_INVALID_ARGUMENT;
         if (impl->pmt_seen && !same_video_program(&impl->format, &history->format))
-            return IPTV_STREAM_UNSUPPORTED_FORMAT;
+        {
+            session->telemetry.reopen_pts_us = pts_us;
+            return fail(session, IPTV_STREAM_REOPEN_REQUIRED,
+                        "historical video programme changed; reopen required");
+        }
     }
     video_parameters_t restored;
     programme_t programme{};

@@ -299,15 +299,20 @@ void Timeshift::index()
         packet(bytes, scan_);
         if (replay_enabled_ && replay_result_ == IPTV_STREAM_OK)
         {
+            const auto previous_codec = metadata_.telemetry.format.video_codec;
             if (generation != generation_)
                 replay_result_ = iptv_stream_discontinuity(&metadata_);
             if (replay_result_ == IPTV_STREAM_OK)
                 replay_result_ = iptv_stream_scan(&metadata_, bytes, packet_bytes, 0);
             const auto selected = metadata_.telemetry.format.video_pid;
-            if (selected && selected != indexed_pid_)
+            const bool changed_codec = previous_codec != IPTV_STREAM_VIDEO_UNKNOWN &&
+                                       previous_codec != metadata_.telemetry.format.video_codec;
+            if (selected && (selected != indexed_pid_ || changed_codec))
             {
                 if (indexed_pid_)
                 {
+                    // A new programme/codec starts a new replay timeline. Keep
+                    // its replacement setup separate from the retired decoder.
                     marks_.clear();
                     begin_ = scan_;
                     have_ticks_ = false;
