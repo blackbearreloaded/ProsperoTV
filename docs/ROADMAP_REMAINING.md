@@ -21,7 +21,7 @@ and relevant checks work.
 | Multiview | Two or four simultaneous channels, within measured decoder limits | Implemented; 151 UI sanitizer tests, 31 tooling checks, lint and PS5 build pass; native four-channel 720p playback, focus audio/mute, shrinking and full-screen handoff pass with clean teardown |
 | Parental controls | PIN-protected adult categories and kids-only mode | Implemented; 132 UI sanitizer tests, 73 core tests and PS5 build pass; console case pending |
 | Profiles | Separate sources, favorites and history by signed-in console user | Implemented; isolation/migration sanitizer tests, PS5 build and console startup pass |
-| Interface languages | Follow the console language for menus | Implemented for English, Spanish, French, German, Italian, Portuguese and Dutch; 154 UI sanitizer tests, German/French rendered walkthroughs and PS5 build pass; native startup acceptance pending |
+| Interface languages | Follow the console language for menus | Implemented for English, Spanish, French, German, Italian, Portuguese and Dutch; 154 UI sanitizer tests, German/French rendered walkthroughs and PS5 build pass; native language query, five screens and healthy teardown pass |
 | Backup/restore | Export sources/favorites/settings to USB and restore them safely | Implemented; sanitizer/build checks and console sandbox-drive workflow pass; physical USB untested |
 | Failure reports | Export a useful redacted diagnostic report to USB in a normal build | Implemented; sanitizer/build checks and console sandbox-drive workflow pass; physical USB untested |
 
@@ -47,8 +47,19 @@ same mapping without changing console settings. German and French walkthroughs
 complete without OpenGL errors; reviewed settings, source, guide, About and update
 screens fit their panels. The snapshot target also links the color helper needed
 by HDR previews and subtitles. Guide date headings use a numeric date to avoid
-English weekday/month names. The PS5 build passes; native startup query and
-screen acceptance remain pending.
+English weekday/month names. Native case 62, candidate `6fff1a6` in disposable
+title `PPSA88299`, queried system language 18 (English UK) successfully and
+selected English. All 52 installed files matched the package. Live TV, guide,
+Sources, Settings and About rendered, including the numeric guide date, and the
+console returned idle with all services healthy. Other translated languages
+were exercised in the host renderer without changing console settings.
+
+Case 61 recorded the successful query and four screens, but its first guide
+button was consumed by the opening animation. Case 62 reused the identical
+executable after a longer startup wait. The generic runner matched the ordinary
+`hide_failed=0` settings line; the scoped validator checks the query, captures,
+installed hashes and teardown separately. Evidence is in
+`../psiptv/results/roadmap/console-62/result.json`.
 
 ## Multiview
 
