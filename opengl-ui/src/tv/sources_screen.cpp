@@ -53,8 +53,9 @@ void SourcesScreen::sync()
             continue;
         ui::ListItem row;
         row.title = source_title(source);
-        row.subtitle =
-            source.url.empty() ? tr("Press Cross to set up") : tr(schedule_name(source.schedule));
+        // The built-in list has no address of its own and nothing to set up.
+        row.subtitle = source.url.empty() && source.kind != 0 ? tr("Press Cross to set up")
+                                                              : tr(schedule_name(source.schedule));
         row.badge = source.id == model.selected_source_id() ? tr("In use") : "";
         rows.push_back(std::move(row));
         ids_.push_back(source.id);
@@ -166,8 +167,9 @@ void SourcesScreen::draw(ui::Canvas &canvas) const
             left, 375, 26, width, 38, theme.text_muted, 6);
         return;
     }
-    const std::string address =
-        source->url.empty() ? tr("Not set up") : redact_address(source->url);
+    const std::string address = source->kind == 0     ? tr("Built in")
+                                : source->url.empty() ? tr("Not set up")
+                                                      : redact_address(source->url);
     ui::paragraph(draw, fonts.regular, address, left, 375, 24, width, 34, theme.text_muted, 3);
     ui::text(draw, fonts.semibold,
              tr("Refresh: ") + std::string(tr(schedule_name(source->schedule))), left, 510, 26,

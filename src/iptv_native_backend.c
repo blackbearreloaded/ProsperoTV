@@ -19,6 +19,7 @@
 #include <stdatomic.h>
 #include <stddef.h>
 #include <stdint.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
@@ -1955,6 +1956,41 @@ static int playback_queues_ready(const backend_state_t *state)
     return video_ready && audio_ready;
 }
 
+// The diagnostic log of the interface build (absent elsewhere): one line when
+// playback stops to refill its buffer and one when it goes on, with what the
+// queues held, so a report shows whether the picture waited for video, for
+// sound, or for the network.
+__attribute__((weak)) int tv_diag_enabled(void);
+__attribute__((weak)) void tv_diag_line(const char *line);
+
+static void trace_playback_buffer(const backend_state_t *state, const char *event)
+{
+    if (!tv_diag_enabled || !tv_diag_line || !tv_diag_enabled())
+        return;
+    const uint32_t video_read = atomic_load(&state->video_queue_read);
+    const uint32_t video_write = atomic_load(&state->video_queue_write);
+    const uint32_t audio_read = atomic_load(&state->audio_queue_read);
+    const uint32_t audio_write = atomic_load(&state->audio_queue_write);
+    uint64_t span_ms = 0;
+    if (state->video_queue && video_write - video_read > 1)
+    {
+        const uint64_t first =
+            atomic_load(&state->video_queue[video_read % VIDEO_QUEUE_CAPACITY].pts_us);
+        const uint64_t last =
+            atomic_load(&state->video_queue[(video_write - 1u) % VIDEO_QUEUE_CAPACITY].pts_us);
+        span_ms = last >= first ? (last - first) / 1000u : 0;
+    }
+    const uint64_t gate = atomic_load(&state->playback_gate_started_us);
+    const uint64_t now = monotonic_us();
+    char line[200];
+    snprintf(line, sizeof(line),
+             "[player] buffer %s: video %u frames %llu ms %u KB, audio %u frames, waited %llu ms",
+             event, video_write - video_read, (unsigned long long)span_ms,
+             (unsigned)(atomic_load(&state->video_queue_bytes) / 1024u), audio_write - audio_read,
+             (unsigned long long)(gate && now >= gate ? (now - gate) / 1000u : 0));
+    tv_diag_line(line);
+}
+
 static void restart_playback_buffer(backend_state_t *state)
 {
     atomic_store(&state->playback_gate_started_us, monotonic_us());
@@ -2060,6 +2096,10 @@ static void *video_worker_entry(void *argument)
                 starved_since_us = now;
             else if (now - starved_since_us >= PLAYBACK_UNDERRUN_GRACE_US)
             {
+                trace_playback_buffer(state, atomic_load(&state->video_queue_read) ==
+                                                     atomic_load(&state->video_queue_write)
+                                                 ? "ran out of video"
+                                                 : "ran out of sound");
                 restart_playback_buffer(state);
                 starved_since_us = 0;
             }
@@ -2133,6 +2173,7 @@ static void *video_worker_entry(void *argument)
                 continue;
             }
             state->pace_active = 0;
+            trace_playback_buffer(state, "filled, playing");
             atomic_store_explicit(&state->playback_started, 1, memory_order_release);
         }
         const int32_t result =

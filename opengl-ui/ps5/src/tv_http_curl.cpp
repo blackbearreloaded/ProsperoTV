@@ -19,6 +19,7 @@
 #include <pthread.h>
 #include <string>
 #include <strings.h>
+#include <sys/socket.h>
 #include <time.h>
 #include <utility>
 #include <vector>
@@ -79,6 +80,14 @@ struct Request
 };
 
 pthread_mutex_t g_lock = PTHREAD_MUTEX_INITIALIZER;
+
+// One thread (the player's) may ask to be consulted while it waits on the
+// network: a channel that never answers must not hold the buttons for the
+// length of its timeouts. Other threads' requests are not concerned.
+bool (*g_interrupt)(void *) = nullptr;
+void *g_interrupt_context = nullptr;
+pthread_t g_interrupt_thread;
+std::int64_t g_interrupt_asked_ms = 0;
 Template *g_templates[kSlots];
 Connection *g_connections[kSlots];
 Request *g_requests[kSlots];
@@ -216,6 +225,48 @@ void drive(Request *request, int wait_ms)
         int ready = 0;
         curl_multi_poll(multi, nullptr, 0, wait_ms, &ready);
     }
+}
+
+// True when the waiting thread's owner wants the wait to end. Asked at most
+// every 50 ms: the question reads the controller.
+bool interrupted()
+{
+    if (g_interrupt == nullptr || !pthread_equal(pthread_self(), g_interrupt_thread))
+        return false;
+    const std::int64_t now = now_ms();
+    if (now - g_interrupt_asked_ms < 50)
+        return false;
+    g_interrupt_asked_ms = now;
+    return g_interrupt(g_interrupt_context);
+}
+
+// The console gives a socket a 64 KB receive buffer. A sender may have that
+// much on its way and no more, so a server 60 ms away delivers about 1 MB/s
+// whatever the line could carry: measured as 1.07 MB/s for a 25 Mbit/s film
+// that the same network gave a PC at 18 MB/s and more, and the film stopped
+// every few seconds. The buffer is asked for before the connection is made
+// (the window's scale is agreed then), the largest size the console accepts.
+std::atomic<int> g_receive_buffer{-1}; // what the first socket was given, for the log
+
+int on_socket(void *, curl_socket_t socket, curlsocktype)
+{
+    (void)console_curl_nonblocking(socket); // as console_curl_setup() does
+    int granted = 0;
+    for (int bytes = 4 * 1024 * 1024; bytes >= 256 * 1024; bytes /= 2)
+        if (setsockopt(socket, SOL_SOCKET, SO_RCVBUF, &bytes, sizeof(bytes)) == 0)
+        {
+            granted = bytes;
+            break;
+        }
+    int expected = -1;
+    if (g_receive_buffer.compare_exchange_strong(expected, granted))
+    {
+        char line[120];
+        std::snprintf(line, sizeof(line), "[ProsperoTV][http] socket receive buffer: %d KB%s\n",
+                      granted / 1024, granted ? "" : " (the console's default kept)");
+        say(line);
+    }
+    return CURL_SOCKOPT_OK;
 }
 
 int failure(CURLcode code)
@@ -412,6 +463,7 @@ int tv_http_send(int id, const void *, std::size_t)
     CURL *easy = request->easy;
     // No signals, the console's list of authorities, non-blocking sockets.
     console_curl_setup(easy);
+    curl_easy_setopt(easy, CURLOPT_SOCKOPTFUNCTION, on_socket);
     for (const auto &header : request->headers)
         request->header_list =
             curl_slist_append(request->header_list, (header.first + ": " + header.second).c_str());
@@ -439,7 +491,7 @@ int tv_http_send(int id, const void *, std::size_t)
     const std::int64_t deadline = now_ms() + connect_ms + request->settings.receive_ms;
     while (!request->headers_done && !request->done)
     {
-        if (request->aborted.load())
+        if (request->aborted.load() || interrupted())
             return failure(CURLE_ABORTED_BY_CALLBACK);
         if (now_ms() > deadline)
             return failure(CURLE_OPERATION_TIMEDOUT);
@@ -515,8 +567,20 @@ int tv_http_read(int id, void *data, std::size_t size)
             return request->result == CURLE_OK ? 0 : failure(request->result);
         if (now_ms() - quiet_since > request->settings.receive_ms)
             return failure(CURLE_OPERATION_TIMEDOUT);
+        if (interrupted())
+            return failure(CURLE_ABORTED_BY_CALLBACK);
         drive(request, 10);
     }
+}
+
+// The calling thread's network waits ask `asked` whether to stop (nullptr: no longer).
+void tv_http_set_interrupt(bool (*asked)(void *), void *context)
+{
+    g_interrupt = nullptr;
+    g_interrupt_context = context;
+    g_interrupt_thread = pthread_self();
+    g_interrupt_asked_ms = 0;
+    g_interrupt = asked;
 }
 
 int tv_http_abort(int id)

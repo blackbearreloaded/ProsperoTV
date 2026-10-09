@@ -718,3 +718,77 @@ synchronization, switching latency and resource cost remain pending.
 - 2026-10-09 | multiview | 8dd92df | .30 PPSA88297 | partial-pass: four 720p channels, focus audio, mute, full screen; cancel reported as cleanup error | ../psiptv/results/roadmap/console-59/result.json | cleanup rerun
 
 - 2026-10-09 | multiview | 4e071ed | .30 PPSA88298 | pass: four 720p channels, focus/mute, shrink, full screen, clean teardown | ../psiptv/results/roadmap/console-60/result.json | interface languages
+
+## Validation against a real provider (2026-10-09)
+
+Until now every console case used generated streams. These runs used a real
+Xtream Codes account (12,907 live channels in 97 categories, 30,780 movies,
+7,853 shows, an 80 MB guide with 236,560 programmes) on console
+`192.168.4.40`, system software 12.70, with the sandboxed test title
+`PPSA88021` and scripted input. Every launch was closed by the app itself,
+with the console's services answering afterwards; the last runs are reported
+PASS by the runner.
+
+What passed as it was: the saved list at launch, provider categories and
+subcategories, hiding and showing a category, search, favorites, the guide
+(now and next, the grid, the next day, a programme's description), movies and
+shows down to an episode, choosing an audio and a subtitle track (a Matroska
+file with eleven audio and twenty-eight subtitle tracks), multiview with two
+channels decoding at once, switching between the built-in list and the
+account, the refresh schedule, starting on the last channel, live previews,
+and playback of H.264 720p60 and 1080p30 and HEVC 4K channels. Ten minutes of
+one channel presented 17,893 pictures with a longest gap of 72 ms and no queue
+underruns. Menu frames stayed at 16.7 ms.
+
+During playback, pressed by the script: the banner, pause and resume (the
+picture stood still while the history grew), thirty seconds back and to live
+again, a second audio track on a live channel, the channel list and a channel
+chosen from it, next, previous, the channel watched before, and leaving.
+
+What was wrong, and is corrected in the same pull request:
+
+- **A 4K film stopped for eight seconds every few seconds.** A 25 Mbit/s
+  Matroska episode showed 20 of 40 seconds. Two causes, both measured with new
+  lines in the diagnostic log. The console gives a socket a 64 KB receive
+  buffer, which held this server to 1.07 MB/s (a PC on the same network got
+  18 MB/s and more): HTTP sockets now ask for up to 4 MB before connecting.
+  And the stream parser looked through the whole pending picture for a start
+  code each time 184 more bytes arrived, so a 250 KB picture cost 170 million
+  comparisons: the search now goes on from where it stopped. The same episode
+  then played a full minute, 1,384 pictures, with a longest gap of 89 ms and
+  no underrun. Both changes also help 4K channels, whose pictures are large.
+- A channel that sends next to nothing kept the player opening it for 15 to
+  31 seconds, and no button was read until its timeouts had passed. Network
+  waits of the playing thread now ask the player every 50 ms whether the
+  viewer has left: next, previous and back answer at once (twenty changes of
+  channel two and three seconds apart all took effect), and leaving is never
+  reported as a failed channel.
+- Provider names written in raised letters ("ᵁᴴᴰ ³⁸⁴⁰ᴾ", "ᴿᴬᵂ ⁶⁰ᶠᵖˢ") were
+  question marks in the category list and its label, and were dropped from
+  channel names. They now read "UHD 3840P" and "RAW 60FPS"; signs around a
+  category's name are left out.
+- A category whose name holds a slash ("24/7 COMEDY", "ENTERTAINMENT HD/RAW",
+  "B/R SPORTS") was cut into a parent and a child that do not exist. A slash
+  now separates levels only where it stands apart from the words.
+- The built-in list said "Press Cross to set up" and "Not set up" while in use.
+- A sandboxed title on system software 12.70 is refused every named port
+  (error 13) and is given an automatic one that answers nobody: the pairing
+  screen showed an address no phone could reach. The remote now tries other
+  ports first and, when the console refuses them all, says it is unavailable.
+  The app's log names the ports tried.
+- The test runner counted the settings label `hide_failed=0` as a failure in
+  every run; it now matches the word, and a clean run reports PASS.
+- A scripted run reported a channel as failed when a button, not the end of
+  its test window, ended it before the first picture.
+
+New in the diagnostic log, for the next report of a picture that stops: a
+line when playback stops to refill its buffer (and whether video or sound ran
+out) and when it goes on, what each request for a part of a file cost, a read
+that waited more than a second, and every ten seconds how much of a file was
+read and how much of that time the network took.
+
+Not validated here, and still open: the phone remote and phone source
+management on this console (they need filesystem access, which these runs did
+not use; earlier cases cover them on `.30`), the parental PIN and folder names
+(the system keyboard), catch-up (this provider keeps no archive), USB backup
+with a physical drive, HDR on a display, and a second console user.

@@ -64,8 +64,12 @@ int visible_count(std::string_view text)
 
 } // namespace
 
-std::string readable(const ui::FontRef &font, std::string_view text)
+std::string readable(const ui::FontRef &font, std::string_view decorated)
 {
+    // Raised letters and the like first become the letters they stand for:
+    // the faces hold few of them, and a provider writes whole words that way.
+    const std::string plain = plain_text(decorated);
+    const std::string_view text = plain;
     std::string kept;
     kept.reserve(text.size());
     bool space = false;

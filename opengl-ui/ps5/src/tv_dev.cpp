@@ -9,6 +9,8 @@
 #include "platform/ps5/system.hpp"
 #include "tv/app.hpp"
 
+#include "iptv_input.h"
+
 #include <dirent.h>
 
 #include <cstdarg>
@@ -51,6 +53,30 @@ std::uint32_t button(const std::string &name)
         if (name == entry.name)
             return entry.bit;
     return 0;
+}
+
+// What a "during" step can press while a channel plays.
+struct PlaybackName
+{
+    const char *name;
+    iptv_input_action_t action;
+};
+constexpr PlaybackName kPlaybackActions[] = {
+    {"cross", IPTV_INPUT_CROSS},       {"circle", IPTV_INPUT_CIRCLE},
+    {"square", IPTV_INPUT_SQUARE},     {"triangle", IPTV_INPUT_TRIANGLE},
+    {"options", IPTV_INPUT_OPTIONS},   {"l1", IPTV_INPUT_L1},
+    {"r1", IPTV_INPUT_R1},             {"touchpad", IPTV_INPUT_TOUCHPAD},
+    {"up", IPTV_INPUT_UP},             {"down", IPTV_INPUT_DOWN},
+    {"left", IPTV_INPUT_LEFT},         {"right", IPTV_INPUT_RIGHT},
+    {"pause", IPTV_INPUT_PLAY_PAUSE},  {"live", IPTV_INPUT_GO_LIVE},
+};
+
+int playback_action(const std::string &name)
+{
+    for (const PlaybackName &entry : kPlaybackActions)
+        if (name == entry.name)
+            return static_cast<int>(entry.action);
+    return -1;
 }
 
 const char *kTabNames[] = {"live", "vod", "favorites", "sources", "settings", "about"};
@@ -110,6 +136,7 @@ bool Script::load(const std::string &request_path, const std::string &out_dir)
         Step step;
         float number = 0.0f;
         word[0] = '\0';
+        char third[16] = "";
         const int fields = std::sscanf(lines[i].c_str(), "%15s %95s %f", verb, word, &number);
         if (fields < 1 || verb[0] == '#')
             continue;
@@ -146,6 +173,14 @@ bool Script::load(const std::string &request_path, const std::string &out_dir)
         {
             step.kind = Kind::watch;
             step.seconds = static_cast<float>(std::atof(word));
+        }
+        else if (what == "during" && std::sscanf(lines[i].c_str(), "%*s %*s %15s", third) == 1 &&
+                 playback_action(third) >= 0)
+        {
+            step.kind = Kind::during;
+            step.seconds = static_cast<float>(std::atof(word));
+            step.times = playback_action(third);
+            step.text = third;
         }
         else if (what == "shot" && fields >= 2)
             step.kind = Kind::shot;
@@ -310,6 +345,14 @@ std::uint32_t Script::step(float dt, ptv::Model &model, const ptv::App &app)
         case Kind::query:
             model.set_query(step.text == "-" ? std::string_view() : std::string_view(step.text));
             note("query \"%s\": %u channels", model.query().c_str(), model.visible_count());
+            next();
+            break;
+        case Kind::during:
+            note("during %.0f s: %s %s", static_cast<double>(step.seconds), step.text.c_str(),
+                 iptv_input_schedule(static_cast<unsigned>(step.seconds * 1000.0f),
+                                     static_cast<iptv_input_action_t>(step.times))
+                     ? "scheduled"
+                     : "NOT scheduled");
             next();
             break;
         case Kind::watch:

@@ -1176,8 +1176,10 @@ int main()
     }
     iptv_remote_set_pairing_store((tv::storage::config_dir() + "/phone-pairing-v1.txt").c_str());
     iptv_remote_set_icon(tv::storage::app_file("sce_sys/icon0.png").c_str());
-    iptv_remote_start(8888);
+    const bool remote_started = iptv_remote_start(8888);
     // Said after it: the log moved with the app's data.
+    say("[TV] phone remote: %s at %s (ports tried: %s)", remote_started ? "listening" : "unavailable",
+        remote_started ? iptv_remote_url() : "-", iptv_remote_start_report());
     say("[TV] modules videodec2=0x%08x compute=0x%08x h264=0x%08x hevc=0x%08x vp9=0x%08x "
         "audiodec=0x%08x dialogs=0x%08x keyboard=0x%08x",
         static_cast<unsigned>(decoders[0]), static_cast<unsigned>(decoders[1]),
@@ -1420,6 +1422,8 @@ int main()
         else
             say("[TV] playback controls font could not be loaded");
         iptv_player_set_sleep_deadline(model.sleep_timer.deadline());
+        if (script.active())
+            iptv_input_schedule_start(); // "during" steps count from here
         const PlaybackOutcome outcome = play_candidates(request, script.watch_ms(), nullptr);
         iptv_player_set_controls(nullptr, nullptr);
         iptv_native_agc_set_osd(nullptr, nullptr);

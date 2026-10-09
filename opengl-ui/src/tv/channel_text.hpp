@@ -24,6 +24,13 @@ enum Quality : unsigned
     kQualityCount = 5,
 };
 
+// Provider text with its decorative letters as plain ones: raised and lowered
+// letters and digits, small capitals and full-width forms become the letters
+// they stand for, as capitals ("ᵁᴴᴰ ⁶⁰ᶠᵖˢ" reads "UHD 60FPS"). Everything else is kept.
+std::string plain_text(std::string_view text);
+// plain_text() for a label a list writes: signs and pictures set around the
+// words ("RELAX ☼") are left out too, and the spaces closed up.
+std::string label_text(std::string_view text);
 bool contains_nocase(std::string_view text, std::string_view needle);
 bool equals_nocase(std::string_view left, std::string_view right);
 // True when a list field ("US, CA; MX") holds the value as one of its entries.

@@ -33,7 +33,7 @@ void LibrarySheet::sync()
     all.title = folders_ ? tr("All favorites") : tr("All provider categories");
     if (!folders_ && !category_path_.empty())
     {
-        all.title = tr("Browse all in ") + category_path_;
+        all.title = tr("Browse all in ") + label_text(category_path_);
         all.value = model.category_hidden(category_path_) ? tr("Hidden") : "";
     }
     rows.push_back(std::move(all));
@@ -74,7 +74,7 @@ void LibrarySheet::sync()
             values_.push_back(child);
             branches_.push_back(info.second);
             ui::ListItem row;
-            row.title = category_leaf(child);
+            row.title = label_text(category_leaf(child));
             row.value = model.category_rule(child) == 1   ? tr("PIN required")
                         : model.category_rule(child) == 2 ? tr("Approved for kids")
                         : model.category_hidden(child)    ? tr("Hidden")

@@ -69,6 +69,13 @@ struct buffer_t
     uint8_t *data;
     size_t size;
     size_t capacity;
+    // The video buffer only: the unit that starts at search_unit holds no
+    // start code before search_clean. A large picture arrives as thousands of
+    // packets, and looking through all of it again for each one cost a 4K
+    // film most of a processor (a 250 KB picture: 170 million comparisons).
+    // Forgotten whenever bytes leave the buffer.
+    size_t search_unit;
+    size_t search_clean;
 };
 
 struct psi_t
@@ -308,6 +315,7 @@ static bool buffer_init(buffer_t *buffer, size_t capacity)
 {
     buffer->data = new (std::nothrow) uint8_t[capacity];
     buffer->size = 0;
+    buffer->search_unit = buffer->search_clean = 0;
     buffer->capacity = buffer->data ? capacity : 0;
     return buffer->data != nullptr;
 }
@@ -332,6 +340,7 @@ static bool buffer_append(buffer_t *buffer, const uint8_t *data, size_t bytes)
 
 static void buffer_erase(buffer_t *buffer, size_t bytes)
 {
+    buffer->search_unit = buffer->search_clean = 0;
     if (bytes >= buffer->size)
     {
         buffer->size = 0;
@@ -1113,6 +1122,7 @@ static int parse_pmt_section(iptv_stream_session_t *session, impl_t *impl, const
         impl->video_parameter_bytes = 0;
         clear_video_history(impl);
         impl->video_es.size = 0;
+        impl->video_es.search_unit = impl->video_es.search_clean = 0;
         impl->audio_es.size = 0;
         marker_clear(&impl->video_markers);
         marker_clear(&impl->audio_markers);
@@ -1618,6 +1628,7 @@ static int process_video(iptv_stream_session_t *session, impl_t *impl, bool flus
             {
                 ++session->telemetry.dropped_payloads;
                 impl->video_es.size = 0;
+                impl->video_es.search_unit = impl->video_es.search_clean = 0;
                 marker_clear(&impl->video_markers);
             }
             else if (impl->video_es.size > 4u)
@@ -1650,8 +1661,22 @@ static int process_video(iptv_stream_session_t *session, impl_t *impl, bool flus
             if (start == kNoOffset)
                 break;
             size_t next_prefix = 0;
-            size_t next = find_start_code(impl->video_es.data, impl->video_es.size,
-                                          start + prefix_bytes, &next_prefix);
+            // Go on from where the last look at this unit ended.
+            size_t search_from = start + prefix_bytes;
+            if (impl->video_es.search_unit == start && impl->video_es.search_clean > search_from &&
+                impl->video_es.search_clean <= impl->video_es.size)
+                search_from = impl->video_es.search_clean;
+            size_t next = find_start_code(impl->video_es.data, impl->video_es.size, search_from,
+                                          &next_prefix);
+            if (next == kNoOffset)
+            {
+                // The last three bytes may be the beginning of a start code.
+                impl->video_es.search_unit = start;
+                impl->video_es.search_clean =
+                    impl->video_es.size >= 3u && impl->video_es.size - 3u > search_from
+                        ? impl->video_es.size - 3u
+                        : search_from;
+            }
             if (next == kNoOffset && !flush)
             {
                 need_more = true;
@@ -1717,6 +1742,7 @@ static int process_video(iptv_stream_session_t *session, impl_t *impl, bool flus
         {
             ++session->telemetry.dropped_payloads;
             impl->video_es.size = 0;
+            impl->video_es.search_unit = impl->video_es.search_clean = 0;
             marker_clear(&impl->video_markers);
             return IPTV_STREAM_OK;
         }
@@ -2171,6 +2197,7 @@ static void reset_pid(impl_t *impl, uint16_t pid)
     {
         reset_pes(&impl->video_pes, true);
         impl->video_es.size = 0;
+        impl->video_es.search_unit = impl->video_es.search_clean = 0;
         marker_clear(&impl->video_markers);
         impl->video_time = {};
         impl->video_random_access = false;
@@ -2557,6 +2584,7 @@ static int reset_transport(iptv_stream_session_t *session)
     reset_pes(&impl->video_pes, true);
     reset_pes(&impl->audio_pes, false);
     impl->video_es.size = 0;
+    impl->video_es.search_unit = impl->video_es.search_clean = 0;
     impl->audio_es.size = 0;
     marker_clear(&impl->video_markers);
     marker_clear(&impl->audio_markers);

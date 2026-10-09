@@ -38,6 +38,8 @@ extern "C"
      * its context expires. Called synchronously by the polling thread. */
     void iptv_remote_set_playback_favorite(int (*toggle)(void *), void *context);
     const char *iptv_remote_hint(void);
+    // The ports tried when the remote started, each with its error (0: bound).
+    const char *iptv_remote_start_report(void);
 #ifdef __cplusplus
 }
 #endif

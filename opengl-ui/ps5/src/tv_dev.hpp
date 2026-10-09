@@ -13,6 +13,10 @@
 //   hold <button> <seconds>     the button stays down
 //   query <text>                the search text, as the keyboard would set it ("-" clears)
 //   watch <seconds>             how long the next channel plays before it stops
+//   during <seconds> <button>   a press that many seconds into the playback that starts
+//                               next (cross circle square triangle options l1 r1
+//                               touchpad up down left right pause live); the clock
+//                               keeps running through a change of channel
 //   shot <name>                 the frame drawn now, as <name>.bmp (960x540)
 //   status                      a line about the catalog, the focus and the frames
 //   quit [seconds]              write the report, wait, then close the app
@@ -80,6 +84,7 @@ class Script
         hold,
         query,
         watch,
+        during,
         shot,
         status,
         quit,

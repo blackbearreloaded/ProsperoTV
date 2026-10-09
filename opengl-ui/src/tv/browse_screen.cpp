@@ -789,7 +789,7 @@ void BrowseScreen::draw_list_header(ui::Canvas &canvas) const
         if (!model.query().empty())
             add("\"" + model.query() + "\"");
         add(model.country());
-        add(model.provider_category());
+        add(label_text(model.provider_category()));
         add(model.category());
         add(model.language());
         if (model.quality() != kQualityAny)
