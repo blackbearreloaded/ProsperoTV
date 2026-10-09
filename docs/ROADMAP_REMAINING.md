@@ -39,7 +39,12 @@ to at most 960 by 540. Audio follows focus, with a shared reservation covering
 both active and opening audio ports. All connections are cancelled before their
 workers are joined when leaving or handing off to full-screen playback.
 Channel selection observes the existing parental and sleep restrictions.
-Native decoder limits and sustained playback remain to be measured.
+Native case 59 decoded four independent 720p channels concurrently with one
+audio owner, successful mute/focus changes and full-screen handoff. Heap peak
+was 114,184,528 bytes with no allocation failures. Cancellation was reported as
+cleanup failure despite healthy teardown; the close path now ignores expected
+drain cancellation while retaining subsequent resource-release errors. The
+corrected cleanup diagnostics still need a native rerun.
 
 ## HDR output and SDR fallback
 
@@ -642,3 +647,5 @@ synchronization, switching latency and resource cost remain pending.
 - 2026-10-09 | HDR | 7a587be | .30 PPSA88295 | pass: Main10 HDR10 output/readback,750decoded,EOF,healthy teardown | ../psiptv/results/roadmap/console-57/result.json | transitions/fallback
 
 - 2026-10-09 | HDR | e61eb3b | .30 PPSA88296 | partial-pass:4K550frames,metadata,format switches,healthy teardown; HDMI stayed HDR | ../psiptv/results/roadmap/console-58/result.json | display/fallback
+
+- 2026-10-09 | multiview | 8dd92df | .30 PPSA88297 | partial-pass: four 720p channels, focus audio, mute, full screen; cancel reported as cleanup error | ../psiptv/results/roadmap/console-59/result.json | cleanup rerun

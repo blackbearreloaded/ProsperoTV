@@ -3033,7 +3033,9 @@ int32_t iptv_native_backend_close(iptv_native_backend_t *backend)
         return 0;
     first_result = state->telemetry.cleanup_result;
     result = iptv_native_backend_drain(backend);
-    if (first_result == 0 && result != 0)
+    /* Cancelling a pending picture is normal when closing a preview. Keep
+     * subsequent resource-release failures visible instead of masking them. */
+    if (first_result == 0 && result != 0 && result != IPTV_NATIVE_E_CANCELLED)
         first_result = result;
     state->state = IPTV_NATIVE_STATE_STOPPING;
     state->telemetry.state = state->state;
