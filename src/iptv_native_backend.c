@@ -958,6 +958,36 @@ static int32_t audio_drain(backend_state_t *state)
     return first_result;
 }
 
+static int32_t create_aac_decoder(backend_state_t *state)
+{
+    state->audio_param =
+        (sce_audiodec_param_aac_t){sizeof(state->audio_param), AUDIODEC_WORD_S16, 1, 4, 2, 1};
+    memset(&state->audio_info, 0, sizeof(state->audio_info));
+    memset(&state->audio_au, 0, sizeof(state->audio_au));
+    memset(&state->audio_pcm_item, 0, sizeof(state->audio_pcm_item));
+    state->audio_info.size = sizeof(state->audio_info);
+    state->audio_au.size = sizeof(state->audio_au);
+    state->audio_pcm_item.size = sizeof(state->audio_pcm_item);
+    state->audio_ctrl.param = &state->audio_param;
+    state->audio_ctrl.stream_info = &state->audio_info;
+    state->audio_ctrl.au_info = &state->audio_au;
+    state->audio_ctrl.pcm_item = &state->audio_pcm_item;
+    state->audio_decoder = sceAudiodecCreateDecoder(&state->audio_ctrl, AUDIODEC_AAC);
+    return state->audio_decoder < 0 ? state->audio_decoder : 0;
+}
+
+static int32_t reset_native_audio_decoder(backend_state_t *state)
+{
+    if (state->audio_decoder < 0 || state->software_audio)
+        return 0;
+    // Recreate the AAC context so overlap and prediction state cannot cross a seek.
+    const int32_t result = sceAudiodecDeleteDecoder(state->audio_decoder);
+    if (result < 0)
+        return result;
+    state->audio_decoder = -1;
+    return create_aac_decoder(state);
+}
+
 static int32_t initialize_audio(backend_state_t *state)
 {
     if (iptv_audio_software_type(state->config.audio_stream_type))
@@ -977,18 +1007,7 @@ static int32_t initialize_audio(backend_state_t *state)
         return result;
     state->audio_library_initialized = 1;
 
-    state->audio_param =
-        (sce_audiodec_param_aac_t){sizeof(state->audio_param), AUDIODEC_WORD_S16, 1, 4, 2, 1};
-    memset(&state->audio_info, 0, sizeof(state->audio_info));
-    state->audio_info.size = sizeof(state->audio_info);
-    state->audio_au.size = sizeof(state->audio_au);
-    state->audio_pcm_item.size = sizeof(state->audio_pcm_item);
-    state->audio_ctrl.param = &state->audio_param;
-    state->audio_ctrl.stream_info = &state->audio_info;
-    state->audio_ctrl.au_info = &state->audio_au;
-    state->audio_ctrl.pcm_item = &state->audio_pcm_item;
-    state->audio_decoder = sceAudiodecCreateDecoder(&state->audio_ctrl, AUDIODEC_AAC);
-    return state->audio_decoder < 0 ? state->audio_decoder : 0;
+    return create_aac_decoder(state);
 }
 
 static int32_t release_audio(backend_state_t *state)
@@ -2360,6 +2379,12 @@ static void *audio_worker_entry(void *argument)
         }
         if (state->audio_generation != generation)
         {
+            const int32_t reset = reset_native_audio_decoder(state);
+            if (reset < 0)
+            {
+                atomic_store_explicit(&state->audio_worker_result, reset, memory_order_release);
+                break;
+            }
             mp3dec_init(&state->mp2_decoder);
             iptv_audio_decoder_reset(state->software_audio);
             state->audio_staged_bytes = 0;
@@ -2912,7 +2937,24 @@ int32_t iptv_native_backend_close(iptv_native_backend_t *backend)
 #ifdef IPTV_NATIVE_BACKEND_STATE_TEST
 static int test_volume_calls, test_volume_left, test_volume_right;
 static int test_control_polls, test_join_calls;
+static int test_audio_creates, test_audio_deletes, test_audio_deleted_handle;
+static int test_audio_create_result = 51, test_audio_delete_result;
 static iptv_native_backend_t *test_reposition_on_sleep;
+int sceAudiodecCreateDecoder(sce_audiodec_ctrl_t *ctrl, uint32_t codec_type)
+{
+    assert(codec_type == AUDIODEC_AAC);
+    assert(ctrl->param && ctrl->stream_info && ctrl->au_info && ctrl->pcm_item);
+    assert(!ctrl->au_info->address && !ctrl->au_info->length);
+    assert(!ctrl->pcm_item->address && !ctrl->pcm_item->length);
+    ++test_audio_creates;
+    return test_audio_create_result;
+}
+int sceAudiodecDeleteDecoder(int handle)
+{
+    test_audio_deleted_handle = handle;
+    ++test_audio_deletes;
+    return test_audio_delete_result;
+}
 int sceKernelUsleep(uint32_t microseconds)
 {
     (void)microseconds;
@@ -2952,6 +2994,28 @@ int sceAudioOutSetVolume(int handle, int flags, const int *volumes)
 
 int main(void)
 {
+    backend_state_t audio_reset = {0};
+    audio_reset.audio_decoder = 43;
+    audio_reset.audio_au.address = audio_reset.audio_pcm;
+    audio_reset.audio_au.length = 64;
+    audio_reset.audio_pcm_item.address = audio_reset.audio_pcm;
+    audio_reset.audio_pcm_item.length = 4096;
+    assert(reset_native_audio_decoder(&audio_reset) == 0);
+    assert(test_audio_deleted_handle == 43 && audio_reset.audio_decoder == 51);
+    assert(test_audio_deletes == 1 && test_audio_creates == 1);
+    test_audio_delete_result = -101;
+    assert(reset_native_audio_decoder(&audio_reset) == -101);
+    assert(audio_reset.audio_decoder == 51 && test_audio_creates == 1);
+    test_audio_delete_result = 0;
+    test_audio_create_result = -102;
+    assert(reset_native_audio_decoder(&audio_reset) == -102);
+    assert(audio_reset.audio_decoder == -102 && test_audio_creates == 2);
+    assert(reset_native_audio_decoder(&audio_reset) == 0); // No native context to reset.
+    assert(test_audio_deletes == 3);
+    audio_reset.audio_decoder = 52;
+    audio_reset.software_audio = (iptv_audio_decoder_t *)(uintptr_t)1;
+    assert(reset_native_audio_decoder(&audio_reset) == 0); // Software fallback owns its reset.
+    assert(audio_reset.audio_decoder == 52 && test_audio_deletes == 3);
     iptv_native_backend_t seeking = {0};
     backend_state_t *seek = state_from(&seeking);
     seek->magic = BACKEND_MAGIC;
