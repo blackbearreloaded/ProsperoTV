@@ -20,7 +20,7 @@ and relevant checks work.
 | Channel banner | Brief channel/guide banner on tune and on request | Implemented; mapped guide, timing and rendered image checks pass; console case pending |
 | Audio/subtitles | Select available language tracks and render subtitles | Embedded/HLS audio and container/DVB/WebVTT subtitles implemented with host checks; live-provider and native acceptance pending |
 | Sleep timer | Stop playback at a selected deadline | Implemented; 134 UI sanitizer tests and PS5 build pass; console case pending |
-| Live pause/rewind | Pause and replay several minutes of the current live channel | In progress: transport history, foreground controls and phone/OSD integration; decoder/subtitle replay and native acceptance pending |
+| Live pause/rewind | Pause and replay several minutes of the current live channel | In progress: history, controls and decoder/subtitle replay; remaining format/timeline handling and native acceptance pending |
 | Deinterlacing | Preserve field-rate motion on interlaced broadcast video | Pending |
 | HDR | Preserve HDR metadata and output HDR on compatible displays | Pending |
 | Multiview | Two or four simultaneous channels, within measured decoder limits | Pending |
@@ -82,15 +82,35 @@ Pause-aware progress checks keep an intentionally frozen picture from triggering
 the normal video-stall watchdog. History allocation failure falls back to ordinary
 playback.
 
-This remains incomplete: decoder parameter replay, retained subtitles on seek,
-direct WebM live playback, repeated seek requests and native pause/rewind/expiry
-acceptance still need work. The 96-test core and 146-test UI sanitizer suites,
+The stream parser now retains parameter sets by their codec IDs, capped at
+64 KiB, and supplies missing sets with the first random-access picture after a
+reset. The combined picture and setup must fit the existing access-unit limit.
+Real H.264 and HEVC regression fixtures remove the keyframe's headers, pass it
+through reposition, then decode it in a fresh host decoder and compare its pixels
+with the original. The 97-test core and 20-test media sanitizer suites and PS5
+application build pass. Configuration version changes within retained history
+still need handling and native decoder acceptance is pending.
+
+Same-timeline subtitle seeks now rebuild the selected decoder from retained raw
+packets. Retention covers the five-minute video window plus the maximum cue
+duration, while preserving the 2,048-packet and 16 MiB bounds. Repeated transport
+and WebVTT packets are deduplicated; provider timeline resets clear old captions.
+Text, language/Off selection, DVB bitmap replay and timed clearing pass in the
+21-test media/subtitle sanitizer suite, and the PS5 application builds. Ordering
+between new provider timelines and subtitles downloaded ahead of demux still
+needs validation.
+
+This remains incomplete: configuration/timeline changes, direct WebM live
+playback, repeated seek requests and native pause/rewind/expiry, synchronization
+and resource acceptance still need work. The earlier 146-test UI sanitizer suite,
 13 phone remote integration tests, native queue-state host check and PS5
 application build pass. The foreground changes
 have not been packaged or installed on a console, and no timeshift PR is open.
 
 - 2026-10-08 | rewind | 4c63161 | host/PS5 build | partial-pass: mapped history and clock replay | ../psiptv/results/roadmap/timeshift-clock-native-result.json | integrate foreground controls
 - 2026-10-08 | rewind | ec377c9 | host/PS5 build | partial-pass: foreground controls | ../psiptv/results/roadmap/timeshift-player-result.json | decoder/subtitle replay, native acceptance
+- 2026-10-08 | rewind | 7ef62d8 | host/PS5 build | partial-pass: parameter replay | ../psiptv/results/roadmap/timeshift-parameters-result.json | configuration versions, native acceptance
+- 2026-10-08 | rewind | 04eb912 | host/PS5 build | partial-pass: subtitle replay | ../psiptv/results/roadmap/timeshift-subtitles-result.json | timeline ordering, native acceptance
 
 ## Source additions
 
