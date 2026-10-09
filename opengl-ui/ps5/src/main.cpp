@@ -1334,6 +1334,21 @@ int main()
                     iptv_player_live_state_t live{};
                     iptv_player_live_state(&live);
                     osd.set_live_state(live);
+                    if (TV_DEV_SCRIPTS != 0 && live.available)
+                    {
+                        static std::uint64_t last_sample = 0;
+                        const auto now = ptv::platform::monotonic_us();
+                        if (now - last_sample >= 1000000)
+                        {
+                            last_sample = now;
+                            say("[TV] live-history first=%llu last=%llu position=%llu paused=%u "
+                                "expired=%u",
+                                static_cast<unsigned long long>(live.first_us),
+                                static_cast<unsigned long long>(live.last_us),
+                                static_cast<unsigned long long>(live.position_us), live.paused,
+                                live.expired);
+                        }
+                    }
                     const int handled = osd.input(action, ptv::platform::monotonic_us());
                     if (const auto selected = osd.take_audio_selection())
                         (void)iptv_player_select_audio(*selected);
