@@ -1228,8 +1228,8 @@ static int32_t present_nv12(const void *source, size_t source_bytes, uint32_t pi
         const int osd_visible =
             draw_osd && draw_osd(osd_context, NULL, 0, pitch, surface_height, visible_width,
                                  visible_height, bit_depth, overlay->pts_us);
-        if (overlay->field || osd_visible || iptv_native_agc_overlay_enabled() ||
-            (!draw_osd && overlay->show_controls))
+        if (overlay->field || overlay->cpu_written || osd_visible ||
+            iptv_native_agc_overlay_enabled() || (!draw_osd && overlay->show_controls))
         {
             /* Keep decoder reference pictures intact. Reuse this separate
              * surface

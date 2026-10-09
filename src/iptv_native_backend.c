@@ -200,7 +200,7 @@ typedef struct native_video_mode
 } native_video_mode_t;
 
 static const native_video_mode_t video_modes[] = {
-    /* AVC High includes the supported Main and Baseline decoding tools. */
+    /* H.264 uses these rows for level and geometry limits. */
     {IPTV_NATIVE_CODEC_H264, 0, 1, IPTV_NATIVE_H264_PROFILE_HIGH, 41, 1280, 720},
     {IPTV_NATIVE_CODEC_H264, 0, 1, IPTV_NATIVE_H264_PROFILE_HIGH, 51, 1920, 1088},
     {IPTV_NATIVE_CODEC_H264, 0, 1, IPTV_NATIVE_H264_PROFILE_HIGH, 51, 2560, 1440},
@@ -1202,7 +1202,7 @@ static int32_t initialize_video(backend_state_t *state)
     decoder_config.size = sizeof(decoder_config);
     decoder_config.resource_type = 1;
     decoder_config.codec_type = state->mode->decoder_codec;
-    decoder_config.profile = state->config.codec == IPTV_NATIVE_CODEC_HEVC
+    decoder_config.profile = state->config.codec != IPTV_NATIVE_CODEC_VP9_PROFILE0
                                  ? state->config.profile
                                  : state->mode->decoder_profile;
     decoder_config.max_level = state->mode->max_level;
@@ -1650,7 +1650,7 @@ static int32_t present_video_output(backend_state_t *state, const videodec2_fram
         started = monotonic_us();
         state->telemetry.last_present_source = (uintptr_t)output->buffer;
         state->telemetry.zero_copy_pointer_match =
-            !state->config.picture &&
+            !state->config.picture && !state->telemetry.software_video &&
             state->telemetry.last_decoder_output == state->telemetry.last_present_source;
         rate_now = monotonic_us();
         if (state->controls_started_us == 0)
@@ -1664,6 +1664,7 @@ static int32_t present_video_output(backend_state_t *state, const videodec2_fram
             rate_now - state->controls_started_us < CONTROLS_OVERLAY_US,
             presentation_pts_us,
             field_count > 1 ? 1 + ((fields.first - 1 + field_index) & 1u) : 0,
+            state->telemetry.software_video,
         };
         if (state->config.picture)
         {
@@ -1718,6 +1719,34 @@ failed:
         state->telemetry.state = state->state;
     }
     return result;
+}
+
+static int32_t decode_software_frame(backend_state_t *state, const void *bytes, size_t count,
+                                     videodec2_frame_t *frame, videodec2_output_t *output)
+{
+    /* CPU writes must wait until the previous GPU read has completed. */
+    int32_t result = complete_pending_presentation(state);
+    if (result != 0)
+        return result;
+    const uint32_t pitch = state->config.coded_width;
+    result = iptv_field_decode(state->field_parser, bytes, count, frame->buffer, frame->buffer_size,
+                               pitch, state->config.coded_height, state->config.visible_width,
+                               state->config.visible_height);
+    if (result < 0)
+        return result;
+    frame->accepted = 1;
+    if (result != 0)
+    {
+        output->valid = 1;
+        output->picture_count = (uint32_t)result;
+        output->codec = state->mode->decoder_codec;
+        output->width = pitch;
+        output->height = state->config.coded_height;
+        output->pitch = output->pitch_bytes = pitch;
+        output->buffer = frame->buffer;
+        output->buffer_size = frame->buffer_size;
+    }
+    return 0;
 }
 
 static int32_t submit_coded_frame(backend_state_t *state, const void *coded_frame,
@@ -1783,8 +1812,28 @@ static int32_t submit_coded_frame(backend_state_t *state, const void *coded_fram
     frame.buffer_size = state->frame_slot_size;
     output.size = sizeof(output);
 
+    const iptv_field_info_t fields =
+        iptv_field_parse(state->field_parser, coded_frame, frame_bytes);
     started = monotonic_us();
-    result = sceVideodec2Decode(state->decoder, &input, &frame, &output);
+    if (state->telemetry.software_video)
+        result = decode_software_frame(state, coded_frame, frame_bytes, &frame, &output);
+    else
+    {
+        result = sceVideodec2Decode(state->decoder, &input, &frame, &output);
+        if ((uint32_t)result == UINT32_C(0x811d0303) && fields.first &&
+            state->telemetry.submitted_video_access_units == 0 &&
+            state->config.coded_width <= 1920 && state->config.coded_height <= 1088)
+        {
+            /* Valid broadcast pictures can be rejected by VideoDec2 before
+             * output. Use the bundled decoder, bounded to 1080i; retain the
+             * same field renderer, clocks, controls and ownership. */
+            state->telemetry.software_video_trigger = result;
+            state->telemetry.software_video = 1;
+            memset(&output, 0, sizeof(output));
+            output.size = sizeof(output);
+            result = decode_software_frame(state, coded_frame, frame_bytes, &frame, &output);
+        }
+    }
     elapsed = monotonic_us() - started;
     state->telemetry.decode_total_us += elapsed;
     if (elapsed > state->telemetry.decode_max_us)
@@ -1811,8 +1860,6 @@ static int32_t submit_coded_frame(backend_state_t *state, const void *coded_fram
         state->telemetry.state = state->state;
         return state->telemetry.last_result;
     }
-    const iptv_field_info_t fields =
-        iptv_field_parse(state->field_parser, coded_frame, frame_bytes);
     if (!state_pending_push(state, pts_us, displayable, fields))
     {
         ++state->telemetry.decoder_errors;
@@ -1939,7 +1986,7 @@ static int32_t pause_video(backend_state_t *state)
             const iptv_native_video_overlay_t overlay = {
                 state->config.codec,    picture->width,      picture->height,
                 state->frame_rate_x100, state->bitrate_kbps, 0,
-                picture->pts_us,        state->pause_field};
+                picture->pts_us,        state->pause_field,  state->telemetry.software_video};
             result = iptv_native_agc_present_yuv_deferred(
                 picture->data, picture->bytes, picture->pitch, picture->surface_height,
                 picture->width, picture->height, picture->bit_depth, &overlay);
@@ -2845,7 +2892,9 @@ static int32_t drain_video(backend_state_t *state)
         frame.buffer_size = state->frame_slot_size;
         output.size = sizeof(output);
         started = monotonic_us();
-        result = sceVideodec2Flush(state->decoder, &frame, &output);
+        result = state->telemetry.software_video
+                     ? decode_software_frame(state, NULL, 0, &frame, &output)
+                     : sceVideodec2Flush(state->decoder, &frame, &output);
         elapsed = monotonic_us() - started;
         state->telemetry.decode_total_us += elapsed;
         if (elapsed > state->telemetry.decode_max_us)
@@ -2928,7 +2977,8 @@ int32_t iptv_native_backend_drain(iptv_native_backend_t *backend)
     result = state->config.picture ? 0 : iptv_native_agc_present_drain();
     if (first_result == 0 && result != 0)
         first_result = result;
-    if (first_result == 0 && state->telemetry.hardware_validated &&
+    if (first_result == 0 &&
+        (state->telemetry.hardware_validated || state->telemetry.software_video) &&
         state->telemetry.decoded_frames != 0 &&
         state->telemetry.presented_frames + state->telemetry.hidden_decoded_frames +
                 state->telemetry.dropped_late_video_frames ==

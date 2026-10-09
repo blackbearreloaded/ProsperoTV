@@ -23,6 +23,7 @@ extern "C"
         uint32_t show_controls;
         uint64_t pts_us;
         uint32_t field; /* 0: full picture; 1/2: reconstruct top/bottom field. */
+        uint32_t cpu_written; /* Copy and flush CPU-decoded surfaces before the GPU reads. */
     } iptv_native_video_overlay_t;
 
     /* Register only between foreground sessions; the player joins its workers

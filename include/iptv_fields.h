@@ -21,6 +21,13 @@ iptv_field_parser_t *iptv_field_parser_create(void);
 void iptv_field_parser_destroy(iptv_field_parser_t *parser);
 iptv_field_info_t iptv_field_parse(iptv_field_parser_t *parser, const void *data, size_t bytes);
 
+/* Bounded H.264 software fallback into caller-owned NV12. Returns 0 while
+ * buffered, 1 for a progressive picture, 2 for interlaced, or a negative error.
+ * NULL/0 drains delayed pictures. Dimensions must match the decoded picture. */
+int iptv_field_decode(iptv_field_parser_t *parser, const void *data, size_t bytes,
+                      void *output, size_t output_bytes, uint32_t pitch,
+                      uint32_t surface_height, uint32_t width, uint32_t height);
+
 /* Copy one NV12 field to a distinct surface, interpolating only between rows
  * from that field. Never blend two moments or modify decoder reference pixels.
  * Padded columns are left untouched. field is 0 for top, 1 for bottom. */

@@ -16,11 +16,18 @@ struct iptv_field_parser
 {
     AVCodecParserContext *parser = av_parser_init(AV_CODEC_ID_H264);
     AVCodecContext *codec = avcodec_alloc_context3(nullptr);
+    AVCodecContext *decoder = nullptr;
+    AVPacket *packet = nullptr;
+    AVFrame *frame = nullptr;
+    bool draining = false;
     std::vector<std::uint8_t> padded;
     ~iptv_field_parser()
     {
         av_parser_close(parser);
         avcodec_free_context(&codec);
+        avcodec_free_context(&decoder);
+        av_packet_free(&packet);
+        av_frame_free(&frame);
     }
 };
 
@@ -78,6 +85,82 @@ iptv_field_info_t iptv_field_parse(iptv_field_parser_t *state, const void *data,
             result.duration_us = static_cast<std::uint32_t>(duration);
     }
     return result;
+}
+
+int iptv_field_decode(iptv_field_parser_t *state, const void *data, size_t bytes, void *output,
+                      size_t output_bytes, uint32_t pitch, uint32_t surface_height, uint32_t width,
+                      uint32_t height)
+{
+    if (!state || !output || (bytes && !data) || bytes > 8u * 1024u * 1024u || !width || !height ||
+        width > 1920 || height > 1088 || (width & 1u) || (height & 1u) || pitch < width ||
+        pitch > 2048 || (pitch & 1u) || surface_height < height || surface_height > 1088 ||
+        (surface_height & 1u) || output_bytes < static_cast<size_t>(pitch) * surface_height * 3 / 2)
+        return AVERROR(EINVAL);
+    if (!state->decoder)
+    {
+        const auto *codec = avcodec_find_decoder(AV_CODEC_ID_H264);
+        if (!codec)
+            return AVERROR_DECODER_NOT_FOUND;
+        state->decoder = avcodec_alloc_context3(codec);
+        state->packet = av_packet_alloc();
+        state->frame = av_frame_alloc();
+        if (!state->decoder || !state->packet || !state->frame)
+            return AVERROR(ENOMEM);
+        state->decoder->thread_count = 4;
+        state->decoder->thread_type = FF_THREAD_FRAME;
+        state->decoder->max_pixels = 1920 * 1088;
+        state->decoder->err_recognition = AV_EF_EXPLODE;
+        const int result = avcodec_open2(state->decoder, codec, nullptr);
+        if (result < 0)
+            return result;
+    }
+    if (bytes)
+    {
+        if (state->draining)
+            return AVERROR_EOF;
+        av_packet_unref(state->packet);
+        int result = av_new_packet(state->packet, static_cast<int>(bytes));
+        if (result < 0)
+            return result;
+        std::memcpy(state->packet->data, data, bytes);
+        result = avcodec_send_packet(state->decoder, state->packet);
+        if (result < 0)
+            return result;
+    }
+    else if (!state->draining)
+    {
+        const int result = avcodec_send_packet(state->decoder, nullptr);
+        if (result < 0)
+            return result;
+        state->draining = true;
+    }
+    av_frame_unref(state->frame);
+    const int result = avcodec_receive_frame(state->decoder, state->frame);
+    if (result == AVERROR(EAGAIN) || result == AVERROR_EOF)
+        return 0;
+    if (result < 0)
+        return result;
+    const auto &frame = *state->frame;
+    if (frame.format != AV_PIX_FMT_YUV420P || frame.width != static_cast<int>(width) ||
+        frame.height != static_cast<int>(height) || frame.linesize[0] < frame.width ||
+        frame.linesize[1] < frame.width / 2 || frame.linesize[2] < frame.width / 2)
+        return AVERROR_INVALIDDATA;
+    auto *y = static_cast<std::uint8_t *>(output);
+    auto *uv = y + static_cast<size_t>(pitch) * surface_height;
+    std::memset(y, 16, static_cast<size_t>(pitch) * surface_height);
+    std::memset(uv, 128, static_cast<size_t>(pitch) * surface_height / 2);
+    for (unsigned row = 0; row < height; ++row)
+        std::memcpy(y + static_cast<size_t>(row) * pitch,
+                    frame.data[0] + static_cast<size_t>(row) * frame.linesize[0], width);
+    for (unsigned row = 0; row < height / 2; ++row)
+        for (unsigned x = 0; x < width / 2; ++x)
+        {
+            uv[static_cast<size_t>(row) * pitch + x * 2] =
+                frame.data[1][static_cast<size_t>(row) * frame.linesize[1] + x];
+            uv[static_cast<size_t>(row) * pitch + x * 2 + 1] =
+                frame.data[2][static_cast<size_t>(row) * frame.linesize[2] + x];
+        }
+    return (frame.flags & AV_FRAME_FLAG_INTERLACED) ? 2 : 1;
 }
 
 int iptv_field_bob(void *output, size_t output_bytes, const void *input, size_t input_bytes,

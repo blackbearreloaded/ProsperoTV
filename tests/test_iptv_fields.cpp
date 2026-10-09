@@ -28,6 +28,25 @@ TEST(Fields, ReadsActualTopBottomAndProgressivePictures)
         std::unique_ptr<iptv_field_parser_t, decltype(&iptv_field_parser_destroy)> parser(
             iptv_field_parser_create(), iptv_field_parser_destroy);
         ASSERT_TRUE(parser);
+        constexpr unsigned pitch = 176, height = 96;
+        std::vector<std::uint8_t> surface(pitch * height * 3 / 2 + 16, 0xee);
+        unsigned decoded = 0;
+        const auto decode = [&](const void *data, size_t bytes)
+        {
+            const int result = iptv_field_decode(parser.get(), data, bytes, surface.data(),
+                                                 surface.size() - 16, pitch, height, 160, height);
+            EXPECT_GE(result, 0);
+            if (result > 0)
+            {
+                ++decoded;
+                EXPECT_EQ(result, expected ? 2 : 1);
+                for (unsigned y = 0; y < height * 3 / 2; ++y)
+                    for (unsigned x = 160; x < pitch; ++x)
+                        EXPECT_EQ(surface[y * pitch + x], y < height ? 16 : 128);
+                EXPECT_EQ(surface.back(), 0xee);
+            }
+            return result;
+        };
         for (std::size_t i = 0; i + 1 < starts.size(); ++i)
         {
             const auto info =
@@ -36,7 +55,18 @@ TEST(Fields, ReadsActualTopBottomAndProgressivePictures)
             EXPECT_EQ(info.field_picture, 0u); // MBAFF uses a complete coded picture.
             EXPECT_EQ(info.count, expected ? 2u : 0u);
             EXPECT_EQ(info.duration_us, expected ? 20000u : 0u);
+            ASSERT_GE(decode(bytes.data() + starts[i], starts[i + 1] - starts[i]), 0);
         }
+        for (unsigned i = 0; i < 25 && decode(nullptr, 0) > 0; ++i)
+        {
+        }
+        EXPECT_EQ(decoded, 25u);
+        EXPECT_LT(iptv_field_decode(parser.get(), nullptr, 0, surface.data(), 1, pitch, height, 160,
+                                    height),
+                  0);
+        EXPECT_LT(iptv_field_decode(parser.get(), bytes.data(), SIZE_MAX, surface.data(),
+                                    surface.size(), pitch, height, 160, height),
+                  0);
         EXPECT_EQ(iptv_field_parse(parser.get(), nullptr, 4).first, 0u);
         EXPECT_EQ(iptv_field_parse(parser.get(), bytes.data(), SIZE_MAX).first, 0u);
     }
