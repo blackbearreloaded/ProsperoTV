@@ -2,7 +2,8 @@
 
 The development branch implements the sixteen requested items. This document
 describes the implemented contracts; it does not claim that a release has been
-published or that every provider has been tested.
+published or that every provider has been tested. Later roadmap features and
+the current acceptance status are recorded in [the roadmap status](ROADMAP_REMAINING.md).
 
 ## Sources and categories
 
@@ -85,12 +86,16 @@ separate saved caches, loaded before a scheduled refresh.
 MP4 and Matroska H.264/HEVC packets are remuxed into the existing MPEG-TS player.
 HTTP byte ranges let MP4 metadata be read from either end of a file. Video is
 still decoded by the native backend; supported audio uses the existing audio
-pipeline. DRM, encrypted HLS, fragmented-MP4 HLS, unsupported video codecs,
-and multiple audio/subtitle selection remain outside this implementation.
+pipeline. The later audio/subtitle work adds track selection and supported HLS
+renditions; its limits and validation are recorded in the roadmap status. DRM,
+encrypted HLS and unsupported video codecs remain outside this implementation.
 The On demand provider API currently supports Xtream, while MAC portals provide
 live channels.
 
-## Validation
+## Original source/browsing/guide validation
+
+These are the original checkpoint results; the roadmap status records subsequent
+fixes, native cases and integrated acceptance.
 
 - All 112 host UI tests pass under ASan and UBSan, including nested category visibility,
   multiple-source persistence, guide matching/timezones/catch-up, portal header

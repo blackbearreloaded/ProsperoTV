@@ -445,14 +445,14 @@ The remaining ideas are not scheduled or promised.
 - [x] **Several sources at once.** More than one playlist and more than one
   account, shown together or switched between, instead of one source in use
   at a time.
-- **Local TV sources.** Tuners and servers on the home network, such as
+- [x] **Local TV sources.** Tuners and servers on the home network, such as
   HDHomeRun and Tvheadend, as channel sources beside the playlists.
 - [x] **MAC-code portals.** Signing in to a provider with a portal address and a
   MAC code (Stalker/Ministra style), offered in Sources just below the Xtream
   Codes account.
 - [x] **Video on demand.** The movies and TV shows an IPTV service offers beside
   its live channels, browsable and playable from the app.
-- **Managing lists from a phone.** Adding and editing playlists and accounts
+- [x] **Managing lists from a phone.** Adding and editing playlists and accounts
   from the phone remote's page, in a phone's or a computer's browser, instead
   of the on-screen keyboard.
 - [x] **A refresh schedule.** Choosing how often a source is downloaded again
@@ -486,16 +486,16 @@ The remaining ideas are not scheduled or promised.
 
 ### While watching
 
-- **Zapping.** Up and down for the next and the previous channel without
+- [x] **Zapping.** Up and down for the next and the previous channel without
   going back to the menu, and one button for the channel watched before.
-- **The channel list over the picture.** A list at the side of the video to
+- [x] **The channel list over the picture.** A list at the side of the video to
   pick another channel from.
-- **A channel banner.** The channel's name and, with a guide, its programme,
+- [x] **A channel banner.** The channel's name and, with a guide, its programme,
   shown for a moment when a channel opens or when asked for.
-- **Audio tracks and subtitles.** Choosing among the languages a channel
+- [x] **Audio tracks and subtitles.** Choosing among the languages a channel
   carries, and showing its subtitles.
-- **A sleep timer.** Closing the channel after a chosen time.
-- **Pausing live TV.** Stopping the picture and going back a few minutes in
+- [x] **A sleep timer.** Closing the channel after a chosen time.
+- [x] **Pausing live TV.** Stopping the picture and going back a few minutes in
   a channel that is being watched.
 - [x] **Smoother interlaced pictures.** Presenting each broadcast field separately
   to preserve its full motion.
@@ -506,16 +506,16 @@ The remaining ideas are not scheduled or promised.
 
 ### Household
 
-- **A parental PIN.** Locking the categories a provider marks as adult
+- [x] **A parental PIN.** Locking the categories a provider marks as adult
   behind a code, and a mode that shows only the channels for children.
-- **Profiles.** Favorites, recent channels and sources for each person
+- [x] **Profiles.** Favorites, recent channels and sources for each person
   signed in on the console.
 - [x] **The interface in other languages.** Menus follow the console's
   English, Spanish, French, German, Italian, Portuguese or Dutch setting.
   Other languages fall back to English; provider content keeps its own text.
-- **Backup and restore.** Copying sources, favorites and settings to a USB
+- [x] **Backup and restore.** Copying sources, favorites and settings to a USB
   drive, and bringing them back on this console or another.
-- **Reporting a channel that fails.** Saving what the app knows about a
+- [x] **Reporting a channel that fails.** Saving what the app knows about a
   failure to a USB drive, to send with a report, without a special build.
 
 <!-- bbr-footer:start -->
