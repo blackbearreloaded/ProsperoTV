@@ -2713,7 +2713,7 @@ int iptv_native_backend_paused(const iptv_native_backend_t *backend)
 void iptv_native_backend_request_reposition(iptv_native_backend_t *backend)
 {
     backend_state_t *state = state_from(backend);
-    if (state && state->magic == BACKEND_MAGIC)
+    if (state && state->magic == BACKEND_MAGIC && state->state == IPTV_NATIVE_STATE_OPEN)
     {
         atomic_store_explicit(&state->discard_input, 1, memory_order_release);
         atomic_fetch_add_explicit(&state->stream_generation, 1u, memory_order_acq_rel);
@@ -3091,7 +3091,14 @@ int main(void)
     assert(reset_native_audio_decoder(&audio_reset) == 0); // Software fallback owns its reset.
     assert(audio_reset.audio_decoder == 52 && test_audio_deletes == 3);
     iptv_native_backend_t seeking = {0};
+    assert(iptv_native_backend_init(&seeking) == 0);
     backend_state_t *seek = state_from(&seeking);
+    // Restoring history before the replacement decoder opens has no old
+    // submissions to cancel. No discontinuity callback will clear this flag.
+    iptv_native_backend_request_reposition(&seeking);
+    assert(!atomic_load(&seek->discard_input));
+    assert(atomic_load(&seek->stream_generation) == 1);
+    atomic_store(&seek->stream_generation, 0);
     seek->magic = BACKEND_MAGIC;
     seek->state = IPTV_NATIVE_STATE_OPEN;
     seek->config.enable_audio = 1;
