@@ -2618,6 +2618,36 @@ int iptv_stream_reposition_from(iptv_stream_session_t *session, const iptv_strea
     const int result = reset_transport(session);
     if (result != IPTV_STREAM_OK)
         return result;
+    if (source != session && !impl->backend_ever_opened)
+    {
+        // A slow first consumer can lose PAT/PMT as well as codec headers.
+        // Restore the programme before feeding retained, headerless packets.
+        if (!impl->pmt_seen)
+        {
+            impl->format = history->format;
+            if (impl->audio_off)
+                impl->format.audio_pid = impl->format.audio_stream_type = 0;
+            impl->pat_seen = history->pat_seen;
+            impl->pmt_seen = history->pmt_seen;
+            std::memcpy(impl->audio_tracks, history->audio_tracks, sizeof(impl->audio_tracks));
+            impl->audio_track_count = history->audio_track_count;
+            update_subtitle_tracks(impl, history->subtitle_tracks, history->subtitle_track_count);
+        }
+        // Read the selected historical sets, not the download parser's latest
+        // dimensions. Reuse normal validation before opening a native decoder.
+        impl->video_sps = impl->video_pps = impl->video_vps = false;
+        for (const auto &parameter : restored)
+        {
+            if (!parameter.size)
+                continue;
+            bool vcl, first, aud, prefix;
+            const int parsed = inspect_video_nal(session, impl, parameter.data.get(),
+                                                 parameter.size, &vcl, &first, &aud, &prefix);
+            if (parsed != IPTV_STREAM_OK)
+                return parsed;
+        }
+        session->telemetry.format = impl->format;
+    }
     if (restored_bytes)
     {
         impl->video_parameters = std::move(restored);

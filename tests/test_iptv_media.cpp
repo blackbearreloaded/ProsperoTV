@@ -250,10 +250,12 @@ void decode_picture(AVCodecID codec_id, const std::vector<std::uint8_t> &bytes,
 
 TEST(Media, SeekRestoresConfigurationForFreshH264AndHevcDecoders)
 {
-    for (const auto mode : {0, 1, 2, 3})
+    for (const auto mode : {0, 1, 2, 3, 4, 5})
     {
         const bool independent_download = mode >= 2;
+        const bool fresh_playback = mode >= 4;
         const bool hevc = mode % 2;
+        SCOPED_TRACE(fresh_playback ? "fresh playback parser" : "existing playback parser");
         SCOPED_TRACE(independent_download ? "download parser" : "playback parser");
         SCOPED_TRACE(hevc ? "HEVC" : "H264");
         Memory memory(hevc ? "hevc.mp4" : "h264-aac.mp4");
@@ -407,6 +409,13 @@ TEST(Media, SeekRestoresConfigurationForFreshH264AndHevcDecoders)
                 at = next;
             }
             ASSERT_LT(stripped.size(), configured.size());
+            if (fresh_playback)
+            {
+                session.reset(new iptv_stream_session_t{});
+                iptv_stream_init(session.get());
+                ASSERT_EQ(iptv_stream_open(session.get(), nullptr, &backend), IPTV_STREAM_OK);
+                ASSERT_EQ(iptv_stream_start(session.get()), IPTV_STREAM_OK);
+            }
             ASSERT_EQ(iptv_stream_reposition_from(
                           session.get(), independent_download ? download.get() : session.get(),
                           positions[version]),

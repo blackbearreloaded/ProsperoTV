@@ -1064,6 +1064,63 @@ TEST_F(AudioSelectionTest, DownloadReplayRejectsUnavailableHistoryBeforeResettin
     EXPECT_EQ(fake.discontinuities, 1u);
 }
 
+TEST_F(AudioSelectionTest, LiveHistoryStartsAfterProgramHeadersHaveExpired)
+{
+    iptv::Timeshift history(188 * 16);
+    ASSERT_TRUE(history.enable_replay());
+    std::vector<std::uint8_t> input;
+    AppendPacket(&input, PsiPacket(0, PatSection()));
+    AppendPacket(&input,
+                 PsiPacket(0x100, TrackPmt({{0x111, 0x0f, "eng", 0}, {0x112, 0x0f, "spa", 0}})));
+    AppendPacket(&input, ConfigurationPacket(0, 2, 1));
+    for (unsigned second = 2; second <= 45; ++second)
+        AppendPacket(&input, StampedPacket(H264Packet((second - 1) & 15, false), second * 90000));
+    ASSERT_TRUE(history.append(input.data(), input.size()));
+    ASSERT_GT(history.range().begin, 188u * 3);
+    const auto position = history.seek(history.range().first_pts_us);
+    ASSERT_TRUE(position);
+    ASSERT_EQ(history.reposition(&session, *position), IPTV_STREAM_OK);
+    std::array<std::uint8_t, 188 * 16> bytes{};
+    const auto retained = history.read(position->offset, bytes.data(), bytes.size());
+    ASSERT_GT(retained.bytes, 0u);
+    ASSERT_EQ(iptv_stream_push(&session, bytes.data(), retained.bytes), IPTV_STREAM_OK);
+    ASSERT_EQ(fake.opens, 1u);
+    ASSERT_GT(fake.video_packets.size(), 0u);
+    EXPECT_EQ(FixturePpsVersion(fake.video_packets.front()), 0x82);
+    std::array<iptv_stream_audio_track_t, 2> tracks{};
+    std::uint32_t selected = 0;
+    ASSERT_EQ(iptv_stream_audio_tracks(&session, tracks.data(), tracks.size(), &selected), 2u);
+    EXPECT_EQ(selected, 0x111u);
+    EXPECT_STREQ(tracks[1].language, "spa");
+    EXPECT_EQ(iptv_stream_select_audio(&session, 0x112), IPTV_STREAM_OK);
+}
+
+TEST_F(AudioSelectionTest, LiveHistoryRestoresMissingCodecHeadersAfterEarlyProgramTables)
+{
+    const auto early = StreamBytes(0x0f, H264Packet(0, false));
+    ASSERT_EQ(iptv_stream_push(&session, early.data(), early.size()), IPTV_STREAM_OK);
+    ASSERT_GT(session.telemetry.pmt_sections, 0u);
+    ASSERT_EQ(fake.opens, 0u);
+    ASSERT_EQ(iptv_stream_select_audio(&session, 0), IPTV_STREAM_OK);
+    iptv::Timeshift history(188 * 16);
+    ASSERT_TRUE(history.enable_replay());
+    auto input = StreamBytes(0x0f, ConfigurationPacket(0, 2, 1));
+    for (unsigned second = 2; second <= 4; ++second)
+        AppendPacket(&input, StampedPacket(H264Packet(second - 1, false), second * 90000));
+    ASSERT_TRUE(history.append(input.data(), input.size()));
+    const auto position = history.seek(2000000);
+    ASSERT_TRUE(position);
+    ASSERT_EQ(history.reposition(&session, *position), IPTV_STREAM_OK);
+    std::array<std::uint8_t, 188 * 16> bytes{};
+    const auto retained = history.read(position->offset, bytes.data(), bytes.size());
+    ASSERT_EQ(iptv_stream_push(&session, bytes.data(), retained.bytes), IPTV_STREAM_OK);
+    ASSERT_EQ(fake.opens, 1u);
+    ASSERT_FALSE(fake.video_packets.empty());
+    EXPECT_EQ(FixturePpsVersion(fake.video_packets.front()), 0x82);
+    EXPECT_EQ(session.telemetry.format.audio_pid, 0u);
+    EXPECT_EQ(fake.disables, 1u);
+}
+
 TEST_F(AudioSelectionTest, LiveHistoryRestoresUnreadSettingsAfterOverwriteAndProviderReset)
 {
     iptv::Timeshift history(188 * 16);
