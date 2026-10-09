@@ -398,6 +398,12 @@ void SaveReceipt(const char *channel_name, std::uint64_t duration_ms, int result
         static_cast<unsigned long long>(native.dropped_late_video_frames),
         native.hardware_validated, native.stream_acceptance_validated, playback_stop_requested);
     std::fprintf(file,
+                 "present_gap_max_us=%llu\npresent_gaps_over_250ms=%llu\n"
+                 "present_gaps_over_500ms=%llu\n",
+                 static_cast<unsigned long long>(native.present_gap_max_us),
+                 static_cast<unsigned long long>(native.present_gaps_over_250ms),
+                 static_cast<unsigned long long>(native.present_gaps_over_500ms));
+    std::fprintf(file,
                  "direct_read_total_us=%llu\ndirect_read_max_us=%llu\n"
                  "direct_push_total_us=%llu\ndirect_push_max_us=%llu\n"
                  "network_read_capacity=%zu\n"
