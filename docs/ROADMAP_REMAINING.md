@@ -548,3 +548,5 @@ synchronization, switching latency and resource cost remain pending.
 - 2026-10-09 | rewind | 911f3b2 | .30 PPSA88281 | pass: A/B tracks across pause/seek/live, zero queue gaps, clean teardown | ../psiptv/results/roadmap/console-39/result.json | natural transition
 
 - 2026-10-09 | rewind | 911f3b2 | .30 PPSA88281 | partial-pass: natural track transition; one video queue gap unclassified | ../psiptv/results/roadmap/console-42/result.json | timing/formats
+
+- 2026-10-09 | rewind | f79f9e5 | .30 PPSA88282 | pass: natural transition gap81.5ms, none>250ms; clean teardown | ../psiptv/results/roadmap/console-43/result.json | formats/timeline/subtitle sync
