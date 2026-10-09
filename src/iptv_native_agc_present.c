@@ -848,8 +848,8 @@ static int render_frame(int video, int buffer_index, void *target, uint8_t *memo
     }
     /* s55 is the unused fourth matrix constant in the existing pixel shader. */
     ((uint32_t *)pixel_cb)[3] = presenter.source_transfer == 2 ? (presenter.hdr ? 2u : 3u)
-                                : presenter.source_transfer && !presenter.hdr ? 1u
-                                                                              : 0u;
+                                : presenter.source_transfer    ? (presenter.hdr ? 4u : 1u)
+                                                               : 0u;
     ((uint32_t *)pixel_cb)[12] = float_bits((float)visible_width);
     ((uint32_t *)pixel_cb)[13] = float_bits((float)visible_height);
     ((uint32_t *)pixel_cb)[14] = pitch;

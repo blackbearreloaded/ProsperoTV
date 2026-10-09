@@ -6,7 +6,8 @@
 
 The existing pixel shader supplies R', G', B' in v0..2, and the unused
 matrix constant s55 selects the mode:
-0=unchanged, 1=PQ to SDR, 2=HLG to PQ, 3=HLG to SDR. Keep v0..8, s0..59
+0=SDR unchanged, 1=PQ to SDR, 2=HLG to PQ, 3=HLG to SDR, 4=PQ unchanged.
+HDR exports R10G10B10A2; SDR exports B8G8R8A8. Keep v0..8, s0..59
 and the existing export contract; no shader metadata/resource changes.
 BT.2100-2 Tables 4/5 define PQ and HLG. HLG uses a 1000-nit reference
 display and its luminance OOTF, not independent channel powers.
@@ -36,6 +37,8 @@ def shader():
         emit(f'v_exp_f32_e32 v{reg}, v{reg}')
 
     emit('s_cmp_eq_u32 s55, 0')
+    emit('s_cbranch_scc1 export_color')
+    emit('s_cmp_eq_u32 s55, 4')
     emit('s_cbranch_scc1 export_color')
     emit('s_cmp_eq_u32 s55, 1')
     emit('s_cbranch_scc1 pq_decode')
@@ -108,8 +111,18 @@ def shader():
     emit('export_color:')
     for c in range(3):
         emit(f'v_max_f32_e64 v{c}, 0, v{c} clamp')
+    emit('s_cmp_eq_u32 s55, 2')
+    emit('s_cbranch_scc1 hdr_pack')
+    emit('s_cmp_eq_u32 s55, 4')
+    emit('s_cbranch_scc1 hdr_pack')
     emit('v_cvt_pkrtz_f16_f32_e32 v1, v2, v1')
     emit('v_cvt_pkrtz_f16_f32_e64 v0, v0, 1.0')
+    emit('s_branch finish_export')
+    emit('hdr_pack:')
+    emit('v_cvt_pkrtz_f16_f32_e32 v3, v0, v1')
+    emit('v_cvt_pkrtz_f16_f32_e64 v0, v2, 1.0')
+    emit('v_mov_b32_e32 v1, v3')
+    emit('finish_export:')
     emit('s_mov_b64 exec, s[30:31]')
     emit('exp mrt0 v1, v1, v0, v0 done compr vm')
     emit('s_endpgm')

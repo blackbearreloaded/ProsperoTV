@@ -55,9 +55,20 @@ same BT.2020-to-709 matrix and bounded shoulder used for previews. Caption and
 menu colors follow the source transfer function before conversion. Preview
 sampling retains all ten bits. The generated shader stays within the existing
 register allocation and has a reproducible LLVM assembly tool. Its register
-program passes 432 reference color/mode comparisons; 149 UI sanitizer tests,
+program passes 540 reference color/mode comparisons; 149 UI sanitizer tests,
 31 tooling checks (including rejected-output handling) and lint pass. Native
 shader/output acceptance is pending for this update.
+
+Cases 63/64 (`87a7b7e`, PPSA88300) each decoded 750 and presented 749 4K
+pictures through PQ/HLG/SDR/HLG transitions, reached EOF, and returned to an idle
+healthy console. The maximum presentation gaps were 86,557/86,696 microseconds.
+Completed GPU samples matched the encoded chart's transfer calculations, but
+case 63 exposed BGR packing on the HDR target, which requires R in the low ten
+bits. Its color acceptance failed. Case 64 forced SDR without rebuilding; its
+PQ and HLG tone mapping matched all eight reference colors within one 8-bit
+code value. The shader regression now checks export component order, and the
+HDR packing correction awaits a new native case. Physical HDMI acceptance
+remains separate from these framebuffer checks.
 
 ## Live pause and rewind foundations
 

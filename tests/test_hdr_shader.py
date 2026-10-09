@@ -46,10 +46,17 @@ def execute(rgb, mode):
                 pc = labels[args[0]]
         elif op == 's_branch':
             pc = labels[args[0]]
+        elif op == 's_mov_b64':
+            assert args == ['exec', 's[30:31]']
         elif op == 'v_cmp_gt_f32_e32':
             vector_condition = value(args[1]) > value(args[2])
         elif op.startswith('v_cvt_pkrtz'):
-            return [registers[f'v{i}'] for i in range(3)]
+            registers[args[0]] = (value(args[1]), value(args[2]))
+        elif op == 'v_mov_b32_e32':
+            registers[args[0]] = value(args[1])
+        elif op == 'exp':
+            # Component order is part of the VideoOut contract, not just math.
+            return [*registers['v1'], registers['v0'][0]]
         else:
             a = value(args[1])
             if op == 'v_cndmask_b32_e32':
@@ -75,7 +82,7 @@ def execute(rgb, mode):
 
 
 def reference(rgb, mode):
-    if mode == 0:
+    if mode in (0, 4):
         return rgb
     if mode == 1:
         def decode(x):
@@ -105,10 +112,12 @@ class HdrShaderTest(unittest.TestCase):
                   (1, 0, 0), (0, 1, 0), (0, 0, 1), (.01, .02, .03)]
         rng = random.Random(2100)
         colors += [tuple(rng.random() for _ in range(3)) for _ in range(100)]
-        for mode in range(4):
+        for mode in range(5):
             for rgb in colors:
                 with self.subTest(mode=mode, rgb=rgb):
                     actual, expected = execute(rgb, mode), reference(rgb, mode)
+                    if mode not in (2, 4):
+                        expected = expected[::-1] # SDR output is B8G8R8A8.
                     for a, b in zip(actual, expected):
                         self.assertAlmostEqual(a, b, delta=0.0001)
                     self.assertTrue(all(0 <= x <= 1 for x in actual))
