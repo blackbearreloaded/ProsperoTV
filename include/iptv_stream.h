@@ -183,6 +183,11 @@ int iptv_stream_open(iptv_stream_session_t *session,
 int iptv_stream_start(iptv_stream_session_t *session);
 int iptv_stream_push(iptv_stream_session_t *session,
                      const void *data, size_t bytes);
+/* Parse skipped transport without submitting audio/video or opening the video backend.
+ * Continue from the current parser cursor. finish requires an access-unit
+ * boundary and retains the final unit's setup before reposition discards it.
+ * Owner-thread only, after interrupting the native submission queues. */
+int iptv_stream_scan(iptv_stream_session_t *session, const void *data, size_t bytes, int finish);
 int iptv_stream_discontinuity(iptv_stream_session_t *session);
 /* Reset buffered transport for replay at an extended video-clock position.
  * The timestamp comes from retained history, including its wrap epoch.

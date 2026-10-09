@@ -802,6 +802,10 @@ class StreamRunner
     {
         return paused_.load(std::memory_order_acquire);
     }
+    bool Seeking() const
+    {
+        return scanning_.load(std::memory_order_acquire);
+    }
     void SetStopAfter(unsigned milliseconds)
     {
         stop_deadline_usec_ = 0;
@@ -1346,6 +1350,37 @@ class StreamRunner
         {
             iptv_native_backend_request_reposition(&adapter_.backend);
             const bool same_timeline = history_generation_ == position->generation;
+            if (same_timeline && read >= range.begin && read < position->offset)
+            {
+                // Advance the existing parser through skipped bytes to discover
+                // parameter changes. Bound each step so input/Stop can intervene.
+                const auto limit = static_cast<std::size_t>(
+                    std::min<std::uint64_t>(kReadBytes, position->offset - read));
+                const auto copied = history_->read(read, read_ahead_buffer_, limit);
+                const bool usable = copied.bytes && copied.generation == position->generation;
+                scanning_.store(usable, std::memory_order_release);
+                if (usable)
+                {
+                    const bool finish = read + copied.bytes == position->offset;
+                    const int result =
+                        iptv_stream_scan(&session_, read_ahead_buffer_, copied.bytes, finish);
+                    if (result != IPTV_STREAM_OK)
+                    {
+                        scanning_.store(false, std::memory_order_release);
+                        read_ahead_result_.store(result, std::memory_order_release);
+                        return false;
+                    }
+                    read += copied.bytes;
+                    read_ahead_read_.store(read, std::memory_order_release);
+                }
+                // The next iteration checks expiry/new timeline and any newer
+                // request before resetting the decoder at the chosen position.
+                std::lock_guard lock(history_request_mutex_);
+                history_request_ = *position;
+                chunk = 0;
+                return true;
+            }
+            scanning_.store(false, std::memory_order_release);
             adapter_.preserve_subtitles = same_timeline;
             const int result = same_timeline ? iptv_stream_reposition(&session_, position->pts_us)
                                              : iptv_stream_discontinuity(&session_);
@@ -1362,8 +1397,10 @@ class StreamRunner
             history_generation_ = position->generation;
             read_ahead_read_.store(read, std::memory_order_release);
         }
+        else
+            scanning_.store(false, std::memory_order_release);
         const auto copied = history_->read(read, read_ahead_buffer_, kReadBytes);
-        chunk = copied.bytes;
+        chunk = copied.generation == history_generation_ ? copied.bytes : 0;
         // A producer may have advanced the retention boundary since the range
         // snapshot. Retry from a new indexed position on the next iteration.
         return true;
@@ -1500,6 +1537,7 @@ class StreamRunner
         read_ahead_buffer_ = nullptr;
         history_.reset();
         history_request_.reset();
+        scanning_.store(false, std::memory_order_release);
         history_generation_ = 0;
         paused_.store(false, std::memory_order_release);
         history_expired_.store(false, std::memory_order_release);
@@ -1542,6 +1580,7 @@ class StreamRunner
     std::atomic<bool> paused_{false}, history_expired_{false};
     std::mutex history_request_mutex_;
     std::optional<iptv::Timeshift::Position> history_request_;
+    std::atomic<bool> scanning_{false};
     std::atomic<std::uint64_t> history_generation_{0};
     std::uint8_t *read_ahead_buffer_ = nullptr;
     void *read_ahead_thread_ = nullptr;
@@ -1749,7 +1788,7 @@ FeedResult FeedRequest(iptv::http::StreamRequest *request, StreamRunner *runner,
         }
         const std::uint64_t presented = runner->PresentedFrames();
         const std::uint64_t now = MonotonicUsec();
-        if (presented > last_presented || runner->Paused())
+        if (presented > last_presented || runner->Paused() || runner->Seeking())
         {
             last_presented = presented;
             last_progress = now;
@@ -1814,7 +1853,7 @@ int RunWebm(iptv::http::StreamRequest *request, StreamRunner *runner,
         result = iptv_webm_push(&parser, read_buffer, static_cast<std::size_t>(read));
         const std::uint64_t presented = runner->PresentedFrames();
         const std::uint64_t now = MonotonicUsec();
-        if (presented > last_presented || runner->Paused())
+        if (presented > last_presented || runner->Paused() || runner->Seeking())
         {
             last_presented = presented;
             last_progress = now;
@@ -2017,7 +2056,7 @@ int RunHlsMedia(const char *source_url, StreamRunner *runner, std::uint8_t *read
             return finished == IPTV_STREAM_OK && runner->HasPresentedVideo() ? 0 : -1;
         }
         const std::uint64_t presented = runner->PresentedFrames();
-        if (presented > last_presented || runner->Paused())
+        if (presented > last_presented || runner->Paused() || runner->Seeking())
         {
             stale_refreshes = 0;
             last_presented = presented;

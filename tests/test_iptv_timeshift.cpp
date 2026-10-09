@@ -96,6 +96,9 @@ TEST(Timeshift, ExpiredDecoderConfigurationAlsoExpiresTransportAndSeekPositions)
     ASSERT_TRUE(history.append(data.data(), data.size()));
     history.discard_before(100000000, 0); // A stale owner cannot trim a new timeline.
     EXPECT_TRUE(history.seek(2000000));
+    const auto current_read = history.read(history.range().begin, output.data(), output.size());
+    ASSERT_EQ(current_read.status, iptv::Timeshift::ReadStatus::data);
+    EXPECT_EQ(current_read.generation, 1u);
 }
 
 TEST(TimeshiftSeek, ClampsToMovingHistoryAndAvoidsArithmeticOverflow)

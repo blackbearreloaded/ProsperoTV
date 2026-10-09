@@ -35,6 +35,7 @@ class Timeshift
     {
         ReadStatus status = ReadStatus::empty;
         std::size_t bytes = 0;
+        std::uint64_t generation = 0; // Captured under the same lock as the byte copy.
     };
     explicit Timeshift(std::size_t bytes = max_bytes, std::uint64_t duration_us = max_duration_us);
     bool available() const

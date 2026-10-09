@@ -998,6 +998,51 @@ TEST_F(AudioSelectionTest, RepeatedSeeksRestoreHistoricalParameterIdsInBothDirec
     EXPECT_EQ(fake.opens, 1u);
 }
 
+TEST_F(AudioSelectionTest, ForwardScanRetainsSkippedConfigurationWithoutPlayingSkippedFrames)
+{
+    const auto first = StreamBytes(0x0f, ConfigurationPacket(0, 1, 1));
+    ASSERT_EQ(iptv_stream_push(&session, first.data(), first.size()), IPTV_STREAM_OK);
+    ASSERT_EQ(fake.videos, 1u);
+    std::vector<std::uint8_t> skipped;
+    AppendPacket(&skipped, ConfigurationPacket(1, 2, 20));
+    AppendPacket(&skipped, StampedPacket(UnsupportedAacPacket(), 20 * 90000));
+    for (std::size_t at = 0; at < skipped.size();)
+    {
+        const auto bytes = std::min<std::size_t>(7, skipped.size() - at);
+        ASSERT_EQ(
+            iptv_stream_scan(&session, skipped.data() + at, bytes, at + bytes == skipped.size()),
+            IPTV_STREAM_OK);
+        at += bytes;
+    }
+    EXPECT_EQ(fake.videos, 1u);
+    EXPECT_EQ(fake.audios, 0u);
+    EXPECT_EQ(fake.opens, 1u);
+    for (const unsigned second : {20u, 1u, 20u})
+    {
+        ASSERT_EQ(iptv_stream_reposition(&session, second * 1000000ull), IPTV_STREAM_OK);
+        const auto replay = StreamBytes(0x0f, StampedPacket(H264Packet(0, false), second * 90000));
+        ASSERT_EQ(iptv_stream_push(&session, replay.data(), replay.size()), IPTV_STREAM_OK);
+        EXPECT_EQ(FixturePpsVersion(fake.video_packets.back()), second == 1 ? 0x81 : 0x82);
+    }
+    EXPECT_EQ(fake.videos, 4u); // Scan mode does not leak into subsequent playback.
+    EXPECT_EQ(iptv_stream_scan(nullptr, nullptr, 0, 1), IPTV_STREAM_INVALID_ARGUMENT);
+    EXPECT_EQ(iptv_stream_scan(&session, nullptr, 1, 0), IPTV_STREAM_INVALID_ARGUMENT);
+}
+
+TEST_F(AudioSelectionTest, ForwardScanBeforeFirstPictureDoesNotOpenADecoder)
+{
+    const auto first = StreamBytes(0x0f, ConfigurationPacket(0, 1, 1));
+    ASSERT_EQ(iptv_stream_scan(&session, first.data(), first.size(), 1), IPTV_STREAM_OK);
+    EXPECT_EQ(fake.opens, 0u);
+    EXPECT_EQ(fake.videos, 0u);
+    ASSERT_EQ(iptv_stream_reposition(&session, 1000000), IPTV_STREAM_OK);
+    const auto replay = StreamBytes(0x0f, StampedPacket(H264Packet(0, false), 90000));
+    ASSERT_EQ(iptv_stream_push(&session, replay.data(), replay.size()), IPTV_STREAM_OK);
+    EXPECT_EQ(fake.opens, 1u);
+    EXPECT_EQ(fake.videos, 1u);
+    EXPECT_EQ(FixturePpsVersion(fake.video_packets.back()), 0x81);
+}
+
 TEST_F(AudioSelectionTest, ConfigurationRetentionRejectsExpiredSeeksWithoutResettingPlayback)
 {
     const auto first = StreamBytes(0x0f, ConfigurationPacket(0, 0, 1));

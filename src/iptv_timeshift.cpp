@@ -109,7 +109,7 @@ Timeshift::Read Timeshift::read(std::uint64_t offset, std::uint8_t *output,
         return {};
     const auto count = static_cast<std::size_t>(std::min<std::uint64_t>(capacity, end_ - offset));
     copy(offset, output, count);
-    return {ReadStatus::data, count};
+    return {ReadStatus::data, count, generation_};
 }
 Timeshift::Range Timeshift::range() const
 {

@@ -131,6 +131,7 @@ struct impl_t
     iptv_stream_backend_t backend;
     bool has_backend;
     bool started;
+    bool scanning;
     bool backend_open;
     bool backend_ever_opened;
     bool pat_seen;
@@ -772,7 +773,8 @@ static bool video_config_ready(const impl_t *impl)
 
 static int maybe_activate(iptv_stream_session_t *session, impl_t *impl)
 {
-    if (!impl->pmt_seen || !video_config_ready(impl) || !impl->started || impl->backend_open)
+    if (!impl->pmt_seen || !video_config_ready(impl) || !impl->started || impl->backend_open ||
+        impl->scanning)
         return IPTV_STREAM_OK;
     if (!impl->has_backend)
     {
@@ -1502,7 +1504,7 @@ static int emit_video(iptv_stream_session_t *session, impl_t *impl, size_t bytes
     result = maybe_activate(session, impl);
     if (result != IPTV_STREAM_OK)
         return result;
-    if (impl->backend_open)
+    if (impl->backend_open && !impl->scanning)
     {
         const uint8_t *data = impl->video_es.data;
         size_t submitted = bytes, setup = 0;
@@ -1773,11 +1775,11 @@ static int process_audio(iptv_stream_session_t *session, impl_t *impl)
 
         /* Keep complete frames bounded until video parameter sets permit the
          * backend to open. Parser-only sessions consume them immediately. */
-        if (impl->has_backend && !impl->backend_open)
+        if (impl->has_backend && !impl->backend_open && !impl->scanning)
             return IPTV_STREAM_OK;
 
         const uint64_t pts = impl->audio_markers.base_pts;
-        if (impl->backend_open)
+        if (impl->backend_open && !impl->scanning)
         {
             const int result =
                 impl->backend.submit_audio(impl->backend.context, data, frame_bytes, pts);
@@ -2472,6 +2474,19 @@ int iptv_stream_push(iptv_stream_session_t *session, const void *data, size_t by
             return result;
     }
     return IPTV_STREAM_OK;
+}
+
+int iptv_stream_scan(iptv_stream_session_t *session, const void *data, size_t bytes, int finish)
+{
+    if (!valid_session(session) || !get_impl(session))
+        return IPTV_STREAM_INVALID_ARGUMENT;
+    auto *impl = get_impl(session);
+    impl->scanning = true;
+    int result = iptv_stream_push(session, data, bytes);
+    if (result == IPTV_STREAM_OK && finish)
+        result = flush_streams(session, impl);
+    impl->scanning = false;
+    return result;
 }
 
 static int reset_transport(iptv_stream_session_t *session)

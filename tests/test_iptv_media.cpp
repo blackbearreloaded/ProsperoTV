@@ -321,16 +321,34 @@ TEST(Media, SeekRestoresConfigurationForFreshH264AndHevcDecoders)
                 t[4] = 1 | ((ticks << 1) & 254);
             }
         }
-        ASSERT_EQ(iptv_stream_reposition(session.get(), 10000000), IPTV_STREAM_OK);
         pictures.clear();
         timestamps.clear();
+        // Capture the second encoder's reference picture in an independent
+        // parser; the playback session must only scan those skipped bytes.
+        std::unique_ptr<iptv_stream_session_t, decltype(close)> reference(
+            new iptv_stream_session_t{});
+        iptv_stream_init(reference.get());
+        ASSERT_EQ(iptv_stream_open(reference.get(), nullptr, &backend), IPTV_STREAM_OK);
+        ASSERT_EQ(iptv_stream_start(reference.get()), IPTV_STREAM_OK);
         ASSERT_EQ(
-            iptv_stream_push(session.get(), changed.transport.data(), changed.transport.size()),
+            iptv_stream_push(reference.get(), changed.transport.data(), changed.transport.size()),
             IPTV_STREAM_OK);
         ASSERT_FALSE(pictures.empty());
         const std::array versions{original_configuration, pictures.front()};
         const std::array positions{original_pts, timestamps.front()};
         ASSERT_GT(positions[1], positions[0] + 1000000);
+        reference.reset();
+        pictures.clear();
+        timestamps.clear();
+        for (std::size_t at = 0; at < changed.transport.size();)
+        {
+            const auto bytes = std::min<std::size_t>(157, changed.transport.size() - at);
+            ASSERT_EQ(iptv_stream_scan(session.get(), changed.transport.data() + at, bytes,
+                                       at + bytes == changed.transport.size()),
+                      IPTV_STREAM_OK);
+            at += bytes;
+        }
+        EXPECT_TRUE(pictures.empty());
         std::array<std::vector<std::uint8_t>, 2> parameter_sets;
         for (const unsigned version : {0u, 1u, 0u, 1u})
         {
