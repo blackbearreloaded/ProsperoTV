@@ -588,3 +588,5 @@ synchronization, switching latency and resource cost remain pending.
 - 2026-10-09 | fields | 8ef56e1 | .30 PPSA88293 | pass: PAFF hardware495 pictures/989 fields,EOF,no queue gaps,healthy teardown | ../psiptv/results/roadmap/console-55/result.json | HDR
 
 - 2026-10-09 | HDR | 7a587be | .30 PPSA88295 | pass: Main10 HDR10 output/readback,750decoded,EOF,healthy teardown | ../psiptv/results/roadmap/console-57/result.json | transitions/fallback
+
+- 2026-10-09 | HDR | e61eb3b | .30 PPSA88296 | partial-pass:4K550frames,metadata,format switches,healthy teardown; HDMI stayed HDR | ../psiptv/results/roadmap/console-58/result.json | display/fallback
