@@ -57,15 +57,18 @@ TEST(Vp9PacketTest, ReadsVisibleHiddenAndShowExistingFlags)
     EXPECT_EQ(flags.show_frame, 1u);
     EXPECT_EQ(flags.show_existing_frame, 0u);
     EXPECT_EQ(flags.displayable, 1u);
+    EXPECT_EQ(flags.keyframe, 1u);
 
     ASSERT_EQ(iptv_vp9_read_frame_flags(hidden.data(), hidden.size(), 0, &flags), 0);
     EXPECT_EQ(flags.show_frame, 0u);
     EXPECT_EQ(flags.show_existing_frame, 0u);
     EXPECT_EQ(flags.displayable, 0u);
+    EXPECT_EQ(flags.keyframe, 0u);
 
     ASSERT_EQ(iptv_vp9_read_frame_flags(show_existing.data(), show_existing.size(), 0, &flags), 0);
     EXPECT_EQ(flags.show_existing_frame, 1u);
     EXPECT_EQ(flags.displayable, 1u);
+    EXPECT_EQ(flags.keyframe, 0u);
 }
 
 TEST(Vp9PacketTest, RejectsProfileMismatchAndBadFrameMarker)

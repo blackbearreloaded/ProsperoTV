@@ -913,13 +913,15 @@ class StreamRunner
         return true;
     }
 
-    bool StartWebm()
+    bool StartWebm(bool keep_history = false)
     {
-        if (Close() != 0)
+        if (Close(keep_history) != 0 ||
+            (keep_history && (!history_ || !history_reopen_ || PlaybackStopRequested())))
             return false;
-        presented_before_reopen_ = 0;
+        const auto presented = keep_history ? PresentedFrames() : 0;
         if (iptv_native_backend_init(&adapter_.backend) != 0)
             return false;
+        presented_before_reopen_ = presented;
         adapter_.initialized = true;
         adapter_.poll_controls = [](void *self)
         { (void)static_cast<StreamRunner *>(self)->StopRequested(); };
@@ -930,6 +932,17 @@ class StreamRunner
         active_ = true;
         mode_ = RunnerMode::webm;
         webm_finished_ = false;
+        if (keep_history)
+        {
+            if (!history_request_)
+                history_request_ = history_reopen_;
+            history_reopen_.reset();
+        }
+        if (live_ && !StartReadAhead())
+        {
+            Close();
+            return false;
+        }
         return true;
     }
 
@@ -1026,6 +1039,28 @@ class StreamRunner
     {
         if (!active_ || mode_ != RunnerMode::webm || !block.data || block.bytes == 0)
             return IPTV_STREAM_INVALID_STATE;
+        if (history_)
+        {
+            const int result = read_ahead_result_.load(std::memory_order_acquire);
+            if (result != IPTV_STREAM_OK && result != IPTV_STREAM_REOPEN_REQUIRED)
+                return result;
+            if (!history_->append_webm(video, block))
+                return IPTV_STREAM_BUFFER_LIMIT;
+            read_ahead_write_.store(history_->range().end, std::memory_order_release);
+            if (result == IPTV_STREAM_REOPEN_REQUIRED && !RecoverHistory())
+                return result;
+            return IPTV_STREAM_OK;
+        }
+        return DecodeWebm(video, block);
+    }
+
+    int DecodeWebm(const iptv_webm_video_info_t &video, const iptv_webm_block_t &block)
+    {
+        const auto &current = session_.telemetry.format;
+        if (adapter_.opened && (current.coded_width != video.pixel_width ||
+                                 current.coded_height != video.pixel_height ||
+                                 current.video_profile != video.profile))
+            return IPTV_STREAM_REOPEN_REQUIRED;
         if (!adapter_.opened)
         {
             const std::uint32_t level =
@@ -1194,6 +1229,14 @@ class StreamRunner
         }
         if (mode_ != RunnerMode::webm)
             return IPTV_STREAM_INVALID_STATE;
+        if (read_ahead_thread_)
+        {
+            int result = StopReadAhead(true, true);
+            while (result == IPTV_STREAM_REOPEN_REQUIRED && RecoverHistory())
+                result = StopReadAhead(true, true);
+            if (result != IPTV_STREAM_OK)
+                return result;
+        }
         if (webm_finished_)
             return session_.telemetry.last_result;
         if (session_.telemetry.state == IPTV_STREAM_STATE_ERROR)
@@ -1217,8 +1260,7 @@ class StreamRunner
     {
         if (active_)
         {
-            if (mode_ == RunnerMode::transport_stream)
-                (void)StopReadAhead(keep_history, keep_history);
+            (void)StopReadAhead(keep_history, keep_history);
 #if IPTV_PROBE
             // Preserve the last initialized attempt before cleanup/reconnect resets it.
             // Empty reconnects must not overwrite the decoder failure we need to diagnose.
@@ -1305,6 +1347,7 @@ class StreamRunner
     void ResetHistory()
     {
         history_.reset();
+        std::vector<std::uint8_t>().swap(history_webm_bytes_);
         history_request_.reset();
         history_reopen_.reset();
         history_reopen_pts_.reset();
@@ -1327,7 +1370,7 @@ class StreamRunner
             if (!history_reopen_)
                 return allow_pending; // Download may still be completing the changed picture.
         }
-        return history_reopen_ && Start(true);
+        return history_reopen_ && (mode_ == RunnerMode::webm ? StartWebm(true) : Start(true));
     }
 
     void UpdateLiveControls()
@@ -1419,7 +1462,9 @@ class StreamRunner
             iptv_native_backend_request_reposition(&adapter_.backend);
             const bool same_timeline = history_generation_ == position->generation;
             adapter_.preserve_subtitles = same_timeline;
-            const int result = history_->reposition(&session_, *position);
+            const int result = mode_ == RunnerMode::webm
+                                   ? (adapter_.opened ? AdapterDiscontinuity(&adapter_) : 0)
+                                   : history_->reposition(&session_, *position);
             adapter_.preserve_subtitles = false;
             if (result == IPTV_STREAM_INVALID_ARGUMENT)
             {
@@ -1451,7 +1496,10 @@ class StreamRunner
             history_generation_ = position->generation;
             read_ahead_read_.store(read, std::memory_order_release);
         }
-        const auto copied = history_->read(read, read_ahead_buffer_, kReadBytes);
+        const auto copied = mode_ == RunnerMode::webm
+                                ? history_->read_webm(read, history_webm_video_, history_webm_block_,
+                                                       history_webm_bytes_)
+                                : history_->read(read, read_ahead_buffer_, kReadBytes);
         chunk = copied.generation == history_generation_ ? copied.bytes : 0;
         // A producer may have advanced the retention boundary since the range
         // snapshot. Retry from a new indexed position on the next iteration.
@@ -1469,9 +1517,13 @@ class StreamRunner
         if (live_ && !history_)
         {
             history_.reset(new (std::nothrow) iptv::Timeshift());
-            if (history_ && (!history_->available() || !history_->enable_replay()))
+            if (history_ && (!history_->available() ||
+                             !(mode_ == RunnerMode::webm ? history_->enable_webm()
+                                                         : history_->enable_replay())))
                 history_.reset();
         }
+        if (mode_ == RunnerMode::webm && !history_)
+            return true; // Allocation failure retains the existing direct playback path.
         read_ahead_buffer_ = new (std::nothrow) std::uint8_t[history_ ? kReadBytes : kReadAheadBytes];
         if (!read_ahead_buffer_)
         {
@@ -1502,7 +1554,7 @@ class StreamRunner
         int audio_result = 0;
         {
             std::lock_guard lock(gAudioMutex);
-            gAudioAvailable = true;
+            gAudioAvailable = mode_ != RunnerMode::webm;
         }
         while (!read_ahead_stop_.load(std::memory_order_acquire))
         {
@@ -1538,14 +1590,18 @@ class StreamRunner
 
             const std::size_t offset = history_ ? 0 : static_cast<std::size_t>(read % kReadAheadBytes);
             std::size_t chunk = available;
-            if (chunk > kReadBytes)
+            if (mode_ != RunnerMode::webm && chunk > kReadBytes)
                 chunk = kReadBytes;
-            if (chunk > kReadAheadBytes - offset)
+            if (mode_ != RunnerMode::webm && chunk > kReadAheadBytes - offset)
                 chunk = kReadAheadBytes - offset;
-            const int result = iptv_stream_push(&session_, read_ahead_buffer_ + offset, chunk);
+            const int result = mode_ == RunnerMode::webm
+                                   ? DecodeWebm(history_webm_video_, history_webm_block_)
+                                   : iptv_stream_push(&session_, read_ahead_buffer_ + offset, chunk);
             if (result != IPTV_STREAM_OK)
             {
-                if (history_ && result == IPTV_STREAM_REOPEN_REQUIRED &&
+                if (mode_ == RunnerMode::webm && result == IPTV_STREAM_REOPEN_REQUIRED)
+                    history_reopen_ = {read, history_webm_block_.pts_us, history_generation_.load()};
+                else if (history_ && result == IPTV_STREAM_REOPEN_REQUIRED &&
                     session_.telemetry.reopen_pts_us != IPTV_STREAM_PTS_UNKNOWN)
                     history_reopen_pts_ = session_.telemetry.reopen_pts_us;
                 read_ahead_result_.store(result, std::memory_order_release);
@@ -1631,6 +1687,9 @@ class StreamRunner
     std::mutex control_mutex_;
     bool live_ = false;
     std::unique_ptr<iptv::Timeshift> history_;
+    iptv_webm_video_info_t history_webm_video_{};
+    iptv_webm_block_t history_webm_block_{};
+    std::vector<std::uint8_t> history_webm_bytes_;
     std::atomic<bool> paused_{false}, history_expired_{false};
     std::mutex history_request_mutex_;
     std::optional<iptv::Timeshift::Position> history_request_;

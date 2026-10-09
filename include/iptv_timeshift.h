@@ -3,12 +3,14 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #pragma once
 #include "iptv_stream.h"
+#include "iptv_webm.h"
 #include <cstddef>
 #include <cstdint>
 #include <deque>
 #include <memory>
 #include <mutex>
 #include <optional>
+#include <vector>
 
 namespace iptv
 {
@@ -44,6 +46,14 @@ class Timeshift
     // Enable before the first append. Settings are parsed on download, with no
     // decoder callbacks, so unread headers survive byte-ring expiry.
     bool enable_replay();
+    // Direct VP9 keeps complete coded packets and their setup in the same ring.
+    // Select this instead of transport replay, before appending any input.
+    bool enable_webm();
+    bool append_webm(const iptv_webm_video_info_t &video, const iptv_webm_block_t &block);
+    // offset must be a seek result or the end of the previous returned record.
+    // block.data borrows output until the next read; bytes includes the record header.
+    Read read_webm(std::uint64_t offset, iptv_webm_video_info_t &video,
+                   iptv_webm_block_t &block, std::vector<std::uint8_t> &output) const;
     // Owner-thread only, after interrupting native submission. The history lock
     // protects validation and copying through the playback reset callback.
     int reposition(iptv_stream_session_t *playback, const Position &position);
@@ -77,6 +87,7 @@ class Timeshift
     Range range_locked() const;
     void packet(const std::uint8_t *data, std::uint64_t offset);
     void copy(std::uint64_t offset, std::uint8_t *out, std::size_t bytes) const;
+    void write(const std::uint8_t *data, std::size_t bytes);
     struct Unmap
     {
         std::size_t bytes;
@@ -93,6 +104,8 @@ class Timeshift
     std::deque<Mark> marks_;
     iptv_stream_session_t metadata_{};
     bool replay_enabled_ = false;
+    bool webm_enabled_ = false;
+    iptv_webm_video_info_t webm_video_{};
     int replay_result_ = IPTV_STREAM_OK;
 };
 

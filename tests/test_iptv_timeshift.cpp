@@ -13,6 +13,117 @@
 namespace
 {
 using Packet = std::array<std::uint8_t, 188>;
+TEST(Timeshift, WebmRetainsWholePacketsAndSeeksOnlyToActualVp9Keyframes)
+{
+    iptv::Timeshift history(4096, 5000000);
+    ASSERT_TRUE(history.enable_webm());
+    EXPECT_FALSE(history.enable_replay());
+    iptv_webm_video_info_t video{};
+    video.pixel_width = 640;
+    video.pixel_height = 360;
+    video.track_number = 1;
+    std::vector<std::uint8_t> data(250, 0x55), output;
+    iptv_webm_block_t block{}, copied{};
+    block.data = data.data();
+    block.bytes = data.size();
+    // No container keyframe flag (e.g. BlockGroup); use the coded header.
+    block.kind = IPTV_WEBM_BLOCK;
+    for (unsigned i = 0; i < 50; ++i)
+    {
+        data[0] = i % 3 == 0 ? 0x82 : 0x86;
+        data[1] = static_cast<std::uint8_t>(i);
+        block.pts_us = static_cast<std::uint64_t>(i) * 1000000;
+        ASSERT_TRUE(history.append_webm(video, block));
+        const auto range = history.range();
+        EXPECT_LE(range.end - range.begin, 4096u);
+        if (range.timed)
+            EXPECT_LE(range.last_pts_us - range.first_pts_us, 5000000u);
+    }
+    const auto position = history.seek(47000000);
+    ASSERT_TRUE(position);
+    EXPECT_EQ(position->pts_us, 45000000u);
+    auto offset = position->offset;
+    for (unsigned i = 45; i < 50; ++i)
+    {
+        iptv_webm_video_info_t setup{};
+        const auto read = history.read_webm(offset, setup, copied, output);
+        ASSERT_EQ(read.status, iptv::Timeshift::ReadStatus::data);
+        EXPECT_EQ(read.generation, position->generation);
+        EXPECT_EQ(copied.pts_us, i * 1000000u);
+        EXPECT_EQ(setup.pixel_width, 640u);
+        EXPECT_EQ(copied.bytes, 250u);
+        EXPECT_EQ(copied.data[1], i);
+        EXPECT_EQ(copied.data[0], i % 3 == 0 ? 0x82 : 0x86);
+        offset += read.bytes;
+    }
+    EXPECT_EQ(offset, history.range().end);
+    EXPECT_EQ(history.read_webm(offset, video, copied, output).status,
+              iptv::Timeshift::ReadStatus::empty);
+    EXPECT_EQ(history.read_webm(0, video, copied, output).status,
+              iptv::Timeshift::ReadStatus::expired);
+    EXPECT_FALSE(history.append(data.data(), data.size()));
+
+    // A reset expires the old timeline and waits for a real keyframe even if
+    // the provider incorrectly marks a dependent frame as random access.
+    block.pts_us = 1000000;
+    block.keyframe = 1;
+    data[0] = 0x86;
+    ASSERT_TRUE(history.append_webm(video, block));
+    EXPECT_FALSE(history.range().timed);
+    EXPECT_EQ(history.range().generation, position->generation + 1);
+    data[0] = 0x82;
+    ASSERT_TRUE(history.append_webm(video, block));
+    EXPECT_EQ(history.seek(0)->pts_us, 1000000u);
+    video.pixel_width = 1280;
+    video.pixel_height = 720;
+    block.pts_us = 2000000;
+    ASSERT_TRUE(history.append_webm(video, block));
+    EXPECT_EQ(history.range().generation, position->generation + 2);
+    const auto changed = history.seek(0);
+    ASSERT_TRUE(changed);
+    ASSERT_EQ(history.read_webm(changed->offset, video, copied, output).status,
+              iptv::Timeshift::ReadStatus::data);
+    EXPECT_EQ(video.pixel_width, 1280u);
+    EXPECT_EQ(copied.pts_us, 2000000u);
+    block.bytes = 4096;
+    EXPECT_FALSE(history.append_webm(video, block));
+    block.bytes = data.size();
+    block.pts_us = UINT64_MAX;
+    EXPECT_FALSE(history.append_webm(video, block));
+}
+
+TEST(Timeshift, WebmByteExpiryWaitsForNextKeyframeAndCopiesAcrossRingWrap)
+{
+    iptv::Timeshift history(4096);
+    ASSERT_TRUE(history.enable_webm());
+    iptv_webm_video_info_t video{};
+    video.pixel_width = 640;
+    video.pixel_height = 360;
+    std::vector<std::uint8_t> data(1800, 0x55), output;
+    iptv_webm_block_t block{}, copied{};
+    block.data = data.data();
+    block.bytes = data.size();
+    data[0] = 0x82;
+    ASSERT_TRUE(history.append_webm(video, block));
+    data[0] = 0x86;
+    for (unsigned i = 1; i <= 3; ++i)
+    {
+        block.pts_us = i * 40000;
+        ASSERT_TRUE(history.append_webm(video, block));
+    }
+    EXPECT_FALSE(history.range().timed);
+    EXPECT_EQ(history.range().begin, history.range().end);
+    data[0] = 0x82;
+    ASSERT_TRUE(history.append_webm(video, block));
+    const auto key = history.seek(UINT64_MAX);
+    ASSERT_TRUE(key);
+    const auto read = history.read_webm(key->offset, video, copied, output);
+    ASSERT_EQ(read.status, iptv::Timeshift::ReadStatus::data);
+    EXPECT_EQ(data, output);
+    EXPECT_EQ(copied.pts_us, block.pts_us);
+    EXPECT_EQ(key->offset + read.bytes, history.range().end);
+}
+
 Packet packet(std::uint64_t ticks, bool random = true, unsigned pid = 256)
 {
     Packet p{};

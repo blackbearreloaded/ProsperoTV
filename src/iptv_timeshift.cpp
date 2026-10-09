@@ -2,6 +2,7 @@
 // Copyright (C) 2026 BlackBearReloaded
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "iptv_timeshift.h"
+#include "iptv_vp9_packet.h"
 #include <algorithm>
 #include <cstring>
 #include <sys/mman.h>
@@ -11,6 +12,11 @@ namespace iptv
 namespace
 {
 constexpr std::size_t packet_bytes = 188;
+struct WebmRecord
+{
+    iptv_webm_video_info_t video{};
+    std::uint64_t pts_us = 0, bytes = 0;
+};
 }
 bool TimeshiftSeek::relative(std::uint64_t first, std::uint64_t last, std::uint64_t presented,
                              int seconds)
@@ -62,7 +68,7 @@ Timeshift::~Timeshift()
 bool Timeshift::enable_replay()
 {
     std::lock_guard lock(mutex_);
-    if (!available() || end_ || replay_enabled_)
+    if (!available() || end_ || replay_enabled_ || webm_enabled_)
         return false;
     iptv_stream_init(&metadata_);
     if (iptv_stream_open(&metadata_, nullptr, nullptr) != IPTV_STREAM_OK ||
@@ -73,6 +79,98 @@ bool Timeshift::enable_replay()
     }
     replay_enabled_ = true;
     return true;
+}
+bool Timeshift::enable_webm()
+{
+    std::lock_guard lock(mutex_);
+    if (!available() || end_ || replay_enabled_ || webm_enabled_)
+        return false;
+    webm_enabled_ = true;
+    return true;
+}
+void Timeshift::write(const std::uint8_t *data, std::size_t bytes)
+{
+    const auto at = static_cast<std::size_t>(end_ % capacity_);
+    const auto first = std::min(bytes, capacity_ - at);
+    std::memcpy(storage_.get() + at, data, first);
+    if (first < bytes)
+        std::memcpy(storage_.get(), data + first, bytes - first);
+    end_ += bytes;
+    if (end_ - begin_ > capacity_)
+        begin_ = end_ - capacity_;
+}
+bool Timeshift::append_webm(const iptv_webm_video_info_t &video, const iptv_webm_block_t &block)
+{
+    if (!available() || !block.data || !block.bytes ||
+        block.bytes > IPTV_WEBM_DEFAULT_MAX_ELEMENT_BYTES ||
+        block.bytes > capacity_ - sizeof(WebmRecord) || block.pts_us > INT64_MAX ||
+        !video.pixel_width || video.pixel_width > IPTV_WEBM_DEFAULT_MAX_WIDTH ||
+        !video.pixel_height || video.pixel_height > IPTV_WEBM_DEFAULT_MAX_HEIGHT || video.profile)
+        return false;
+    iptv_vp9_packet_t packet{};
+    iptv_vp9_frame_flags_t flags{};
+    if (iptv_vp9_split_packet(block.data, block.bytes, &packet) != 0 ||
+        iptv_vp9_read_frame_flags(packet.frames[0].data, packet.frames[0].bytes,
+                                  video.profile, &flags) != 0)
+        return false;
+    std::lock_guard lock(mutex_);
+    if (!webm_enabled_ || sizeof(WebmRecord) + block.bytes > UINT64_MAX - end_)
+        return false;
+    const bool changed = webm_video_.pixel_width &&
+                         (video.pixel_width != webm_video_.pixel_width ||
+                          video.pixel_height != webm_video_.pixel_height);
+    const bool reset = have_ticks_ &&
+                       ((block.pts_us < latest_us_ && latest_us_ - block.pts_us > 10000000) ||
+                        (block.pts_us > latest_us_ && block.pts_us - latest_us_ > 30000000));
+    if (changed || reset)
+    {
+        marks_.clear();
+        begin_ = end_;
+        latest_us_ = 0;
+        ++generation_;
+    }
+    webm_video_ = video;
+    have_ticks_ = true;
+    if (marks_.empty() && !flags.keyframe)
+        return true; // Wait for an independently decodable picture after expiry/reset.
+    const auto offset = end_;
+    const WebmRecord record{video, block.pts_us, block.bytes};
+    write(reinterpret_cast<const std::uint8_t *>(&record), sizeof(record));
+    write(block.data, block.bytes);
+    if (flags.keyframe)
+        marks_.push_back({offset, block.pts_us, true});
+    latest_us_ = std::max(latest_us_, block.pts_us);
+    trim();
+    // The first remaining record must be a whole keyframe, never overwritten
+    // bytes or an inter-frame whose reference pictures have expired.
+    begin_ = marks_.empty() ? end_ : marks_.front().offset;
+    return true;
+}
+Timeshift::Read Timeshift::read_webm(std::uint64_t offset, iptv_webm_video_info_t &video,
+                                    iptv_webm_block_t &block,
+                                    std::vector<std::uint8_t> &output) const
+{
+    std::lock_guard lock(mutex_);
+    block = {};
+    if (!webm_enabled_ || offset < begin_ || offset > end_)
+        return {ReadStatus::expired, 0, generation_};
+    if (offset == end_)
+        return {};
+    WebmRecord record;
+    if (end_ - offset < sizeof(record))
+        return {ReadStatus::expired, 0, generation_};
+    copy(offset, reinterpret_cast<std::uint8_t *>(&record), sizeof(record));
+    if (!record.bytes || record.bytes > IPTV_WEBM_DEFAULT_MAX_ELEMENT_BYTES ||
+        record.bytes > end_ - offset - sizeof(record))
+        return {ReadStatus::expired, 0, generation_};
+    output.resize(static_cast<std::size_t>(record.bytes));
+    copy(offset + sizeof(record), output.data(), output.size());
+    video = record.video;
+    block.data = output.data();
+    block.bytes = output.size();
+    block.pts_us = record.pts_us;
+    block.track_number = video.track_number;
+    return {ReadStatus::data, sizeof(record) + output.size(), generation_};
 }
 int Timeshift::reposition(iptv_stream_session_t *playback, const Position &position)
 {
@@ -105,7 +203,7 @@ bool Timeshift::append(const std::uint8_t *data, std::size_t bytes)
     if (!available() || (!data && bytes))
         return false;
     std::lock_guard lock(mutex_);
-    if (bytes > UINT64_MAX - end_)
+    if (webm_enabled_ || bytes > UINT64_MAX - end_)
         return false;
     if (!bytes)
         return true;
@@ -114,14 +212,7 @@ bool Timeshift::append(const std::uint8_t *data, std::size_t bytes)
     while (bytes)
     {
         const auto chunk = std::min(bytes, capacity_ / 2);
-        const auto at = static_cast<std::size_t>(end_ % capacity_);
-        const auto first = std::min(chunk, capacity_ - at);
-        std::memcpy(storage_.get() + at, data, first);
-        if (first < chunk)
-            std::memcpy(storage_.get(), data + first, chunk - first);
-        end_ += chunk;
-        if (end_ - begin_ > capacity_)
-            begin_ = end_ - capacity_;
+        write(data, chunk);
         if (scan_ < begin_)
         {
             scan_ = begin_;
@@ -194,7 +285,8 @@ std::optional<Timeshift::Position> Timeshift::seek(std::uint64_t target) const
         return {};
     // Some broadcasters omit the TS random-access indicator. Starting a few
     // seconds earlier lets the existing Annex-B parser find an IDR/CRA itself.
-    const auto *chosen = random && target - random->pts_us <= 10000000 ? random : fallback;
+    const auto *chosen = random && (webm_enabled_ || target - random->pts_us <= 10000000)
+                             ? random : fallback;
     return Position{chosen->offset, chosen->pts_us, generation_};
 }
 std::optional<Timeshift::Position> Timeshift::seek_next(std::uint64_t target) const
