@@ -554,3 +554,5 @@ synchronization, switching latency and resource cost remain pending.
 - 2026-10-09 | rewind | 0c13eff | .30 PPSA88283 | failed: replacement decoder discarded input before opening; native-state regression reproduces | ../psiptv/results/roadmap/console-44/result.json | idle decoder cancellation
 
 - 2026-10-09 | rewind | d7db0b4 | .30 PPSA88284 | pass: 360p/720p native reopen, bidirectional history seeks, live continuation, one connection and clean teardown; 115 core/21 media/native-state checks | ../psiptv/results/roadmap/console-45/result.json | codec/timeline/subtitle/WebM coverage
+
+- 2026-10-09 | rewind | 34c39e6 | .30 PPSA88285 | pass: paused H264-toHEVC change expires retired timeline; resume/rewind/live and clean teardown; 117 core/21 media checks | ../psiptv/results/roadmap/console-46/result.json | timestamp reset/subtitle/WebM coverage
