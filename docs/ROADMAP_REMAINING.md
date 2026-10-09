@@ -17,7 +17,7 @@ and relevant checks work.
 | Sleep timer | Stop playback at a selected deadline | Implemented; 134 UI sanitizer tests and PS5 build pass; console case pending |
 | Live pause/rewind | Pause and replay several minutes of the current live channel | Implemented for TS/HLS and direct VP9 WebM; 119 core tests, media/subtitle checks, PS5 build and native controls/expiry/format-change cases pass; native caption visibility and subjective sync remain acceptance checks |
 | Deinterlacing | Preserve field-rate motion on interlaced broadcast video | Implemented with parsed field order and spatial bob; 120 core and 25 media/field sanitizer checks and PS5 build pass; native 1080i controls, uninterrupted 50-field/s playback and separate-field PAFF camera acceptance pass |
-| HDR | Preserve HDR metadata and output HDR on compatible displays | In progress: HEVC color snapshots, HDR10 output selection, 203-nit UI/captions and SDR previews implemented; 26 media and 148 UI sanitizer tests pass; native 1080p HDR10 output/readback and preview pass; transitions and display acceptance pending |
+| HDR | Preserve HDR metadata and output HDR on compatible displays | Implemented: HDR10/HLG output, GPU SDR fallback, per-picture color/mastering metadata, 203-nit UI and previews; native 4K color/transition/fallback cases 65/66 pass; physical HDMI and custom metadata forwarding unverified |
 | Multiview | Two or four simultaneous channels, within measured decoder limits | Pending |
 | Parental controls | PIN-protected adult categories and kids-only mode | Implemented; 132 UI sanitizer tests, 73 core tests and PS5 build pass; console case pending |
 | Profiles | Separate sources, favorites and history by signed-in console user | Implemented; isolation/migration sanitizer tests, PS5 build and console startup pass |
@@ -29,7 +29,7 @@ Completion also requires host checks, a PS5 build, bounded testing on an idle
 192.168.4.30 or 192.168.4.40, an updated deliverable, and a pull request. Console
 tests retain the workspace lock and sandbox-only test-title protocol.
 
-## HDR implementation in progress
+## HDR output and SDR fallback
 
 The pinned HEVC parser exports its existing VUI fields without decoding another
 copy of the picture. Color metadata follows each queued presentation timestamp,
@@ -56,8 +56,8 @@ menu colors follow the source transfer function before conversion. Preview
 sampling retains all ten bits. The generated shader stays within the existing
 register allocation and has a reproducible LLVM assembly tool. Its register
 program passes 540 reference color/mode comparisons; 149 UI sanitizer tests,
-31 tooling checks (including rejected-output handling) and lint pass. Native
-shader/output acceptance is pending for this update.
+31 tooling checks (including rejected-output handling) and lint pass. The
+corrected shader's native acceptance is recorded below.
 
 Cases 63/64 (`87a7b7e`, PPSA88300) each decoded 750 and presented 749 4K
 pictures through PQ/HLG/SDR/HLG transitions, reached EOF, and returned to an idle
@@ -69,6 +69,22 @@ PQ and HLG tone mapping matched all eight reference colors within one 8-bit
 code value. The shader regression now checks export component order, and the
 HDR packing correction awaits a new native case. Physical HDMI acceptance
 remains separate from these framebuffer checks.
+
+Cases 65/66 (`4c21edf`, PPSA88301) pass with the corrected export. Each decoded
+750 and presented 749 4K pictures through EOF, with zero video queue underruns
+or gaps over 250 ms, clean teardown, all 52 installed hashes verified, and
+healthy services after exit. Maximum gaps were 86,701/86,717 microseconds.
+The eight chart colors match independent calculations from the decoded test
+input within one 10-bit code in HDR and one 8-bit code in SDR. The comparison
+requires the documented HDR RGB packing and SDR BGR packing; it does not choose
+whichever channel order fits. Host shader checks cover 540 color/mode vectors,
+including export order. The rejected-output host test and the forced-SDR native
+case jointly cover fallback selection and GPU conversion. The reported heap
+peak remains below 94 MiB, with no allocation failures observed.
+
+This completes the HDR rendering implementation. Physical HDMI luminance/gamut
+measurements and custom mastering metadata forwarding remain unverified; the
+application retains that metadata in its per-picture state and receipts.
 
 ## Live pause and rewind foundations
 
