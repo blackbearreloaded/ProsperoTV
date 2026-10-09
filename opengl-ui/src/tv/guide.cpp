@@ -130,7 +130,7 @@ std::string programme_time(std::int64_t value, bool date)
     const std::tm *parts = std::localtime(&seconds);
     char text[64]{};
     if (parts)
-        std::strftime(text, sizeof(text), date ? "%a %d %b  %H:%M" : "%H:%M", parts);
+        std::strftime(text, sizeof(text), date ? "%Y-%m-%d  %H:%M" : "%H:%M", parts);
     return text;
 }
 

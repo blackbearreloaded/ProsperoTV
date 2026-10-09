@@ -1,6 +1,7 @@
 // ProsperoTV - Reuse independent preview workers for a bounded live mosaic.
 // Copyright (C) 2026 BlackBearReloaded
 // SPDX-License-Identifier: GPL-3.0-or-later
+#include "tv/i18n.hpp"
 #include "tv/multiview.hpp"
 #include "tv/draw.hpp"
 #include "tv/channel_text.hpp"
@@ -126,8 +127,8 @@ void Multiview::draw(ui::Canvas &canvas) const
     auto &list = canvas.list;
     const auto &fonts = canvas.fonts;
     list.rounded_rect({0, 0, kWidth, kHeight}, 0, Color::rgb(0x101015));
-    ui::text(list, fonts.semibold, "Multiview", 48, 64, 34, kWhite);
-    ui::text(list, fonts.regular, muted_ ? "Muted" : "Sound follows the selected channel",
+    ui::text(list, fonts.semibold, tr("Multiview"), 48, 64, 34, kWhite);
+    ui::text(list, fonts.regular, muted_ ? tr("Muted") : tr("Sound follows the selected channel"),
              kWidth - 48, 64, 22, shared_.theme.text_muted, gfx::Align::right);
     const float gap = 20, width = (kWidth - 96 - gap) / 2;
     const float height = count_ == 2 ? 590 : 408;
@@ -149,28 +150,28 @@ void Multiview::draw(ui::Canvas &canvas) const
         }
         else
         {
-            const char *message = channels_[i].empty()      ? "Choose a channel"
-                                  : previews_[i].finished() ? "Could not open this channel"
-                                                            : "Opening channel...";
+            const char *message = channels_[i].empty()      ? tr("Choose a channel")
+                                  : previews_[i].finished() ? tr("Could not open this channel")
+                                                            : tr("Opening channel...");
             ui::text(list, fonts.regular, message, picture.cx(), picture.cy(), 26,
                      shared_.theme.text_muted, gfx::Align::center);
         }
         const auto &face = face_for(fonts, fonts.semibold, names_[i]);
         const auto name = face.font->fit(readable(face, names_[i]), 23, tile.w - 160);
         ui::text(list, face, name, tile.x + 18, tile.y + tile.h - 22, 23, kWhite);
-        const char *status = previews_[i].audio_failed()             ? "No audio"
-                             : previews_[i].audio_active()           ? "Audio"
-                             : previews_[i].finished() && texture.id ? "Ended"
+        const char *status = previews_[i].audio_failed()             ? tr("No audio")
+                             : previews_[i].audio_active()           ? tr("Audio")
+                             : previews_[i].finished() && texture.id ? tr("Ended")
                                                                      : "";
         ui::text(list, fonts.regular, status, tile.x + tile.w - 18, tile.y + tile.h - 22, 20,
                  tone::accent, gfx::Align::right);
     }
     const ui::Hint hints[] = {
-        {ui::Button::cross, "Full screen"},
-        {ui::Button::square, "Choose channel"},
-        {ui::Button::triangle, count_ == 2 ? "Four channels" : "Two channels"},
-        {ui::Button::right_stick, muted_ ? "Unmute" : "Mute"},
-        {ui::Button::circle, "Close"}};
+        {ui::Button::cross, tr("Full screen")},
+        {ui::Button::square, tr("Choose channel")},
+        {ui::Button::triangle, count_ == 2 ? tr("Four channels") : tr("Two channels")},
+        {ui::Button::right_stick, muted_ ? tr("Unmute") : tr("Mute")},
+        {ui::Button::circle, tr("Close")}};
     ui::HintLayout layout;
     layout.cy = 1028;
     layout.text_size = 21;

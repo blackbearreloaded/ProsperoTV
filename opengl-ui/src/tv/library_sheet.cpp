@@ -2,6 +2,7 @@
 // Copyright (C) 2026 BlackBearReloaded
 // SPDX-License-Identifier: GPL-3.0-or-later
 
+#include "tv/i18n.hpp"
 #include "tv/library_sheet.hpp"
 #include "tv/draw.hpp"
 #include "tv/category_path.hpp"
@@ -29,11 +30,11 @@ void LibrarySheet::sync()
     branches_.clear();
     std::vector<ui::ListItem> rows;
     ui::ListItem all;
-    all.title = folders_ ? "All favorites" : "All provider categories";
+    all.title = folders_ ? tr("All favorites") : tr("All provider categories");
     if (!folders_ && !category_path_.empty())
     {
-        all.title = "Browse all in " + category_path_;
-        all.value = model.category_hidden(category_path_) ? "Hidden" : "";
+        all.title = tr("Browse all in ") + category_path_;
+        all.value = model.category_hidden(category_path_) ? tr("Hidden") : "";
     }
     rows.push_back(std::move(all));
     if (folders_)
@@ -43,9 +44,10 @@ void LibrarySheet::sync()
         {
             ui::ListItem row;
             row.title = folder;
-            row.value =
-                !channel_.empty() && model.in_folder(folder, channel_) ? "Channel included" : "";
-            row.badge = model.folder() == folder ? "In use" : "";
+            row.value = !channel_.empty() && model.in_folder(folder, channel_)
+                            ? tr("Channel included")
+                            : "";
+            row.badge = model.folder() == folder ? tr("In use") : "";
             rows.push_back(std::move(row));
         }
     }
@@ -73,13 +75,13 @@ void LibrarySheet::sync()
             branches_.push_back(info.second);
             ui::ListItem row;
             row.title = category_leaf(child);
-            row.value = model.category_rule(child) == 1   ? "PIN required"
-                        : model.category_rule(child) == 2 ? "Approved for kids"
-                        : model.category_hidden(child)    ? "Hidden"
+            row.value = model.category_rule(child) == 1   ? tr("PIN required")
+                        : model.category_rule(child) == 2 ? tr("Approved for kids")
+                        : model.category_hidden(child)    ? tr("Hidden")
                         : info.second                     ? ""
                                                           : group_digits(info.first);
-            row.badge = info.second                          ? "Subcategories"
-                        : model.provider_category() == child ? "In use"
+            row.badge = info.second                          ? tr("Subcategories")
+                        : model.provider_category() == child ? tr("In use")
                                                              : "";
             rows.push_back(std::move(row));
         }
@@ -115,8 +117,8 @@ void LibrarySheet::named(const char *text, void *context)
     if (text == nullptr || *text == '\0')
         return;
     if (!self.shared_.model.create_folder(text))
-        self.shared_.model.announce(Level::error, "Folder could not be created",
-                                    "Use a new name. Check that storage is available.", 4);
+        self.shared_.model.announce(Level::error, tr("Folder could not be created"),
+                                    tr("Use a new name. Check that storage is available."), 4);
     self.dirty_ = true;
 }
 
@@ -142,7 +144,7 @@ void LibrarySheet::handle(const InputFrame &input, ui::Feedback &feedback)
     if (folders_ && input.is_pressed(Action::north))
     {
         if (model.keyboard_ready())
-            iptv_ime_request_prompt("", "New favorite folder", "Folder name", 32,
+            iptv_ime_request_prompt("", tr("New favorite folder"), tr("Folder name"), 32,
                                     &LibrarySheet::named, this);
         return;
     }
@@ -154,7 +156,7 @@ void LibrarySheet::handle(const InputFrame &input, ui::Feedback &feedback)
     if (!folders_ && input.is_pressed(Action::north) && !value.empty())
     {
         if (!model.parental().enabled())
-            model.announce(Level::warning, "Set a parent PIN in Settings first", "", 3);
+            model.announce(Level::warning, tr("Set a parent PIN in Settings first"), "", 3);
         else if (!model.set_category_rule(value, (model.category_rule(value, false) + 1) % 3))
             feedback.play(audio::Cue::error);
         sync();
@@ -176,14 +178,14 @@ void LibrarySheet::handle(const InputFrame &input, ui::Feedback &feedback)
         {
             if (model.category_hidden(category_parent(value)))
             {
-                model.announce(Level::warning, "Show the parent category first",
+                model.announce(Level::warning, tr("Show the parent category first"),
                                std::string(category_parent(value)), 3);
                 return;
             }
             saved = model.hide_category(value, !model.category_hidden(value));
         }
         if (!saved)
-            model.announce(Level::error, "The change could not be saved", "", 3);
+            model.announce(Level::error, tr("The change could not be saved"), "", 3);
         sync();
     }
     else if (event == ui::Event::activated)
@@ -224,14 +226,15 @@ void LibrarySheet::draw(ui::Canvas &canvas) const
     const auto &fonts = canvas.fonts;
     draw.rounded_rect({0, 0, kWidth, kHeight}, 0, tone::night.with_alpha(0.9f));
     draw_glass(canvas, shared_.theme, {360, 120, 1200, 830}, 28);
-    ui::text(draw, fonts.display, folders_ ? "Favorite folders" : "Provider categories", 400, 190,
-             42, shared_.theme.text);
+    ui::text(draw, fonts.display, folders_ ? tr("Favorite folders") : tr("Provider categories"),
+             400, 190, 42, shared_.theme.text);
     list_.draw(canvas);
     ui::text(
         draw, fonts.regular,
         folders_
-            ? "Cross: Open   Square: Add/remove channel   Triangle: New folder   Circle: Back"
-            : "Cross: Browse   Square: Show/hide   Triangle: Normal / PIN / Kids   Circle: Back",
+            ? tr("Cross: Open   Square: Add/remove channel   Triangle: New folder   Circle: Back")
+            : tr("Cross: Browse   Square: Show/hide   Triangle: Normal / PIN / Kids   Circle: "
+                 "Back"),
         400, 915, 21, shared_.theme.text_muted);
 }
 } // namespace ptv

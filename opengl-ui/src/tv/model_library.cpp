@@ -2,6 +2,7 @@
 // Copyright (C) 2026 BlackBearReloaded
 // SPDX-License-Identifier: GPL-3.0-or-later
 
+#include "tv/i18n.hpp"
 #include "tv/model.hpp"
 #include "tv/category_path.hpp"
 #include "tv/platform.hpp"
@@ -20,7 +21,7 @@ void Model::load_library()
     hide_failed_ = settings.hide_failed;
     if (!library_.open(path("prosperotv-library.sqlite3")))
     {
-        notify(Level::warning, "Library settings could not be opened");
+        notify(Level::warning, tr("Library settings could not be opened"));
         return;
     }
     sources_ = library_.sources();
@@ -39,7 +40,7 @@ void Model::load_library()
         {4, 3, "MAC-code portal", {}, {}, {}, {}, RefreshSchedule::daily}};
     for (SavedSource source : originals)
         if (saved_source(source.id) == nullptr && !library_.save_source(&source))
-            notify(Level::warning, "A source could not be imported");
+            notify(Level::warning, tr("A source could not be imported"));
     sources_ = library_.sources();
     const auto saved = library_.selected_source();
     if (saved != 0 && saved_source(saved) != nullptr && saved_source(saved)->kind <= 5)
@@ -104,8 +105,8 @@ void Model::use_saved_source(std::int64_t id)
 {
     if (refreshing())
     {
-        notify(Level::warning, "An update is running",
-               "Wait for it to finish, then choose a source.");
+        notify(Level::warning, tr("An update is running"),
+               tr("Wait for it to finish, then choose a source."));
         return;
     }
     const auto *source = saved_source(id);
@@ -118,7 +119,7 @@ void Model::use_saved_source(std::int64_t id)
     }
     if (!library_.select_source(id))
     {
-        notify(Level::error, "The source choice could not be saved");
+        notify(Level::error, tr("The source choice could not be saved"));
         return;
     }
     const bool changed = id != selected_source_id_;
@@ -130,12 +131,12 @@ void Model::use_saved_source(std::int64_t id)
     }
     if (id <= 3)
         (void)iptv::SaveActiveSource(path("iptv-active-source-v1.txt"), active_source_);
-    set_source_text(source->name, catalog_loaded_ ? "Showing the saved channel list."
-                                                  : "Downloading the first copy.");
+    set_source_text(source->name, catalog_loaded_ ? tr("Showing the saved channel list.")
+                                                  : tr("Downloading the first copy."));
     if (refresh_needed())
         refresh();
     else
-        set_status("Saved copy", Level::ready);
+        set_status(tr("Saved copy"), Level::ready);
 }
 
 void Model::add_source(iptv::SourceKind kind)
@@ -145,7 +146,7 @@ void Model::add_source(iptv::SourceKind kind)
     if (kind == iptv::SourceKind::BuiltIn || refreshing() || !keyboard_ready_)
         return;
     if (kind == iptv::SourceKind::Custom)
-        iptv_ime_request_prompt("", "Playlist address", "http(s)://host/playlist.m3u",
+        iptv_ime_request_prompt("", tr("Playlist address"), "http(s)://host/playlist.m3u",
                                 IPTV_IME_BUFFER_CHARACTERS, &Model::on_custom_url, this);
     else
         edit_source(kind);
@@ -171,8 +172,9 @@ void Model::edit_saved_source(std::int64_t id)
         return;
     const auto copy = *source;
     if (copy.kind == 1)
-        iptv_ime_request_prompt(copy.url.c_str(), "Playlist address", "http(s)://host/playlist.m3u",
-                                IPTV_IME_BUFFER_CHARACTERS, &Model::on_custom_url, this);
+        iptv_ime_request_prompt(copy.url.c_str(), tr("Playlist address"),
+                                "http(s)://host/playlist.m3u", IPTV_IME_BUFFER_CHARACTERS,
+                                &Model::on_custom_url, this);
     else
         edit_source(static_cast<iptv::SourceKind>(source->kind));
     editing_source_id_ = id;
@@ -190,8 +192,8 @@ void Model::on_local_address(const char *text, void *self)
     if (!text || !local_tv_address(text, &model.local_form_.url))
     {
         model.account_step_ = AccountStep::none;
-        model.notify(Level::error, "That TV server address cannot be used",
-                     "Enter its HTTP or HTTPS address, including its port when needed.");
+        model.notify(Level::error, tr("That TV server address cannot be used"),
+                     tr("Enter its HTTP or HTTPS address, including its port when needed."));
         return;
     }
     if (model.local_form_.kind == 4)
@@ -243,8 +245,8 @@ void Model::commit_local_form()
     if (local_form_.name.empty())
         local_form_.name = local_form_.kind == 4 ? "HDHomeRun" : "Tvheadend";
     if (!valid_source(local_form_))
-        notify(Level::error, "The TV server details could not be saved",
-               "Check the address and account details.");
+        notify(Level::error, tr("The TV server details could not be saved"),
+               tr("Check the address and account details."));
     else
         (void)commit_source(local_form_);
     local_form_ = {};
@@ -275,7 +277,7 @@ bool Model::commit_source(SavedSource source)
         return false;
     if (!library_.save_source(&source))
     {
-        notify(Level::error, "The source could not be saved");
+        notify(Level::error, tr("The source could not be saved"));
         return false;
     }
     sources_ = library_.sources();
@@ -297,8 +299,8 @@ void Model::on_portal_address(const char *text, void *self)
     if (!portal_endpoint(text, &model.portal_form_.url))
     {
         model.account_step_ = AccountStep::none;
-        model.notify(Level::error, "That portal address cannot be used",
-                     "Enter the provider's HTTP or HTTPS portal address.");
+        model.notify(Level::error, tr("That portal address cannot be used"),
+                     tr("Enter the provider's HTTP or HTTPS portal address."));
         return;
     }
     model.account_step_ = AccountStep::portal_mac;
@@ -313,8 +315,8 @@ void Model::on_portal_mac(const char *text, void *self)
     model.account_step_ = AccountStep::none;
     if (!portal_mac(text, &model.portal_form_.mac))
     {
-        model.notify(Level::error, "That MAC code cannot be used",
-                     "Use the six pairs supplied by the provider, such as 00:1A:79:12:34:56.");
+        model.notify(Level::error, tr("That MAC code cannot be used"),
+                     tr("Use the six pairs supplied by the provider, such as 00:1A:79:12:34:56."));
         return;
     }
     SavedSource source;
@@ -384,8 +386,8 @@ bool Model::ask_vod_query()
 {
     if (!keyboard_ready_)
         return false;
-    iptv_ime_request_prompt(view.vod_query.c_str(), "Search on demand",
-                            "Movie, show or episode title", IPTV_IME_BUFFER_CHARACTERS,
+    iptv_ime_request_prompt(view.vod_query.c_str(), tr("Search on demand"),
+                            tr("Movie, show or episode title"), IPTV_IME_BUFFER_CHARACTERS,
                             &Model::on_vod_query, this);
     return true;
 }
@@ -415,7 +417,7 @@ bool Model::check_sleep_timer()
         return false;
     play_requested_ = false;
     play_request_ = {};
-    notify(Level::ready, "Sleep timer finished", "Choose a channel to watch again.");
+    notify(Level::ready, tr("Sleep timer finished"), tr("Choose a channel to watch again."));
     return true;
 }
 

@@ -28,6 +28,7 @@
 #include "platform/ps5/system.hpp"
 #include "tv/app.hpp"
 #include "tv/diag.hpp"
+#include "tv/i18n.hpp"
 #include "tv/remote_input.hpp"
 #include "tv_build_options.h"
 #include "tv_dev.hpp"
@@ -66,6 +67,7 @@
 extern "C" int sceKernelUsleep(std::uint32_t microseconds);
 extern "C" int sceSysmoduleLoadModule(std::uint32_t id);
 extern "C" int sceCommonDialogInitialize(void);
+extern "C" int sceSystemServiceParamGetInt(int parameter, int *value);
 extern "C" int sceUserServiceInitialize(void *);
 extern "C" int sceUserServiceGetInitialUser(std::int32_t *);
 extern "C" int sceUserServiceGetUserName(std::int32_t, char *, std::size_t);
@@ -977,6 +979,7 @@ std::int32_t g_decoder_modules[6] = {};
 void trace_header()
 {
     using ptv::diag::event;
+    event("interface language=%s", ptv::interface_language());
     event("######## ProsperoTV diagnostic log: version %s, title %s, built %s %s ########",
           read_content_version(tv::storage::app_file("sce_sys/param.json")).c_str(), TV_TITLE_ID,
           __DATE__, __TIME__);
@@ -1145,6 +1148,11 @@ int main()
     // be asked for while the process has a single thread: nothing above or in
     // it starts one.
     tv::storage::initialize();
+    int language = 1;
+    const int language_result = sceSystemServiceParamGetInt(1, &language);
+    ptv::set_console_language(language_result == 0 ? language : 1);
+    say("[TV] interface language=%s system=%d query=%d", ptv::interface_language(), language,
+        language_result);
     // Keep UserService alive for the title's lifetime. The menu and player
     // attach their controllers to the same initial user and do not own it.
     const int user_service = sceUserServiceInitialize(nullptr);

@@ -1,6 +1,7 @@
 // ProsperoTV - A virtual list: only the visible movies or episodes are drawn.
 // Copyright (C) 2026 BlackBearReloaded
 // SPDX-License-Identifier: GPL-3.0-or-later
+#include "tv/i18n.hpp"
 #include "tv/vod_screen.hpp"
 #include "tv/category_path.hpp"
 #include "tv/draw.hpp"
@@ -32,7 +33,7 @@ void VodScreen::sync()
     const auto &vod = model.vod();
     rows_.clear();
     if (view.vod_kind < 0)
-        rows_ = {{Kind::movies, "Movies", {}, 0}, {Kind::shows, "TV shows", {}, 0}};
+        rows_ = {{Kind::movies, tr("Movies"), {}, 0}, {Kind::shows, tr("TV shows"), {}, 0}};
     else
     {
         const auto &catalog = vod.catalog();
@@ -63,7 +64,7 @@ void VodScreen::sync()
                 items.push_back({Kind::item, std::string(item.name), {}, i});
         }
         if (!view.vod_all && view.vod_query.empty() && !catalog.empty())
-            rows_.push_back({Kind::all, "Browse all", {}, 0});
+            rows_.push_back({Kind::all, tr("Browse all"), {}, 0});
         std::vector<std::pair<std::string, std::string>> ordered(categories.begin(),
                                                                  categories.end());
         if (view.vod_kind == static_cast<int>(VodKind::episodes))
@@ -140,7 +141,7 @@ void VodScreen::handle(const InputFrame &input, ui::Feedback &feedback)
     {
         const auto category = focused()->category;
         if (!model.parental().enabled())
-            model.announce(Level::warning, "Set a parent PIN in Settings first", "", 3);
+            model.announce(Level::warning, tr("Set a parent PIN in Settings first"), "", 3);
         else if (!model.set_category_rule(category, (model.category_rule(category, false) + 1) % 3))
             feedback.play(audio::Cue::error);
         sync();
@@ -232,18 +233,19 @@ void VodScreen::draw(ui::Canvas &canvas) const
     const auto &theme = shared_.theme;
     const auto &fonts = canvas.fonts;
     auto &draw = canvas.list;
-    const std::string heading = view.vod_kind < 0    ? "On demand"
-                                : view.vod_kind == 0 ? "Movies"
-                                : view.vod_kind == 1 ? "TV shows"
+    const std::string heading = view.vod_kind < 0    ? tr("On demand")
+                                : view.vod_kind == 0 ? tr("Movies")
+                                : view.vod_kind == 1 ? tr("TV shows")
                                                      : view.vod_series_name;
-    ui::text(draw, fonts.semibold, "YOUR PROVIDER'S LIBRARY", kMargin, 162, 18, tone::accent,
+    ui::text(draw, fonts.semibold, tr("YOUR PROVIDER'S LIBRARY"), kMargin, 162, 18, tone::accent,
              gfx::Align::left, 4);
     const auto &face = title_face(fonts, heading);
     ui::text(draw, face, face.font->fit(readable(face, heading), 54, kWidth - 2 * kMargin), kMargin,
              224, 54, theme.text);
-    const std::string location = view.vod_category.empty() ? "All categories" : view.vod_category;
+    const std::string location =
+        view.vod_category.empty() ? tr("All categories") : view.vod_category;
     const std::string breadcrumb =
-        location + (view.vod_query.empty() ? "" : " / Search: " + view.vod_query);
+        location + (view.vod_query.empty() ? "" : tr(" / Search: ") + view.vod_query);
     const auto &breadcrumb_face = face_for(fonts, fonts.regular, breadcrumb);
     ui::text(draw, breadcrumb_face,
              breadcrumb_face.font->fit(readable(breadcrumb_face, breadcrumb), 23, 1100), kMargin,
@@ -255,27 +257,28 @@ void VodScreen::draw(ui::Canvas &canvas) const
         const bool selected = i == view.vod_focus;
         draw.bordered_rect({kMargin, y, 1060, 76}, 14, kWhite.with_alpha(selected ? 0.16f : 0.04f),
                            selected ? 2 : 0, tone::cream);
-        auto label =
-            row.text +
-            (row.kind == Kind::category && model.category_hidden(row.category) ? " (Hidden)" : "");
+        auto label = row.text + (row.kind == Kind::category && model.category_hidden(row.category)
+                                     ? tr(" (Hidden)")
+                                     : "");
         if (row.kind == Kind::category)
         {
             const int rule = model.category_rule(row.category);
             if (rule == 1)
-                label += " (PIN required)";
+                label += tr(" (PIN required)");
             if (rule == 2)
-                label += " (Approved for kids)";
+                label += tr(" (Approved for kids)");
         }
         const auto &font = face_for(fonts, fonts.semibold, label);
         const auto shown = readable(font, label);
-        ui::text(draw, font, font.font->fit(shown.empty() ? "Untitled" : shown, 27, 960),
+        ui::text(draw, font, font.font->fit(shown.empty() ? tr("Untitled") : shown, 27, 960),
                  kMargin + 24, y + 47, 27, theme.text);
         if (row.kind != Kind::item || view.vod_kind == 1)
             ui::text(draw, fonts.regular, ">", kMargin + 1020, y + 47, 27, tone::accent);
     }
     if (rows_.empty())
         ui::text(draw, fonts.regular,
-                 model.vod().busy() || model.vod().requested() ? "Loading…" : "No matching titles",
+                 model.vod().busy() || model.vod().requested() ? tr("Loading…")
+                                                               : tr("No matching titles"),
                  kMargin, 370, 30, theme.text_muted);
     const auto *row = focused();
     if (row && row->kind == Kind::item)
@@ -308,28 +311,29 @@ void VodScreen::draw(ui::Canvas &canvas) const
                       600, 34, theme.text_muted, 3);
     }
     else
-        ui::paragraph(draw, fonts.regular,
-                      "Browse movies or choose a show, then its season and episode. Circle returns "
-                      "to the previous list.",
-                      1200, 365, 28, 570, 42, theme.text_muted, 7);
+        ui::paragraph(
+            draw, fonts.regular,
+            tr("Browse movies or choose a show, then its season and episode. Circle returns "
+               "to the previous list."),
+            1200, 365, 28, 570, 42, theme.text_muted, 7);
     ui::text(draw, fonts.regular,
              fonts.regular.font->fit(model.vod().status(), 22, kWidth - 2 * kMargin), kMargin, 949,
              22, theme.text_muted);
 }
 int VodScreen::hints(ui::Hint *out, int capacity) const
 {
-    const ui::Hint hints[] = {{ui::Button::cross, "Open / Watch"},
-                              {ui::Button::triangle, "Search"},
-                              {ui::Button::options, "Update"},
-                              {ui::Button::circle, "Back"}};
+    const ui::Hint hints[] = {{ui::Button::cross, tr("Open / Watch")},
+                              {ui::Button::triangle, tr("Search")},
+                              {ui::Button::options, tr("Update")},
+                              {ui::Button::circle, tr("Back")}};
     int count = std::min(capacity, 4);
     std::copy_n(hints, count, out);
     if (count < capacity && focused() && focused()->kind == Kind::category &&
         shared_.model.view.vod_kind != static_cast<int>(VodKind::episodes))
     {
-        out[count++] = {ui::Button::square, "Show / Hide"};
+        out[count++] = {ui::Button::square, tr("Show / Hide")};
         if (count < capacity)
-            out[count++] = {ui::Button::touchpad, "Normal / PIN / Kids"};
+            out[count++] = {ui::Button::touchpad, tr("Normal / PIN / Kids")};
     }
     return count;
 }

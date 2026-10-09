@@ -21,13 +21,34 @@ and relevant checks work.
 | Multiview | Two or four simultaneous channels, within measured decoder limits | Implemented; 151 UI sanitizer tests, 31 tooling checks, lint and PS5 build pass; native four-channel 720p playback, focus audio/mute, shrinking and full-screen handoff pass with clean teardown |
 | Parental controls | PIN-protected adult categories and kids-only mode | Implemented; 132 UI sanitizer tests, 73 core tests and PS5 build pass; console case pending |
 | Profiles | Separate sources, favorites and history by signed-in console user | Implemented; isolation/migration sanitizer tests, PS5 build and console startup pass |
-| Interface languages | Follow the console language for menus | Pending |
+| Interface languages | Follow the console language for menus | Implemented for English, Spanish, French, German, Italian, Portuguese and Dutch; 154 UI sanitizer tests, German/French rendered walkthroughs and PS5 build pass; native startup acceptance pending |
 | Backup/restore | Export sources/favorites/settings to USB and restore them safely | Implemented; sanitizer/build checks and console sandbox-drive workflow pass; physical USB untested |
 | Failure reports | Export a useful redacted diagnostic report to USB in a normal build | Implemented; sanitizer/build checks and console sandbox-drive workflow pass; physical USB untested |
 
 Completion also requires host checks, a PS5 build, bounded testing on an idle
 192.168.4.30 or 192.168.4.40, an updated deliverable, and a pull request. Console
 tests retain the workspace lock and sandbox-only test-title protocol.
+
+## Interface languages
+
+At startup the app reads the console's SystemService language and selects its
+menu catalogue. Spanish, French and Portuguese regional variants share their
+translations. English is the fallback for unavailable languages and missing
+entries; a failed system-language query also selects English. The catalogue
+covers navigation, settings, source forms, guide, VOD, multiview, playback
+controls, parental prompts, pairing, USB confirmations and updates. Provider
+names, categories, programme descriptions and release notes retain their own
+text, and language selection does not rewrite saved data.
+
+The 154-test UI sanitizer suite checks every translation, format placeholders,
+all supported language IDs and fallback, baked-font glyph coverage and provider
+name preservation. Host snapshots accept `TV_SYSTEM_LANGUAGE` to exercise the
+same mapping without changing console settings. German and French walkthroughs
+complete without OpenGL errors; reviewed settings, source, guide, About and update
+screens fit their panels. The snapshot target also links the color helper needed
+by HDR previews and subtitles. Guide date headings use a numeric date to avoid
+English weekday/month names. The PS5 build passes; native startup query and
+screen acceptance remain pending.
 
 ## Multiview
 

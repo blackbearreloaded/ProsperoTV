@@ -7,6 +7,7 @@
 #include "host_preview.hpp"
 #include "large_list.hpp"
 #include "tv/app.hpp"
+#include "tv/i18n.hpp"
 #include "tv/draw.hpp"
 #include "tv/diag.hpp"
 #include "tv/remote_input.hpp"
@@ -211,6 +212,54 @@ class AppTest : public ::testing::Test
     hui::ui::Feedback feedback_;
     int cues_ = 0;
 };
+
+TEST_F(AppTest, TranslatedMenusUseBakedGlyphsAndPreserveProviderNames)
+{
+    struct ResetLanguage
+    {
+        ~ResetLanguage()
+        {
+            ptv::set_console_language(1);
+        }
+    } reset;
+    struct Entry
+    {
+        const char *english;
+        std::array<const char *, 6> texts;
+    };
+    const Entry entries[] = {
+#include "tv/translations.inc"
+    };
+    use_playlist("#EXTM3U\n#EXTINF:-1 group-title=\"News\",Settings\n"
+                 "https://streams.example.invalid/one.m3u8\n");
+    const auto &font = *font_set().fonts.regular.font;
+    const std::string provider_name(model_->channel(0).name);
+    const auto sources = model_->saved_sources();
+    for (const int language : {3, 2, 4, 5, 7, 6})
+    {
+        ptv::set_console_language(language);
+        make_app();
+        EXPECT_EQ(app_->settings_row(), ptv::tr("Reduce motion"));
+        EXPECT_EQ(model_->channel(0).name, provider_name);
+        EXPECT_EQ(model_->channel(0).group_title, "News");
+        for (const auto &source : sources)
+        {
+            ASSERT_NE(model_->saved_source(source.id), nullptr);
+            EXPECT_EQ(model_->saved_source(source.id)->name, source.name);
+        }
+        frame({});
+        EXPECT_FALSE(frame_.scene.empty());
+        for (const auto &entry : entries)
+        {
+            const std::string_view text(ptv::tr(entry.english));
+            for (std::size_t at = 0; at < text.size();)
+            {
+                const auto codepoint = hui::gfx::next_codepoint(text, &at);
+                EXPECT_TRUE(codepoint <= 0x20 || font.has_glyph(codepoint)) << text;
+            }
+        }
+    }
+}
 
 TEST(MultiviewAudio, ReservesThePortBeforeItBecomesAudible)
 {

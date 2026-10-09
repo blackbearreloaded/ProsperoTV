@@ -1,6 +1,7 @@
 // ProsperoTV - Channel controls and text over the foreground video.
 // Copyright (C) 2026 BlackBearReloaded
 // SPDX-License-Identifier: GPL-3.0-or-later
+#include "tv/i18n.hpp"
 #include "tv/playback_osd.hpp"
 #include "tv/draw.hpp"
 #include "tv/platform.hpp"
@@ -154,16 +155,16 @@ void PlaybackOsd::update_guide()
 {
     const auto time = static_cast<std::int64_t>(platform::unix_time());
     guide_minute_ = time / 60;
-    now_ = live_ ? "Programme guide unavailable" : "";
+    now_ = live_ ? tr("Programme guide unavailable") : "";
     next_.clear();
     if (live_)
         if (const auto channel = model_.find(current_id_))
         {
             title_ = display_name(*channel);
             if (const auto programme = model_.guide().now(channel->id, time))
-                now_ = "Now  " + programme_time(programme->start) + "  " + programme->title;
+                now_ = tr("Now  ") + programme_time(programme->start) + "  " + programme->title;
             if (const auto programme = model_.guide().next(channel->id, time))
-                next_ = "Next  " + programme_time(programme->start) + "  " + programme->title;
+                next_ = tr("Next  ") + programme_time(programme->start) + "  " + programme->title;
         }
     dirty_ = true;
 }
@@ -380,11 +381,11 @@ void PlaybackOsd::paint()
     if (audio_menu_ && subtitle_tab_)
     {
         panel_.reset(80, 100, 820, 860);
-        line("Subtitles", 28, 54, 32, 760);
-        line(subtitles_.tracks.empty() ? "No supported subtitles advertised"
+        line(tr("Subtitles"), 28, 54, 32, 760);
+        line(subtitles_.tracks.empty() ? tr("No supported subtitles advertised")
              : subtitles_.error != iptv::SubtitleError::none
-                 ? "Subtitles unavailable. Choose another track."
-                 : "Choose a language or turn subtitles off",
+                 ? tr("Subtitles unavailable. Choose another track.")
+                 : tr("Choose a language or turn subtitles off"),
              28, 88, 22, 760);
         const unsigned begin = (subtitle_focus_ / 9) * 9;
         for (unsigned row = 0; row < 9 && begin + row <= subtitles_.tracks.size(); ++row)
@@ -393,37 +394,38 @@ void PlaybackOsd::paint()
             if (index == subtitle_focus_)
                 for (unsigned y = top; y < top + 66; ++y)
                     std::fill_n(panel_.pixels.begin() + y * panel_.width + 16, 788, 66);
-            std::string label = "Off";
+            std::string label = tr("Off");
             unsigned id = 0;
             if (index)
             {
                 const auto &track = subtitles_.tracks[index - 1];
                 id = track.id;
-                label = "Track " + std::to_string(index);
+                label = tr("Track ") + std::to_string(index);
                 if (!track.language.empty())
                     label += " (" + track.language + ")";
                 if (track.forced)
-                    label += "  Forced";
+                    label += tr("  Forced");
                 if (track.hearing_impaired)
-                    label += "  Hearing impaired";
+                    label += tr("  Hearing impaired");
                 if (!track.title.empty())
                     label += "  " + track.title;
             }
             line((id == subtitles_.selected ? "> " : "") + label, 28, top + 43, 28, 760);
         }
-        line("L1/R1 Audio / Subtitles", 28, 764, 22, 760);
-        line("Up/Down Browse · Left/Right Page", 28, 800, 22, 760);
-        line("Cross Select · Circle Close", 28, 833, 22, 760);
+        line(tr("L1/R1 Audio / Subtitles"), 28, 764, 22, 760);
+        line(tr("Up/Down Browse · Left/Right Page"), 28, 800, 22, 760);
+        line(tr("Cross Select · Circle Close"), 28, 833, 22, 760);
     }
     else if (audio_menu_)
     {
         panel_.reset(80, 100, 820, 860);
-        line("Audio", 28, 54, 32, 760);
-        line(!audio_.count                            ? "No supported audio tracks advertised"
-             : audio_.pending                         ? "Changing audio..."
-             : audio_.result < 0                      ? "Could not switch. Choose another track."
-             : audio_.selected_pid && audio_.disabled ? "Audio unavailable. Choose another track."
-                                                      : "Choose a language or turn audio off",
+        line(tr("Audio"), 28, 54, 32, 760);
+        line(!audio_.count       ? tr("No supported audio tracks advertised")
+             : audio_.pending    ? tr("Changing audio...")
+             : audio_.result < 0 ? tr("Could not switch. Choose another track.")
+             : audio_.selected_pid && audio_.disabled
+                 ? tr("Audio unavailable. Choose another track.")
+                 : tr("Choose a language or turn audio off"),
              28, 88, 22, 760);
         const unsigned begin = (audio_focus_ / 9) * 9;
         for (unsigned row = 0; row < 9 && begin + row <= audio_.count; ++row)
@@ -432,7 +434,7 @@ void PlaybackOsd::paint()
             if (index == audio_focus_)
                 for (unsigned y = top; y < top + 66; ++y)
                     std::fill_n(panel_.pixels.begin() + y * panel_.width + 16, 788, 66);
-            std::string label = "Off";
+            std::string label = tr("Off");
             std::uint32_t pid = 0;
             if (index)
             {
@@ -441,7 +443,7 @@ void PlaybackOsd::paint()
                 const auto *title = audio_.titles[index - 1];
                 const auto *language = audio_.languages[index - 1];
                 label = title[0] ? std::string(title, strnlen(title, 128))
-                                 : "Track " + std::to_string(index);
+                                 : tr("Track ") + std::to_string(index);
                 if (language[0])
                     label += " (" + std::string(language, strnlen(language, 32)) + ")";
                 else if (track.language[0])
@@ -453,20 +455,20 @@ void PlaybackOsd::paint()
                                         : "AAC";
                 label += std::string("  ") + codec;
                 if (track.audio_type == 2)
-                    label += "  Hearing impaired";
+                    label += tr("  Hearing impaired");
                 if (track.audio_type == 3)
-                    label += "  Audio description";
+                    label += tr("  Audio description");
             }
             line((pid == audio_.selected_pid ? "> " : "") + label, 28, top + 43, 28, 760);
         }
-        line("L1/R1 Audio / Subtitles", 28, 764, 22, 760);
-        line("Up/Down Browse · Left/Right Page", 28, 800, 22, 760);
-        line("Cross Select · Circle Close", 28, 833, 22, 760);
+        line(tr("L1/R1 Audio / Subtitles"), 28, 764, 22, 760);
+        line(tr("Up/Down Browse · Left/Right Page"), 28, 800, 22, 760);
+        line(tr("Cross Select · Circle Close"), 28, 833, 22, 760);
     }
     else if (list_)
     {
         panel_.reset(80, 100, 760, 860);
-        line("Channels", 28, 54, 32, 700);
+        line(tr("Channels"), 28, 54, 32, 700);
         line(std::to_string(focus_ + 1) + " / " + std::to_string(channels_.size()), 28, 88, 22,
              700);
         const unsigned begin = (focus_ / 9) * 9;
@@ -482,8 +484,8 @@ void PlaybackOsd::paint()
                      "  " + display_name(channel),
                  28, top + 43, 28, 700);
         }
-        line("Up/Down Browse · Left/Right Page", 28, 800, 22, 700);
-        line("Cross Watch · Circle Close", 28, 833, 22, 700);
+        line(tr("Up/Down Browse · Left/Right Page"), 28, 800, 22, 700);
+        line(tr("Cross Watch · Circle Close"), 28, 833, 22, 700);
     }
     else
     {
@@ -496,21 +498,23 @@ void PlaybackOsd::paint()
             const auto seconds = history_.last_us > history_.position_us
                                      ? (history_.last_us - history_.position_us) / 1000000
                                      : 0;
-            std::string position = history_.paused ? "Paused" : seconds <= 3 ? "Live" : "Replay";
+            std::string position = history_.paused ? tr("Paused")
+                                   : seconds <= 3  ? tr("Live")
+                                                   : tr("Replay");
             if (seconds > 3)
                 position += "  " + std::to_string(seconds / 60) + ":" +
                             (seconds % 60 < 10 ? "0" : "") + std::to_string(seconds % 60) +
-                            " behind live";
+                            tr(" behind live");
             if (history_.expired)
-                position += "  Earlier video is no longer retained";
+                position += tr("  Earlier video is no longer retained");
             line(position, 30, 187, 24, 1700);
-            line("L2 Pause / resume  |  Left / Right 30 seconds  |  R2 Back to live", 30, 231, 24,
-                 1700);
+            line(tr("L2 Pause / resume  |  Left / Right 30 seconds  |  R2 Back to live"), 30, 231,
+                 24, 1700);
         }
-        line(live_
-                 ? "Up/Down Channel · Square Last · Cross List · Options Tracks · Triangle Info · "
-                   "Circle Back"
-                 : "Options Tracks · Triangle Info · Circle Back",
+        line(live_ ? tr("Up/Down Channel · Square Last · Cross List · Options Tracks · Triangle "
+                        "Info · "
+                        "Circle Back")
+                   : tr("Options Tracks · Triangle Info · Circle Back"),
              30, history_.available ? 281 : 204, 24, 1700);
     }
     dirty_ = false;

@@ -53,7 +53,7 @@ includes="-I$root/src -I$root/host -I$kit/src -I$kit/third_party -I$tv/include -
         [[ -n $relative ]] || continue
         edge "$kit/src/$relative" ""
     done < "$root/tools/kit-sources.txt"
-    for name in iptv_catalog iptv_http iptv_source_state iptv_store iptv_user_state iptv_xtream; do
+    for name in iptv_catalog iptv_color iptv_http iptv_source_state iptv_store iptv_user_state iptv_xtream; do
         edge "$tv/src/$name.cpp" ""
     done
     echo "build $build/tv_snapshots: link ${objects[*]}"

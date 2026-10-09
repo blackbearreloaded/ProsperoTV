@@ -1,6 +1,7 @@
 // ProsperoTV - Channel and time grid.
 // Copyright (C) 2026 BlackBearReloaded
 // SPDX-License-Identifier: GPL-3.0-or-later
+#include "tv/i18n.hpp"
 #include "tv/guide_sheet.hpp"
 #include "tv/draw.hpp"
 #include "tv/platform.hpp"
@@ -128,14 +129,14 @@ void GuideSheet::draw(ui::Canvas &canvas) const
     const auto &fonts = canvas.fonts;
     const auto &theme = shared_.theme;
     list.rounded_rect({0, 0, kWidth, kHeight}, 0, tone::night.with_alpha(0.98f));
-    ui::text(list, fonts.display, "Programme guide", kMargin, 155, 48, theme.text);
+    ui::text(list, fonts.display, tr("Programme guide"), kMargin, 155, 48, theme.text);
     ui::text(list, fonts.semibold, programme_time(time_, true), kWidth - kMargin, 155, 27,
              tone::accent, gfx::Align::right);
     ui::text(list, fonts.regular, model.guide_status(), kMargin, 205, 22, theme.text_muted);
     if (!model.query().empty())
         ui::text(list, fonts.regular,
-                 "Search: " + model.query() + " (channels or programmes on now)", kMargin, 245, 22,
-                 tone::accent);
+                 tr("Search: ") + model.query() + tr(" (channels or programmes on now)"), kMargin,
+                 245, 22, tone::accent);
     for (int tick = 0; tick <= 4; ++tick)
     {
         const float x = kTimeX + kTimeWidth * static_cast<float>(tick) / 4;
@@ -182,7 +183,7 @@ void GuideSheet::draw(ui::Canvas &canvas) const
             }
         }
         if (!any)
-            ui::text(list, fonts.regular, "No programme information", kTimeX + 14, y + 40, 21,
+            ui::text(list, fonts.regular, tr("No programme information"), kTimeX + 14, y + 40, 21,
                      theme.text_muted);
     }
     const auto now = static_cast<std::int64_t>(platform::unix_time());
@@ -199,10 +200,10 @@ void GuideSheet::draw(ui::Canvas &canvas) const
         const auto channel = model.channel(model.visible(row_));
         const auto available = !catchup_url(channel, *p, now).empty();
         const std::string status = programme_time(p->start) + " - " + programme_time(p->end) +
-                                   (available                         ? "   Catch-up available"
-                                    : p->start <= now && now < p->end ? "   On now"
-                                    : p->start > now                  ? "   Upcoming"
-                                                                      : "   Archive unavailable");
+                                   (available                         ? tr("   Catch-up available")
+                                    : p->start <= now && now < p->end ? tr("   On now")
+                                    : p->start > now                  ? tr("   Upcoming")
+                                                     : tr("   Archive unavailable"));
         ui::text(list, fonts.regular, status, kMargin, 890, 22,
                  available ? tone::accent : theme.text_muted);
         const auto &body = face_for(fonts, fonts.regular, p->description);
@@ -210,12 +211,14 @@ void GuideSheet::draw(ui::Canvas &canvas) const
                  21, theme.text_muted);
     }
     else if (model.visible_count() == 0)
-        ui::text(list, fonts.regular, "No channels match the current category, folder or search.",
-                 kMargin, 400, 26, theme.text_muted);
-    ui::text(list, fonts.regular,
-             "Cross: Watch   D-pad: Channel / programme   L1/R1: Day   L2/R2: Page   Square: Now   "
-             "Triangle: Search   Circle: Back",
-             kMargin, 990, 21, theme.text_muted);
-    ui::text(list, fonts.regular, "Options: Update guide", kMargin, 1030, 21, theme.text_muted);
+        ui::text(list, fonts.regular,
+                 tr("No channels match the current category, folder or search."), kMargin, 400, 26,
+                 theme.text_muted);
+    ui::text(
+        list, fonts.regular,
+        tr("Cross: Watch   D-pad: Channel / programme   L1/R1: Day   L2/R2: Page   Square: Now   "
+           "Triangle: Search   Circle: Back"),
+        kMargin, 990, 21, theme.text_muted);
+    ui::text(list, fonts.regular, tr("Options: Update guide"), kMargin, 1030, 21, theme.text_muted);
 }
 } // namespace ptv

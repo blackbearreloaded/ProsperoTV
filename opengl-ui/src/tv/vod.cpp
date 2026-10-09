@@ -1,6 +1,7 @@
 // ProsperoTV - Xtream on-demand catalogues and per-series episode lists.
 // Copyright (C) 2026 BlackBearReloaded
 // SPDX-License-Identifier: GPL-3.0-or-later
+#include "tv/i18n.hpp"
 #include "tv/vod.hpp"
 #include "tv/platform.hpp"
 #include "tv/catalog_index.hpp"
@@ -210,8 +211,8 @@ bool load_vod(const iptv::XtreamCredentials &account, VodKind kind, std::string_
     if (!ok)
     {
         catalog->Clear();
-        *error = parser.full ? "This on-demand list is too large to load."
-                             : "The provider's on-demand list could not be downloaded.";
+        *error = parser.full ? tr("This on-demand list is too large to load.")
+                             : tr("The provider's on-demand list could not be downloaded.");
     }
     return ok;
 }
@@ -235,8 +236,8 @@ void VodLibrary::configure(iptv::XtreamCredentials account, std::string cache,
     east_asian_ = korean_ = false;
     loaded_ = false;
     status_ = available()
-                  ? "Choose Movies or TV shows."
-                  : "Choose an Xtream account in Sources to browse its movies and TV shows.";
+                  ? tr("Choose Movies or TV shows.")
+                  : tr("Choose an Xtream account in Sources to browse its movies and TV shows.");
     ++revision_;
 }
 std::string VodLibrary::file() const
@@ -279,9 +280,10 @@ void VodLibrary::select(VodKind kind, std::string series, bool force)
     }
     if (force || !loaded_ || refresh_due(schedule_, saved_, platform::unix_time()))
         requested_ = true;
-    status_ = requested_ ? (loaded_ ? "Updating the saved list…" : "Loading the provider's list…")
-              : catalog_.empty() ? "The provider has no titles in this list."
-                                 : "Saved on-demand list";
+    status_ = requested_
+                  ? (loaded_ ? tr("Updating the saved list…") : tr("Loading the provider's list…"))
+              : catalog_.empty() ? tr("The provider has no titles in this list.")
+                                 : tr("Saved on-demand list");
 }
 void VodLibrary::poll(bool can_download)
 {
@@ -295,12 +297,12 @@ void VodLibrary::poll(bool can_download)
             loaded_ = true;
             note_scripts();
             saved_ = platform::unix_time();
-            status_ = catalog_.empty() ? "The provider has no titles in this list."
-                      : saved_ok_      ? "On-demand list up to date"
-                                       : "List loaded, but it could not be saved.";
+            status_ = catalog_.empty() ? tr("The provider has no titles in this list.")
+                      : saved_ok_      ? tr("On-demand list up to date")
+                                       : tr("List loaded, but it could not be saved.");
         }
         else
-            status_ = error_ + (loaded_ ? " Showing the saved titles." : "");
+            status_ = error_ + (loaded_ ? tr(" Showing the saved titles.") : "");
         pending_.Clear();
         ++revision_;
     }
@@ -313,7 +315,7 @@ void VodLibrary::poll(bool can_download)
     thread_ = platform::thread_start(work, this, 2u * 1024u * 1024u, "ptv-vod");
     if (!thread_)
     {
-        status_ = "The on-demand download could not start.";
+        status_ = tr("The on-demand download could not start.");
         ++revision_;
     }
 }
