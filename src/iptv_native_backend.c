@@ -1960,12 +1960,20 @@ static int playback_queues_ready(const backend_state_t *state)
 // playback stops to refill its buffer and one when it goes on, with what the
 // queues held, so a report shows whether the picture waited for video, for
 // sound, or for the network.
-__attribute__((weak)) int tv_diag_enabled(void);
-__attribute__((weak)) void tv_diag_line(const char *line);
+// Defined here as doing nothing; the interface build's own definitions
+// (ps5/src/tv_diag.cpp) take their place when it is linked.
+__attribute__((weak)) int tv_diag_enabled(void)
+{
+    return 0;
+}
+__attribute__((weak)) void tv_diag_line(const char *line)
+{
+    (void)line;
+}
 
 static void trace_playback_buffer(const backend_state_t *state, const char *event)
 {
-    if (!tv_diag_enabled || !tv_diag_line || !tv_diag_enabled())
+    if (!tv_diag_enabled())
         return;
     const uint32_t video_read = atomic_load(&state->video_queue_read);
     const uint32_t video_write = atomic_load(&state->video_queue_write);

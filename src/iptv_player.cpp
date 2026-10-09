@@ -113,10 +113,15 @@ __asm__(".weak ZSTD_trace_decompress_begin\n"
 // The interface build's network layer lets the playing thread be asked, while
 // it waits for a connection or for bytes, whether the viewer has left. Absent
 // (a null address) where the system's own HTTP library is used.
-extern "C" __attribute__((weak)) void tv_http_set_interrupt(bool (*asked)(void *), void *context);
-// The interface build's diagnostic log (absent elsewhere).
-extern "C" __attribute__((weak)) int tv_diag_enabled(void);
-extern "C" __attribute__((weak)) void tv_diag_line(const char *line);
+// Here it does nothing; the interface build's network layer defines the real one.
+extern "C" __attribute__((weak)) void tv_http_set_interrupt(bool (*asked)(void *), void *context)
+{
+    (void)asked;
+    (void)context;
+}
+// The interface build's diagnostic log (iptv_native_backend.c holds the stand-ins).
+extern "C" int tv_diag_enabled(void);
+extern "C" void tv_diag_line(const char *line);
 
 extern "C" int sceKernelSendNotificationRequest(std::uint32_t device, void *request,
                                                 std::size_t size, int blocking);
@@ -2345,7 +2350,7 @@ int RunContainer(const char *url, StreamRunner *runner, const iptv::http::Reques
         // and names a read that waited more than a second.
         static void trace(const char *what, std::int64_t at, std::uint64_t started)
         {
-            if (!tv_diag_enabled || !tv_diag_line || !tv_diag_enabled())
+            if (!tv_diag_enabled())
                 return;
             char line[160];
             std::snprintf(line, sizeof(line), "[player] file %s at %lld: %llu ms", what,
@@ -2402,7 +2407,7 @@ int RunContainer(const char *url, StreamRunner *runner, const iptv::http::Reques
                 window_started_usec = started;
             else if (ended - window_started_usec >= 10000000u)
             {
-                if (tv_diag_enabled && tv_diag_line && tv_diag_enabled())
+                if (tv_diag_enabled())
                 {
                     char line[160];
                     std::snprintf(
@@ -2485,15 +2490,13 @@ struct NetworkWaitsFollowControls
 {
     explicit NetworkWaitsFollowControls(StreamRunner *runner)
     {
-        if (tv_http_set_interrupt)
-            tv_http_set_interrupt([](void *context)
-                                  { return static_cast<StreamRunner *>(context)->StopRequested(); },
-                                  runner);
+        tv_http_set_interrupt([](void *context)
+                              { return static_cast<StreamRunner *>(context)->StopRequested(); },
+                              runner);
     }
     ~NetworkWaitsFollowControls()
     {
-        if (tv_http_set_interrupt)
-            tv_http_set_interrupt(nullptr, nullptr);
+        tv_http_set_interrupt(nullptr, nullptr);
     }
     NetworkWaitsFollowControls(const NetworkWaitsFollowControls &) = delete;
     NetworkWaitsFollowControls &operator=(const NetworkWaitsFollowControls &) = delete;
