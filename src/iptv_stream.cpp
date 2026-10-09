@@ -2548,15 +2548,34 @@ uint64_t iptv_stream_replay_start(const iptv_stream_session_t *session)
 
 int iptv_stream_reposition(iptv_stream_session_t *session, uint64_t pts_us)
 {
-    if (pts_us == IPTV_STREAM_PTS_UNKNOWN || pts_us < iptv_stream_replay_start(session))
+    return iptv_stream_reposition_from(session, session, pts_us);
+}
+
+int iptv_stream_reposition_from(iptv_stream_session_t *session, const iptv_stream_session_t *source,
+                                uint64_t pts_us)
+{
+    if (!valid_session(session) || !get_impl(session) || !valid_session(source) || !source->_impl ||
+        pts_us == IPTV_STREAM_PTS_UNKNOWN || pts_us < iptv_stream_replay_start(source))
         return IPTV_STREAM_INVALID_ARGUMENT;
-    const int result = reset_transport(session);
-    if (result != IPTV_STREAM_OK)
-        return result;
     auto *impl = get_impl(session);
-    if (impl->video_configurations)
+    const auto *history = static_cast<const impl_t *>(source->_impl);
+    if (session->telemetry.state != IPTV_STREAM_STATE_BUFFERING &&
+        session->telemetry.state != IPTV_STREAM_STATE_READY &&
+        session->telemetry.state != IPTV_STREAM_STATE_PLAYING)
+        return IPTV_STREAM_INVALID_STATE;
+    if (source != session)
     {
-        const auto *chosen = impl->video_configurations.get();
+        if (!history->video_configurations)
+            return IPTV_STREAM_INVALID_STATE;
+        if (pts_us < history->video_configurations->pts_us || pts_us > history->video_high_water ||
+            (impl->pmt_seen && !same_video_program(&impl->format, &history->format)))
+            return IPTV_STREAM_INVALID_ARGUMENT;
+    }
+    video_parameters_t restored;
+    size_t restored_bytes = 0;
+    if (history->video_configurations)
+    {
+        const auto *chosen = history->video_configurations.get();
         for (const auto *configuration = chosen; configuration;
              configuration = configuration->next.get())
         {
@@ -2564,7 +2583,6 @@ int iptv_stream_reposition(iptv_stream_session_t *session, uint64_t pts_us)
                 break;
             chosen = configuration;
         }
-        video_parameters_t restored;
         size_t at = 0;
         for (size_t i = 0; i < kVideoParameterSlots; ++i)
         {
@@ -2574,13 +2592,21 @@ int iptv_stream_reposition(iptv_stream_session_t *session, uint64_t pts_us)
                 continue;
             parameter.data.reset(new (std::nothrow) uint8_t[parameter.size]);
             if (!parameter.data)
-                return fail(session, IPTV_STREAM_BUFFER_LIMIT,
-                            "video replay configuration allocation failed");
+                return IPTV_STREAM_BUFFER_LIMIT;
             std::memcpy(parameter.data.get(), chosen->data.get() + at, parameter.size);
             at += parameter.size;
         }
+        restored_bytes = at;
+    }
+    // Prepare the complete copy before discarding queued playback. The source
+    // can expire or close after this call without invalidating the decoder.
+    const int result = reset_transport(session);
+    if (result != IPTV_STREAM_OK)
+        return result;
+    if (restored_bytes)
+    {
         impl->video_parameters = std::move(restored);
-        impl->video_parameter_bytes = chosen->bytes - sizeof(video_configuration_t);
+        impl->video_parameter_bytes = restored_bytes;
     }
     impl->video_replaying = true;
     // History converts ticks to whole microseconds. Round back to the nearest

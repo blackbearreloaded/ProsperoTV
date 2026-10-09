@@ -193,6 +193,12 @@ int iptv_stream_discontinuity(iptv_stream_session_t *session);
  * The timestamp comes from retained history, including its wrap epoch.
  * Run on the stream owner's thread after interrupting blocked native submits. */
 int iptv_stream_reposition(iptv_stream_session_t *session, uint64_t pts_us);
+/* Restore a position using configurations retained by an independent download
+ * parser. Both sessions must be exclusively owned for the call, on the same
+ * provider timeline. Reject missing/expired/not-yet-scanned configurations
+ * before resetting playback. The source is neither mutated nor retained. */
+int iptv_stream_reposition_from(iptv_stream_session_t *session, const iptv_stream_session_t *source,
+                                uint64_t pts_us);
 /* Earliest replay timestamp after bounded configuration history expires.
  * Owner-thread only; older repositions are rejected without resetting playback. */
 uint64_t iptv_stream_replay_start(const iptv_stream_session_t *session);

@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: GPL-3.0-or-later */
 
 #include "iptv_stream.h"
+#include "iptv_timeshift.h"
 
 #include <gtest/gtest.h>
 
@@ -969,6 +970,90 @@ int FixturePpsVersion(const std::vector<std::uint8_t> &picture)
     const auto pps = std::find(picture.begin(), picture.end(), 0x68);
     EXPECT_GE(std::distance(pps, picture.end()), 6);
     return std::distance(pps, picture.end()) >= 6 ? pps[5] : -1;
+}
+
+TEST_F(AudioSelectionTest, DownloadConfigurationSurvivesUnreadTransportExpiry)
+{
+    const auto close = [](iptv_stream_session_t *p)
+    {
+        (void)iptv_stream_cleanup(p);
+        delete p;
+    };
+    std::unique_ptr<iptv_stream_session_t, decltype(close)> download(new iptv_stream_session_t{});
+    iptv_stream_init(download.get());
+    ASSERT_EQ(iptv_stream_open(download.get(), nullptr, nullptr), IPTV_STREAM_OK);
+    ASSERT_EQ(iptv_stream_start(download.get()), IPTV_STREAM_OK);
+    iptv::Timeshift history(188 * 16);
+    const auto first = StreamBytes(0x0f, ConfigurationPacket(0, 1, 1));
+    ASSERT_EQ(iptv_stream_push(&session, first.data(), first.size()), IPTV_STREAM_OK);
+    ASSERT_EQ(iptv_stream_scan(download.get(), first.data(), first.size(), 0), IPTV_STREAM_OK);
+    ASSERT_TRUE(history.append(first.data(), first.size()));
+    const auto unread = history.range().end;
+    const auto changed = ConfigurationPacket(1, 2, 2);
+    ASSERT_EQ(iptv_stream_scan(download.get(), changed.data(), changed.size(), 0), IPTV_STREAM_OK);
+    ASSERT_TRUE(history.append(changed.data(), changed.size()));
+    // Download runs while playback remains paused on configuration 1. Headers
+    // for configuration 2 are overwritten; only headerless pictures survive.
+    for (unsigned second = 3; second <= 30; ++second)
+    {
+        const auto next = StampedPacket(H264Packet((second - 1) & 15, false), second * 90000);
+        ASSERT_EQ(iptv_stream_scan(download.get(), next.data(), next.size(), 0), IPTV_STREAM_OK);
+        ASSERT_TRUE(history.append(next.data(), next.size()));
+    }
+    ASSERT_GT(history.range().begin, unread + changed.size());
+    ASSERT_EQ(fake.videos, 1u);
+    ASSERT_EQ(FixturePpsVersion(fake.video_packets.back()), 0x81);
+    const auto resume = history.seek(history.range().first_pts_us);
+    ASSERT_TRUE(resume);
+    ASSERT_EQ(iptv_stream_reposition_from(&session, download.get(), resume->pts_us),
+              IPTV_STREAM_OK);
+    download.reset(); // Playback owns its restored parameters, not source pointers.
+    std::array<std::uint8_t, 188 * 16> bytes{};
+    const auto retained = history.read(resume->offset, bytes.data(), bytes.size());
+    ASSERT_GT(retained.bytes, 0u);
+    ASSERT_EQ(iptv_stream_push(&session, bytes.data(), retained.bytes), IPTV_STREAM_OK);
+    ASSERT_GT(fake.videos, 1u);
+    EXPECT_EQ(FixturePpsVersion(fake.video_packets[1]), 0x82);
+    EXPECT_EQ(fake.discontinuities, 1u);
+}
+
+TEST_F(AudioSelectionTest, DownloadReplayRejectsUnavailableHistoryBeforeResettingPlayback)
+{
+    const auto first = StreamBytes(0x0f, ConfigurationPacket(0, 1, 1));
+    ASSERT_EQ(iptv_stream_push(&session, first.data(), first.size()), IPTV_STREAM_OK);
+    const auto close = [](iptv_stream_session_t *p)
+    {
+        (void)iptv_stream_cleanup(p);
+        delete p;
+    };
+    std::unique_ptr<iptv_stream_session_t, decltype(close)> download(new iptv_stream_session_t{});
+    iptv_stream_init(download.get());
+    ASSERT_EQ(iptv_stream_open(download.get(), nullptr, nullptr), IPTV_STREAM_OK);
+    ASSERT_EQ(iptv_stream_start(download.get()), IPTV_STREAM_OK);
+    EXPECT_EQ(iptv_stream_reposition_from(&session, nullptr, 1000000),
+              IPTV_STREAM_INVALID_ARGUMENT);
+    EXPECT_EQ(iptv_stream_reposition_from(&session, download.get(), 1000000),
+              IPTV_STREAM_INVALID_STATE);
+    ASSERT_EQ(iptv_stream_scan(download.get(), first.data(), first.size(), 0), IPTV_STREAM_OK);
+    for (const auto pts : std::array<std::uint64_t, 4>{0, 999999, 1000001, UINT64_MAX})
+        EXPECT_EQ(iptv_stream_reposition_from(&session, download.get(), pts),
+                  IPTV_STREAM_INVALID_ARGUMENT);
+    for (unsigned i = 1; i < 400; ++i)
+    {
+        const auto next = ConfigurationPacket(i, i, i + 1);
+        ASSERT_EQ(iptv_stream_scan(download.get(), next.data(), next.size(), 0), IPTV_STREAM_OK);
+    }
+    const auto floor = iptv_stream_replay_start(download.get());
+    ASSERT_GT(floor, 1000000u);
+    EXPECT_EQ(iptv_stream_reposition_from(&session, download.get(), floor - 1),
+              IPTV_STREAM_INVALID_ARGUMENT);
+    EXPECT_EQ(fake.discontinuities, 0u);
+    EXPECT_EQ(session.telemetry.last_video_pts_us, 1000000u);
+    ASSERT_EQ(iptv_stream_reposition_from(&session, download.get(), floor), IPTV_STREAM_OK);
+    ASSERT_EQ(iptv_stream_discontinuity(download.get()), IPTV_STREAM_OK);
+    EXPECT_EQ(iptv_stream_reposition_from(&session, download.get(), floor),
+              IPTV_STREAM_INVALID_STATE);
+    EXPECT_EQ(fake.discontinuities, 1u);
 }
 
 TEST_F(AudioSelectionTest, RepeatedSeeksRestoreHistoricalParameterIdsInBothDirections)

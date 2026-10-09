@@ -250,8 +250,11 @@ void decode_picture(AVCodecID codec_id, const std::vector<std::uint8_t> &bytes,
 
 TEST(Media, SeekRestoresConfigurationForFreshH264AndHevcDecoders)
 {
-    for (const bool hevc : {false, true})
+    for (const auto mode : {0, 1, 2, 3})
     {
+        const bool independent_download = mode >= 2;
+        const bool hevc = mode % 2;
+        SCOPED_TRACE(independent_download ? "download parser" : "playback parser");
         SCOPED_TRACE(hevc ? "HEVC" : "H264");
         Memory memory(hevc ? "hevc.mp4" : "h264-aac.mp4");
         std::string error;
@@ -288,6 +291,14 @@ TEST(Media, SeekRestoresConfigurationForFreshH264AndHevcDecoders)
         iptv_stream_init(session.get());
         ASSERT_EQ(iptv_stream_open(session.get(), nullptr, &backend), IPTV_STREAM_OK);
         ASSERT_EQ(iptv_stream_start(session.get()), IPTV_STREAM_OK);
+        std::unique_ptr<iptv_stream_session_t, decltype(close)> download(
+            new iptv_stream_session_t{});
+        iptv_stream_init(download.get());
+        ASSERT_EQ(iptv_stream_open(download.get(), nullptr, nullptr), IPTV_STREAM_OK);
+        ASSERT_EQ(iptv_stream_start(download.get()), IPTV_STREAM_OK);
+        ASSERT_EQ(
+            iptv_stream_scan(download.get(), memory.transport.data(), memory.transport.size(), 1),
+            IPTV_STREAM_OK);
         ASSERT_EQ(iptv_stream_push(session.get(), memory.transport.data(), memory.transport.size()),
                   IPTV_STREAM_OK);
         ASSERT_FALSE(pictures.empty());
@@ -323,8 +334,8 @@ TEST(Media, SeekRestoresConfigurationForFreshH264AndHevcDecoders)
         }
         pictures.clear();
         timestamps.clear();
-        // Capture the second encoder's reference picture in an independent
-        // parser; the playback session must only scan those skipped bytes.
+        // Capture the second encoder's reference picture independently. Only
+        // the selected history parser sees the skipped configuration change.
         std::unique_ptr<iptv_stream_session_t, decltype(close)> reference(
             new iptv_stream_session_t{});
         iptv_stream_init(reference.get());
@@ -343,7 +354,8 @@ TEST(Media, SeekRestoresConfigurationForFreshH264AndHevcDecoders)
         for (std::size_t at = 0; at < changed.transport.size();)
         {
             const auto bytes = std::min<std::size_t>(157, changed.transport.size() - at);
-            ASSERT_EQ(iptv_stream_scan(session.get(), changed.transport.data() + at, bytes,
+            ASSERT_EQ(iptv_stream_scan(independent_download ? download.get() : session.get(),
+                                       changed.transport.data() + at, bytes,
                                        at + bytes == changed.transport.size()),
                       IPTV_STREAM_OK);
             at += bytes;
@@ -395,7 +407,10 @@ TEST(Media, SeekRestoresConfigurationForFreshH264AndHevcDecoders)
                 at = next;
             }
             ASSERT_LT(stripped.size(), configured.size());
-            ASSERT_EQ(iptv_stream_reposition(session.get(), positions[version]), IPTV_STREAM_OK);
+            ASSERT_EQ(iptv_stream_reposition_from(
+                          session.get(), independent_download ? download.get() : session.get(),
+                          positions[version]),
+                      IPTV_STREAM_OK);
             pictures.clear();
             const auto pid = session->telemetry.format.video_pid;
             unsigned counter = 0;
