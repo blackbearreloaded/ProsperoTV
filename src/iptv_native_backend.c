@@ -372,7 +372,7 @@ typedef struct backend_state
     uint8_t video_drained;
     uint8_t pace_active;
     uint32_t video_generation;
-    uint32_t audio_generation;
+    _Atomic uint32_t audio_generation;
 } backend_state_t;
 
 _Static_assert(sizeof(backend_state_t) <= IPTV_NATIVE_BACKEND_STORAGE_BYTES,
@@ -1806,16 +1806,20 @@ static int playback_queues_ready(const backend_state_t *state)
     const uint64_t gate_started_us =
         atomic_load_explicit(&state->playback_gate_started_us, memory_order_acquire);
     const uint64_t now = monotonic_us();
+    const uint32_t generation = atomic_load(&state->stream_generation);
+    const int current_audio =
+        audio_write != audio_read && atomic_load(&state->audio_generation) == generation;
     const int timed_out = gate_started_us != 0 && now >= gate_started_us &&
                           now - gate_started_us >= PLAYBACK_START_TIMEOUT_US;
     // Release on queue pressure too: the single demux producer may be blocked
     // before it can deliver the other track. Never wait for an impossible fill.
     const int pressure = video_write - video_read >= VIDEO_QUEUE_CAPACITY - 1u ||
-                         audio_write - audio_read >= AUDIO_QUEUE_CAPACITY - 1u ||
+                         (current_audio && audio_write - audio_read >= AUDIO_QUEUE_CAPACITY - 1u) ||
                          atomic_load_explicit(&state->video_queue_bytes, memory_order_acquire) >=
                              VIDEO_QUEUE_MAX_BYTES - INPUT_SLOT_BYTES;
     const int video_ready =
         video_write != video_read &&
+        state->video_queue[video_read % VIDEO_QUEUE_CAPACITY].generation == generation &&
         (timed_out || pressure ||
          media_span_ready(
              video_write - video_read,
@@ -1828,12 +1832,18 @@ static int playback_queues_ready(const backend_state_t *state)
     const uint32_t audio_samples = (audio_type == 0x03u || audio_type == 0x04u) ? 1152u
                                    : audio_type == 0x81u                        ? 1536u
                                                                                 : 1024u;
-    const int audio_ready = !audio_type || atomic_load(&state->audio_sync_pending) || timed_out ||
-                            pressure ||
-                            (audio_rate && (uint64_t)(audio_write - audio_read) * audio_samples *
-                                                   UINT64_C(1000000) / audio_rate >=
-                                               PLAYBACK_BUFFER_US);
+    const int audio_ready =
+        !audio_type || atomic_load(&state->audio_sync_pending) || timed_out || pressure ||
+        (current_audio && audio_rate &&
+         (uint64_t)(audio_write - audio_read) * audio_samples * UINT64_C(1000000) / audio_rate >=
+             PLAYBACK_BUFFER_US);
     return video_ready && audio_ready;
+}
+
+static void restart_playback_buffer(backend_state_t *state)
+{
+    atomic_store(&state->playback_gate_started_us, monotonic_us());
+    atomic_store_explicit(&state->playback_started, 0, memory_order_release);
 }
 
 static void release_queued_video(backend_state_t *state)
@@ -1932,22 +1942,9 @@ static void *video_worker_entry(void *argument)
                 starved_since_us = now;
             else if (now - starved_since_us >= PLAYBACK_UNDERRUN_GRACE_US)
             {
-                atomic_store(&state->playback_gate_started_us, now);
-                atomic_store_explicit(&state->playback_started, 0, memory_order_release);
+                restart_playback_buffer(state);
                 starved_since_us = 0;
             }
-        }
-        if (!atomic_load_explicit(&state->playback_started, memory_order_acquire) &&
-            !atomic_load_explicit(&state->video_worker_stop, memory_order_acquire) &&
-            !atomic_load_explicit(&state->stop_requested, memory_order_relaxed))
-        {
-            if (!playback_queues_ready(state))
-            {
-                (void)sceKernelUsleep(1000u);
-                continue;
-            }
-            state->pace_active = 0;
-            atomic_store_explicit(&state->playback_started, 1, memory_order_release);
         }
         const uint32_t read = atomic_load_explicit(&state->video_queue_read, memory_order_relaxed);
         const uint32_t write =
@@ -1957,7 +1954,7 @@ static void *video_worker_entry(void *argument)
             if (atomic_load_explicit(&state->video_worker_stop, memory_order_acquire) ||
                 atomic_load_explicit(&state->stop_requested, memory_order_relaxed))
                 break;
-            if (had_data && !empty_reported)
+            if (had_data && !empty_reported && atomic_load(&state->playback_started))
             {
                 ++state->telemetry.video_queue_underruns;
                 empty_reported = 1;
@@ -1997,6 +1994,22 @@ static void *video_worker_entry(void *argument)
             state->pause_picture = (iptv_native_picture_t){0};
             state->pace_active = 0;
             state->video_generation = generation;
+            // Old entries must be discarded before waiting for fresh media.
+            // A seek to live needs the same cushion as initial playback.
+            restart_playback_buffer(state);
+            starved_since_us = 0;
+        }
+        if (!atomic_load_explicit(&state->playback_started, memory_order_acquire) &&
+            !atomic_load_explicit(&state->video_worker_stop, memory_order_acquire) &&
+            !atomic_load_explicit(&state->stop_requested, memory_order_relaxed))
+        {
+            if (!playback_queues_ready(state))
+            {
+                (void)sceKernelUsleep(1000u);
+                continue;
+            }
+            state->pace_active = 0;
+            atomic_store_explicit(&state->playback_started, 1, memory_order_release);
         }
         const int32_t result =
             submit_coded_frame(state, item->data, bytes, item->pts_us, item->displayable);
@@ -2346,13 +2359,6 @@ static void *audio_worker_entry(void *argument)
             (void)sceKernelUsleep(5000u);
             continue;
         }
-        if (!atomic_load_explicit(&state->playback_started, memory_order_acquire) &&
-            !atomic_load_explicit(&state->audio_worker_stop, memory_order_acquire))
-        {
-            // The video worker owns the common A/V buffering gate.
-            (void)sceKernelUsleep(1000u);
-            continue;
-        }
         const uint32_t read = atomic_load_explicit(&state->audio_queue_read, memory_order_relaxed);
         const uint32_t write =
             atomic_load_explicit(&state->audio_queue_write, memory_order_acquire);
@@ -2360,7 +2366,7 @@ static void *audio_worker_entry(void *argument)
         {
             if (atomic_load_explicit(&state->audio_worker_stop, memory_order_acquire))
                 break;
-            if (had_data && !empty_reported)
+            if (had_data && !empty_reported && atomic_load(&state->playback_started))
             {
                 ++state->telemetry.audio_queue_underruns;
                 empty_reported = 1;
@@ -2394,6 +2400,14 @@ static void *audio_worker_entry(void *argument)
             state->audio_sink.next_output_position = 0;
             state->audio_generation = generation;
             sync_started = 0;
+        }
+        if (!atomic_load_explicit(&state->playback_started, memory_order_acquire) &&
+            !atomic_load_explicit(&state->audio_worker_stop, memory_order_acquire))
+        {
+            // Drain stale entries before waiting, so they cannot fill the queue
+            // and block the producer from delivering the new video's buffer.
+            (void)sceKernelUsleep(1000u);
+            continue;
         }
         if (atomic_load(&state->audio_sync_pending))
         {
@@ -3108,6 +3122,24 @@ int main(void)
     atomic_store(&gate.audio_buffer_type, 0x0f);
     atomic_store(&gate.playback_gate_started_us, monotonic_us() - PLAYBACK_START_TIMEOUT_US);
     assert(playback_queues_ready(&gate)); // Bounded fallback for bad timestamps.
+    // A live seek must not reuse the old gate deadline or old audio pressure.
+    atomic_store(&gate.playback_started, 1);
+    atomic_store(&gate.stream_generation, 1);
+    atomic_store(&gate.audio_sync_pending, 1);
+    gate.video_queue[0].generation = gate.video_queue[1].generation = 1;
+    atomic_store(&gate.video_queue[1].pts_us, 40000);
+    atomic_store(&gate.audio_queue_write, AUDIO_QUEUE_CAPACITY - 1);
+    restart_playback_buffer(&gate);
+    assert(!atomic_load(&gate.playback_started));
+    assert(!playback_queues_ready(&gate)); // Stale audio can drain while video waits.
+    atomic_store(&gate.audio_generation, 1);
+    assert(playback_queues_ready(&gate)); // Fresh queue pressure still releases the producer.
+    atomic_store(&gate.audio_queue_write, 2);
+    assert(!playback_queues_ready(&gate));
+    atomic_store(&gate.video_queue[1].pts_us, PLAYBACK_BUFFER_US);
+    assert(playback_queues_ready(&gate)); // Fresh video has its full startup cushion.
+    atomic_store(&gate.stream_generation, 2);
+    assert(!playback_queues_ready(&gate)); // Another seek invalidates the queued window.
     free(gate.audio_queue);
     free(gate.video_queue);
     pending_pts_t pending = {0};
