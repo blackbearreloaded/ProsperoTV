@@ -6,10 +6,10 @@
 #include <cstdint>
 #include <cstring>
 #include <new>
-#include <vector>
 extern "C"
 {
 #include <libavcodec/avcodec.h>
+#include <libavutil/mem.h>
 }
 
 struct iptv_field_parser
@@ -20,7 +20,8 @@ struct iptv_field_parser
     AVPacket *packet = nullptr;
     AVFrame *frame = nullptr;
     bool draining = false;
-    std::vector<std::uint8_t> padded;
+    std::uint8_t *padded = nullptr;
+    unsigned padded_capacity = 0;
     ~iptv_field_parser()
     {
         av_parser_close(parser);
@@ -28,6 +29,7 @@ struct iptv_field_parser
         avcodec_free_context(&decoder);
         av_packet_free(&packet);
         av_frame_free(&frame);
+        av_free(padded);
     }
 };
 
@@ -53,12 +55,13 @@ iptv_field_info_t iptv_field_parse(iptv_field_parser_t *state, const void *data,
     iptv_field_info_t result{};
     if (!state || !data || !bytes || bytes > 8u * 1024u * 1024u)
         return result;
-    state->padded.resize(bytes + AV_INPUT_BUFFER_PADDING_SIZE);
-    std::memcpy(state->padded.data(), data, bytes);
-    std::memset(state->padded.data() + bytes, 0, AV_INPUT_BUFFER_PADDING_SIZE);
+    av_fast_padded_malloc(&state->padded, &state->padded_capacity, bytes);
+    if (!state->padded)
+        return result;
+    std::memcpy(state->padded, data, bytes);
     std::uint8_t *parsed = nullptr;
     int parsed_bytes = 0;
-    if (av_parser_parse2(state->parser, state->codec, &parsed, &parsed_bytes, state->padded.data(),
+    if (av_parser_parse2(state->parser, state->codec, &parsed, &parsed_bytes, state->padded,
                          static_cast<int>(bytes), AV_NOPTS_VALUE, AV_NOPTS_VALUE, 0) < 0 ||
         !parsed_bytes)
         return result;
@@ -161,6 +164,15 @@ int iptv_field_decode(iptv_field_parser_t *state, const void *data, size_t bytes
                 frame.data[2][static_cast<size_t>(row) * frame.linesize[2] + x];
         }
     return (frame.flags & AV_FRAME_FLAG_INTERLACED) ? 2 : 1;
+}
+
+void iptv_field_decoder_reset(iptv_field_parser_t *state)
+{
+    if (state && state->decoder)
+    {
+        avcodec_flush_buffers(state->decoder);
+        state->draining = false;
+    }
 }
 
 int iptv_field_bob(void *output, size_t output_bytes, const void *input, size_t input_bytes,

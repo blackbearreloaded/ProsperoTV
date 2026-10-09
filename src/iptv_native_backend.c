@@ -2085,7 +2085,12 @@ static void *video_worker_entry(void *argument)
                 atomic_store_explicit(&state->video_worker_result, completed, memory_order_release);
                 break;
             }
-            const int32_t reset = sceVideodec2Reset(state->decoder);
+            int32_t reset = 0;
+            if (state->telemetry.software_video)
+                iptv_field_decoder_reset(state->field_parser);
+            else
+                reset = sceVideodec2Reset(state->decoder);
+            state->previous_picture_pts = UINT64_MAX;
             if (reset != 0)
             {
                 atomic_store_explicit(&state->video_worker_result, reset, memory_order_release);

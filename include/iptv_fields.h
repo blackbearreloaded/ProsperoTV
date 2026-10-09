@@ -27,6 +27,7 @@ iptv_field_info_t iptv_field_parse(iptv_field_parser_t *parser, const void *data
 int iptv_field_decode(iptv_field_parser_t *parser, const void *data, size_t bytes,
                       void *output, size_t output_bytes, uint32_t pitch,
                       uint32_t surface_height, uint32_t width, uint32_t height);
+void iptv_field_decoder_reset(iptv_field_parser_t *parser);
 
 /* Copy one NV12 field to a distinct surface, interpolating only between rows
  * from that field. Never blend two moments or modify decoder reference pixels.

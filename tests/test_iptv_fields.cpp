@@ -30,6 +30,7 @@ TEST(Fields, ReadsActualTopBottomAndProgressivePictures)
         ASSERT_TRUE(parser);
         constexpr unsigned pitch = 176, height = 96;
         std::vector<std::uint8_t> surface(pitch * height * 3 / 2 + 16, 0xee);
+        std::vector<std::vector<std::uint8_t>> pictures;
         unsigned decoded = 0;
         const auto decode = [&](const void *data, size_t bytes)
         {
@@ -39,6 +40,7 @@ TEST(Fields, ReadsActualTopBottomAndProgressivePictures)
             if (result > 0)
             {
                 ++decoded;
+                pictures.push_back(surface);
                 EXPECT_EQ(result, expected ? 2 : 1);
                 for (unsigned y = 0; y < height * 3 / 2; ++y)
                     for (unsigned x = 160; x < pitch; ++x)
@@ -61,6 +63,22 @@ TEST(Fields, ReadsActualTopBottomAndProgressivePictures)
         {
         }
         EXPECT_EQ(decoded, 25u);
+        const auto reference = pictures;
+        iptv_field_decoder_reset(parser.get());
+        for (std::size_t i = 0; i < 5; ++i)
+            ASSERT_GE(decode(bytes.data() + starts[i], starts[i + 1] - starts[i]), 0);
+        // Seek while frame threads still retain old pictures. Replaying the
+        // keyframe must reproduce the exact sequence, without stale output.
+        iptv_field_decoder_reset(parser.get());
+        decoded = 0;
+        pictures.clear();
+        for (std::size_t i = 0; i + 1 < starts.size(); ++i)
+            ASSERT_GE(decode(bytes.data() + starts[i], starts[i + 1] - starts[i]), 0);
+        for (unsigned i = 0; i < 25 && decode(nullptr, 0) > 0; ++i)
+        {
+        }
+        EXPECT_EQ(decoded, 25u);
+        EXPECT_EQ(pictures, reference);
         EXPECT_LT(iptv_field_decode(parser.get(), nullptr, 0, surface.data(), 1, pitch, height, 160,
                                     height),
                   0);
