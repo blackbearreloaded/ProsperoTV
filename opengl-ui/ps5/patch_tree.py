@@ -174,13 +174,13 @@ swap("src/iptv_native_agc_present.c",
      "\n"
      "void iptv_native_agc_set_overlay_enabled(int enabled)\n")
 swap("src/iptv_native_backend.c",
-     "    started = monotonic_us();\n"
-     "    state->telemetry.last_present_source = (uintptr_t)output->buffer;\n",
-     "    /* The tuning screen leaves before the first picture is shown. */\n"
-     "    if (!state->config.picture)\n"
-     "        iptv_native_agc_loading_finish();\n"
-     "    started = monotonic_us();\n"
-     "    state->telemetry.last_present_source = (uintptr_t)output->buffer;\n")
+     "        started = monotonic_us();\n"
+     "        state->telemetry.last_present_source = (uintptr_t)output->buffer;\n",
+     "        /* The tuning screen leaves before the first picture is shown. */\n"
+     "        if (!state->config.picture)\n"
+     "            iptv_native_agc_loading_finish();\n"
+     "        started = monotonic_us();\n"
+     "        state->telemetry.last_present_source = (uintptr_t)output->buffer;\n")
 swap("src/iptv_player.cpp",
      "    iptv_native_agc_loading_stop();\n"
      "    const int handoff = iptv_native_agc_present_shutdown();\n"

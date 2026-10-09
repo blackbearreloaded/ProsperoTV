@@ -22,6 +22,7 @@ extern "C"
         uint32_t bitrate_kbps;
         uint32_t show_controls;
         uint64_t pts_us;
+        uint32_t field; /* 0: full picture; 1/2: reconstruct top/bottom field. */
     } iptv_native_video_overlay_t;
 
     /* Register only between foreground sessions; the player joins its workers

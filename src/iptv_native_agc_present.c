@@ -5,6 +5,7 @@
 /* SDR NV12/Main10 Videodec2-to-AGC presenter extracted from ProsperoLight. */
 
 #include "iptv_native_agc_present.h"
+#include "iptv_fields.h"
 
 #include <limits.h>
 #include <stdatomic.h>
@@ -1227,7 +1228,7 @@ static int32_t present_nv12(const void *source, size_t source_bytes, uint32_t pi
         const int osd_visible =
             draw_osd && draw_osd(osd_context, NULL, 0, pitch, surface_height, visible_width,
                                  visible_height, bit_depth, overlay->pts_us);
-        if (osd_visible || iptv_native_agc_overlay_enabled() ||
+        if (overlay->field || osd_visible || iptv_native_agc_overlay_enabled() ||
             (!draw_osd && overlay->show_controls))
         {
             /* Keep decoder reference pictures intact. Reuse this separate
@@ -1237,6 +1238,12 @@ static int32_t present_nv12(const void *source, size_t source_bytes, uint32_t pi
             if (result != 0)
                 return result;
             memcpy(presenter.overlay_surface, source, yuv_bytes);
+            if (overlay->field &&
+                (bit_depth != 8 ||
+                 iptv_field_bob(presenter.overlay_surface, presenter.overlay_bytes, source,
+                                source_bytes, pitch, surface_height, visible_width,
+                                overlay->field - 1) != 0))
+                return -1;
             source = presenter.overlay_surface;
             source_bytes = presenter.overlay_bytes;
             iptv_native_video_overlay_t info = *overlay;
