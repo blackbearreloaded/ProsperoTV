@@ -101,5 +101,15 @@ Otra línea
 CAPTIONS
 ffmpeg -hide_banner -loglevel error -y -i "$output/h264-aac.mp4" -i "$output/english.srt" -i "$output/spanish.srt" -map 0 -map 1 -map 2 -c copy -c:s mov_text -metadata:s:s:0 language=eng -metadata:s:s:1 language=spa "$output/subtitles.mp4"
 ffmpeg -hide_banner -loglevel error -y -i "$output/h264-aac.mp4" -i "$output/english.srt" -i "$output/spanish.srt" -map 0 -map 1 -map 2 -c copy -c:s srt -metadata:s:s:0 language=eng -metadata:s:s:1 language=spa "$output/subtitles.mkv"
+# A normal multilingual movie can have more than 32 streams in its container.
+for count in 40 128; do
+    maps=(-map 0:v -map 0:a)
+    for ((i=0; i<count; ++i)); do maps+=(-map 0:s:0); done
+    ffmpeg -hide_banner -loglevel error -y -i "$output/subtitles.mkv" "${maps[@]}" \
+        -c copy "$output/many-subtitles-$count.mkv"
+done
+ffmpeg -hide_banner -loglevel error -y -i "$output/many-subtitles-40.mkv" -map 0 \
+    -c copy -c:s mov_text "$output/many-subtitles-40.mp4"
 ffmpeg -hide_banner -loglevel error -y -f lavfi -i testsrc2=size=160x96:rate=10 -t 0.5 -c:v libx265 -x265-params pools=1:frame-threads=1:log-level=error -an "$output/hevc.mp4"
+ffmpeg -hide_banner -loglevel error -y -f lavfi -i testsrc2=size=160x96:rate=10 -t 0.5 -c:v libx265 -x265-params pools=1:frame-threads=1:log-level=error:repeat-headers=1 -an "$output/hevc-inband.mkv"
 printf '%s\n' "$stamp" > "$output/.complete"

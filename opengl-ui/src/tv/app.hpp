@@ -170,9 +170,9 @@ class App
     enum Tab : int
     {
         kLive,
+        kVod,
         kFavorites,
         kSources,
-        kVod,
         kSettings,
         kAbout,
         kTabCount,
@@ -180,7 +180,7 @@ class App
 
     bool browsing() const
     {
-        return tabs_.active() <= kFavorites;
+        return tabs_.active() == kLive || tabs_.active() == kFavorites;
     }
     void show_tab(int index, bool glide);
     void tab_changed();

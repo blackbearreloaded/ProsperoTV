@@ -502,7 +502,10 @@ int ReadMedia(const MediaInput &input, const MediaOutput &output, std::string *e
     r.demux->interrupt_callback = {Reader::interrupt, &r};
     r.demux->probesize = 4 * 1024 * 1024;
     r.demux->max_analyze_duration = 5 * AV_TIME_BASE;
-    r.demux->max_streams = 32;
+    // Provider movies commonly carry dozens of subtitle languages. Keep the
+    // demux bound separate from the smaller number of tracks exposed by the UI.
+    constexpr unsigned kMaxContainerStreams = 128;
+    r.demux->max_streams = kMaxContainerStreams;
     r.demux->max_index_size = 8 * 1024 * 1024;
     AVDictionary *options = nullptr;
     av_dict_set(&options, "format_whitelist",
@@ -524,7 +527,7 @@ int ReadMedia(const MediaInput &input, const MediaOutput &output, std::string *e
     av_dict_free(&options);
     if (r.cancelled())
         return 1;
-    if (opened < 0 || r.demux->nb_streams > 32)
+    if (opened < 0 || r.demux->nb_streams > kMaxContainerStreams)
         return r.cancelled() ? 1
                              : fail(hls ? "This HLS video could not be read."
                                         : "This MP4 or Matroska video could not be read.");
@@ -675,6 +678,7 @@ int ReadMedia(const MediaInput &input, const MediaOutput &output, std::string *e
         return fail("Not enough memory to open this video.");
     int result = 0;
     auto video_clock = origin;
+    bool first_video = true;
     while (!r.cancelled() && (result = av_read_frame(r.demux, r.packet)) >= 0)
     {
         const int source = r.packet->stream_index;
@@ -683,6 +687,16 @@ int ReadMedia(const MediaInput &input, const MediaOutput &output, std::string *e
             return fail("The video contains an invalid media packet.");
         if (mapping[source] >= 0)
         {
+            if (source == video && first_video)
+            {
+                first_video = false;
+                // In-band headers can reveal B-frame delay after the demuxer
+                // assigned DTS = PTS to the first packet. Let the muxer infer
+                // that initial decode time using the now-known reorder delay.
+                if (v->video_delay > 0 && r.packet->pts != AV_NOPTS_VALUE &&
+                    r.packet->dts == r.packet->pts)
+                    r.packet->dts = AV_NOPTS_VALUE;
+            }
             if (source == video && r.packet->pts != AV_NOPTS_VALUE)
                 video_clock = av_rescale_q(r.packet->pts, r.demux->streams[source]->time_base,
                                            AVRational{1, AV_TIME_BASE});

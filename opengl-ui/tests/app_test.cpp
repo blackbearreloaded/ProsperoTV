@@ -282,16 +282,17 @@ TEST_F(AppTest, PhoneBackDismissesSearchAndShouldersChangeTabs)
     EXPECT_TRUE(model_->query().empty());
     frame(ptv::remote_input(IPTV_INPUT_R1));
     EXPECT_EQ(app_->tab(), 1);
+    EXPECT_FALSE(app_->remote_search("Channel")); // On demand is not the live channel search.
     frame(ptv::remote_input(IPTV_INPUT_R1));
     EXPECT_EQ(app_->tab(), 2);
-    EXPECT_FALSE(app_->remote_search("Channel"));
+    EXPECT_TRUE(app_->remote_search("Channel")); // Favorites remains a channel list.
     frame(ptv::remote_input(IPTV_INPUT_L1));
     EXPECT_EQ(app_->tab(), 1);
 }
 
 TEST_F(AppTest, TheMenuComesBackWhereItWas)
 {
-    press(Action::page_next); // Favorites
+    press(Action::page_next); // On demand
     press(Action::page_prev);
     move(Direction::down);
     move(Direction::down);
@@ -315,9 +316,10 @@ TEST_F(AppTest, ShouldersTurnTheTabsAndCircleLeadsHome)
 {
     press(Action::page_next);
     EXPECT_EQ(app_->tab(), 1);
-    EXPECT_EQ(model_->group(), ptv::Group::favorites);
+    EXPECT_EQ(model_->group(), ptv::Group::all);
     press(Action::page_next);
     EXPECT_EQ(app_->tab(), 2);
+    EXPECT_EQ(model_->group(), ptv::Group::favorites);
     press(Action::page_next);
     EXPECT_EQ(app_->tab(), 3);
     EXPECT_EQ(model_->view.tab, 3);
@@ -344,6 +346,7 @@ TEST_F(AppTest, SquareStarsAndTheFavoritesTabListsIt)
     EXPECT_FALSE(frame_.overlay.empty()); // the toast
     EXPECT_TRUE(frame_.glass);
 
+    press(Action::page_next);
     press(Action::page_next);
     EXPECT_EQ(model_->visible_count(), 1u);
     EXPECT_EQ(model_->view.focused_channel, model_->channel(1).id);
@@ -458,6 +461,7 @@ TEST_F(AppTest, AChannelThatFailedIsAskedAboutFirst)
 
 TEST_F(AppTest, ASourceIsSetUpFromItsRow)
 {
+    press(Action::page_next);
     press(Action::page_next);
     press(Action::page_next); // Sources
     move(Direction::down);    // Custom playlist
@@ -717,7 +721,7 @@ TEST_F(AppTest, TheDiagnosticLogIsASwitchInSettingsOffByDefault)
     // On: what the viewer does and what the app answers are both there.
     press(Action::page_prev);
     EXPECT_TRUE(traced("input L1 on Settings"));
-    EXPECT_TRUE(traced("tab On demand"));
+    EXPECT_TRUE(traced("tab Sources"));
     press(Action::page_prev);
     press(Action::page_prev);
     press(Action::page_prev);
@@ -838,6 +842,7 @@ TEST_F(AppTest, ProviderCategoriesAreBrowsableAndCanBeHiddenFromTheController)
 TEST_F(AppTest, FavoriteFoldersCanBeCreatedAndAssignedFromTheController)
 {
     press(Action::west);
+    press(Action::page_next);
     press(Action::page_next);
     ASSERT_EQ(model_->visible_count(), 1u);
     press(Action::touch);
@@ -1541,7 +1546,7 @@ TEST_F(AppTest, RandomInputNeverBreaksIt)
             make_app();
         }
         ASSERT_GE(app_->tab(), 0);
-        ASSERT_LT(app_->tab(), 5);
+        ASSERT_LT(app_->tab(), 6);
         ASSERT_FALSE(frame_.scene.empty());
     }
 }

@@ -209,6 +209,45 @@ TEST(Media, ConvertsHevcLengthPrefixedPacketsForTheNativeDecoder)
     ASSERT_EQ(memory.run(&error), 0) << error;
     check_transport(memory, true);
 }
+TEST(Media, ReadsMoviesWithManySubtitleLanguagesButRetainsAStreamLimit)
+{
+    std::string error;
+    for (const auto *name : {"many-subtitles-40.mkv", "many-subtitles-40.mp4"})
+    {
+        SCOPED_TRACE(name);
+        Memory movie(name);
+        ASSERT_FALSE(movie.bytes.empty());
+        ASSERT_EQ(movie.run(&error), 0) << error;
+        check_transport(movie, false);
+    }
+    Memory excessive("many-subtitles-128.mkv");
+    ASSERT_FALSE(excessive.bytes.empty());
+    EXPECT_EQ(excessive.run(&error), -1);
+    EXPECT_FALSE(error.empty());
+}
+TEST(Media, ReadsReorderedHevcWhenParameterSetsArriveInTheFirstVideoPacket)
+{
+    Memory movie("hevc-inband.mkv");
+    // Keep the length-prefix configuration, but make the demuxer learn the
+    // parameter sets (and reorder delay) from the video instead of CodecPrivate.
+    const std::uint8_t codec_private[] = {0x63, 0xa2};
+    const auto found = std::search(movie.bytes.begin(), movie.bytes.end(),
+                                   std::begin(codec_private), std::end(codec_private));
+    ASSERT_NE(found, movie.bytes.end());
+    auto at = static_cast<std::size_t>(found - movie.bytes.begin()) + 2;
+    ASSERT_LT(at, movie.bytes.size());
+    unsigned size_bytes = 1;
+    for (unsigned mask = 0x80; mask && !(movie.bytes[at] & mask); mask >>= 1)
+        ++size_bytes;
+    ASSERT_LE(size_bytes, 8u);
+    at += size_bytes;
+    ASSERT_LT(at + 22, movie.bytes.size());
+    ASSERT_EQ(movie.bytes[at], 1); // HEVC configuration record.
+    movie.bytes[at + 22] = 0;      // No out-of-band parameter-set arrays.
+    std::string error;
+    ASSERT_EQ(movie.run(&error), 0) << error;
+    check_transport(movie, true);
+}
 TEST(Media, PreservesBothLanguagesAndSwitchesRealAudioWithoutReopeningVideo)
 {
     for (const auto *name : {"two-audio.mp4", "two-audio.mkv", "hls-mpegts/master.m3u8",

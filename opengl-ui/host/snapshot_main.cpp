@@ -192,6 +192,7 @@ const Step kWalk[] = {
     press(Action::back, 0.9f, "15-no-match"),
     press(Action::back, 1.0f, "16-search-cleared"),
     // ---- Favorites ----
+    press(Action::page_next, 0.7f, "53-vod-no-account"),
     press(Action::page_next, 1.1f, "17-favorites"),
     change(
         []()
@@ -213,7 +214,6 @@ const Step kWalk[] = {
     press(Action::menu, 1.0f, "22-sources-updating"),
     look(2.6f, "23-sources-updated"),
     // ---- Settings ----
-    press(Action::page_next, 0.7f, "53-vod-no-account"),
     press(Action::page_next, 1.1f, "24-settings"),
     press(Action::confirm, 0.5f),
     move(Direction::down, 0.25f),
@@ -291,8 +291,10 @@ const Step kWalk[] = {
     change([]() { host::set_keyboard_text("viewer"); }, 0.2f),
     change([]() { host::set_keyboard_text("demo"); }, 2.0f),
     press(Action::page_next),
+    press(Action::page_next),
     press(Action::page_next, 0.7f, "54-sources-with-portals"),
-    press(Action::page_next, 0.7f, "55-vod-home"),
+    press(Action::page_prev),
+    press(Action::page_prev, 0.7f, "55-vod-home"),
     press(Action::confirm, 2.0f, "56-vod-categories"),
     move(Direction::down),
     press(Action::confirm, 0.5f, "57-vod-child-categories"),
@@ -444,7 +446,7 @@ int main(int argc, char **argv)
             R"([{"category_id":1,"category_name":"US"},{"category_id":2,"category_name":"Drama","parent_id":1},{"category_id":3,"category_name":"Family","parent_id":1}])");
         response(
             "get_vod_streams",
-            R"([{"stream_id":10,"name":"A journey through the valley","container_extension":"mp4","category_id":2,"stream_icon":"https://logos.example.invalid/demo.png"},{"stream_id":11,"name":"Midnight on the coast","container_extension":"mkv","category_id":2},{"stream_id":12,"name":"The little astronomer","container_extension":"mp4","category_id":3}])");
+            R"JSON([{"stream_id":10,"name":"A journey\u200b through\u200b the valley (2026)","container_extension":"mp4","category_id":2,"stream_icon":"https://logos.example.invalid/demo.png"},{"stream_id":11,"name":"Midnight on the coast? (2026)","container_extension":"mkv","category_id":2},{"stream_id":12,"name":"The little astronomer","container_extension":"mp4","category_id":3}])JSON");
         response("get_series_categories", R"([{"category_id":4,"category_name":"Documentaries"}])");
         response(
             "get_series",
