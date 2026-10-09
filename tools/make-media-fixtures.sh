@@ -164,6 +164,6 @@ for order in 0 1 2; do
     [[ $order == 0 ]] || params+=:$dominance=1
     ffmpeg -hide_banner -loglevel error -y -f lavfi -i "testsrc2=size=160x96:rate=$rate" \
         -t 1 -an "${field_options[@]}" -c:v libx264 -threads 2 -x264-params "$params" \
-        "$output/fields-$order.h264"
+        -map 0:v -f tee "[f=h264]$output/fields-$order.h264|[f=mpegts]$output/fields-$order.ts"
 done
 printf '%s\n' "$stamp" > "$output/.complete"

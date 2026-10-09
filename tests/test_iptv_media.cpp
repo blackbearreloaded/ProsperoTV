@@ -257,6 +257,44 @@ void decode_picture(AVCodecID codec_id, const std::vector<std::uint8_t> &bytes,
               size);
 }
 
+TEST(Media, InterlacedTransportPreservesDecodableAccessUnits)
+{
+    for (const auto *name : {"fields-0.ts", "fields-1.ts", "fields-2.ts"})
+    {
+        SCOPED_TRACE(name);
+        Memory memory(name);
+        ASSERT_FALSE(memory.bytes.empty());
+        std::vector<std::vector<std::uint8_t>> pictures;
+        iptv_stream_backend_t backend{};
+        backend.context = &pictures;
+        backend.open = [](void *, const iptv_stream_format_t *) { return 0; };
+        backend.submit_audio = [](void *, const std::uint8_t *, std::size_t, std::uint64_t)
+        { return 0; };
+        backend.submit_video =
+            [](void *self, const std::uint8_t *data, std::size_t size, std::uint64_t)
+        {
+            static_cast<decltype(pictures) *>(self)->emplace_back(data, data + size);
+            return 0;
+        };
+        backend.disable_audio = backend.drain = backend.discontinuity = [](void *) { return 0; };
+        backend.close = [](void *) {};
+        auto session = std::make_unique<iptv_stream_session_t>();
+        iptv_stream_init(session.get());
+        ASSERT_EQ(iptv_stream_open(session.get(), nullptr, &backend), IPTV_STREAM_OK);
+        ASSERT_EQ(iptv_stream_start(session.get()), IPTV_STREAM_OK);
+        for (std::size_t at = 0; at < memory.bytes.size(); at += 137)
+            ASSERT_EQ(iptv_stream_push(session.get(), memory.bytes.data() + at,
+                                       std::min(std::size_t(137), memory.bytes.size() - at)),
+                      IPTV_STREAM_OK);
+        ASSERT_EQ(iptv_stream_stop(session.get()), IPTV_STREAM_OK);
+        ASSERT_EQ(iptv_stream_cleanup(session.get()), IPTV_STREAM_OK);
+        ASSERT_EQ(pictures.size(), 25u);
+        std::vector<std::uint8_t> pixels;
+        decode_picture(AV_CODEC_ID_H264, pictures.front(), &pixels);
+        EXPECT_EQ(pixels.size(), 160u * 96u * 3u / 2u);
+    }
+}
+
 TEST(Media, SeekRestoresConfigurationForFreshH264AndHevcDecoders)
 {
     for (const auto mode : {0, 1, 2, 3, 4, 5})

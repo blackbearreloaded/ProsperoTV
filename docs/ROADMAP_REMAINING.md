@@ -555,3 +555,5 @@ synchronization, switching latency and resource cost remain pending.
 - 2026-10-09 | rewind | 2a58893 | .30 PPSA88286 | pass: HLS clock reset, pause/seek/live; 22 media/13 remote checks | ../psiptv/results/roadmap/console-47/result.json | WebM/native captions
 
 - 2026-10-09 | rewind | 3545a66 | .30 PPSA88287 | pass: VP9 WebM pause/seek/live, 119 core sanitizer checks | ../psiptv/results/roadmap/console-48/result.json | field-rate deinterlacing
+
+- 2026-10-09 | fields | 750163a | .30 PPSA88288 | failed: first H264 picture rejected 0x811D0303; healthy teardown | ../psiptv/results/roadmap/console-49/result.json | framing/configuration

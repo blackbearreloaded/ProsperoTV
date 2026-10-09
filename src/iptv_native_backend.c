@@ -203,7 +203,8 @@ static const native_video_mode_t video_modes[] = {
     /* H.264 uses these rows for level and geometry limits. VideoDec2 receives
      * the exact in-band profile below so interlaced Main streams are not
      * opened as High-profile sessions. */
-    {IPTV_NATIVE_CODEC_H264, 0, 1, IPTV_NATIVE_H264_PROFILE_HIGH, 41, 1280, 720},
+    /* AVC field pictures require a whole pair of 16-line macroblock rows. */
+    {IPTV_NATIVE_CODEC_H264, 0, 1, IPTV_NATIVE_H264_PROFILE_HIGH, 41, 1280, 736},
     {IPTV_NATIVE_CODEC_H264, 0, 1, IPTV_NATIVE_H264_PROFILE_HIGH, 51, 1920, 1088},
     {IPTV_NATIVE_CODEC_H264, 0, 1, IPTV_NATIVE_H264_PROFILE_HIGH, 51, 2560, 1440},
     {IPTV_NATIVE_CODEC_H264, 0, 1, IPTV_NATIVE_H264_PROFILE_HIGH, 52, 3840, 2176},
