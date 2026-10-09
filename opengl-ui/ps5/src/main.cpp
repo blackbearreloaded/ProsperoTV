@@ -1330,7 +1330,8 @@ int main()
                     iptv_player_audio_state_t audio{};
                     iptv_player_audio_state(&audio);
                     osd.set_audio_state(audio);
-                    osd.set_subtitle_state(iptv::player_subtitles().state());
+                    const auto subtitle_state = iptv::player_subtitles().state();
+                    osd.set_subtitle_state(subtitle_state);
                     iptv_player_live_state_t live{};
                     iptv_player_live_state(&live);
                     osd.set_live_state(live);
@@ -1342,11 +1343,13 @@ int main()
                         {
                             last_sample = now;
                             say("[TV] live-history first=%llu last=%llu position=%llu paused=%u "
-                                "expired=%u",
+                                "expired=%u audio=%u audio_track=%u subtitle_track=%u",
                                 static_cast<unsigned long long>(live.first_us),
                                 static_cast<unsigned long long>(live.last_us),
                                 static_cast<unsigned long long>(live.position_us), live.paused,
-                                live.expired);
+                                live.expired, audio.selected_pid,
+                                audio.count ? audio.tracks[0].pid : 0u,
+                                subtitle_state.tracks.empty() ? 0u : subtitle_state.tracks[0].id);
                         }
                     }
                     const int handled = osd.input(action, ptv::platform::monotonic_us());
