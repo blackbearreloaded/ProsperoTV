@@ -182,6 +182,20 @@ void Timeshift::trim()
     if (evicted && !marks_.empty())
         begin_ = std::max(begin_, marks_.front().offset);
 }
+void Timeshift::discard_before(std::uint64_t pts_us, std::uint64_t generation)
+{
+    std::lock_guard lock(mutex_);
+    if (generation != generation_)
+        return; // A producer reset must not apply an old clock's retention floor.
+    bool discarded = false;
+    while (!marks_.empty() && marks_.front().pts_us < pts_us)
+    {
+        marks_.pop_front();
+        discarded = true;
+    }
+    if (discarded)
+        begin_ = std::max(begin_, marks_.empty() ? end_ : marks_.front().offset);
+}
 void Timeshift::index()
 {
     std::uint8_t bytes[packet_bytes];

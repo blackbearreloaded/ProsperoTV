@@ -188,6 +188,9 @@ int iptv_stream_discontinuity(iptv_stream_session_t *session);
  * The timestamp comes from retained history, including its wrap epoch.
  * Run on the stream owner's thread after interrupting blocked native submits. */
 int iptv_stream_reposition(iptv_stream_session_t *session, uint64_t pts_us);
+/* Earliest replay timestamp after bounded configuration history expires.
+ * Owner-thread only; older repositions are rejected without resetting playback. */
+uint64_t iptv_stream_replay_start(const iptv_stream_session_t *session);
 /* Like push(), these run on the stream owner's thread, not concurrently.
  * Returns the total available count, copying at most capacity entries. */
 size_t iptv_stream_audio_tracks(const iptv_stream_session_t *session,

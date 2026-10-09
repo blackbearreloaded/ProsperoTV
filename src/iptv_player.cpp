@@ -1313,12 +1313,16 @@ class StreamRunner
         // older seek whose parser reset was still in flight. Use the same owner
         // lock as UpdateLiveControls through dequeue, reset and cursor change.
         std::lock_guard control_lock(control_mutex_);
+        history_->discard_before(iptv_stream_replay_start(&session_), history_generation_);
         const auto range = history_->range();
         std::optional<iptv::Timeshift::Position> position;
         {
             std::lock_guard lock(history_request_mutex_);
             position.swap(history_request_);
         }
+        if (position &&
+            (position->offset < range.begin || position->generation != range.generation))
+            position = history_->seek(range.first_pts_us);
         if (Paused() && !position)
         {
             if (read < range.begin || history_generation_ != range.generation)
@@ -1331,7 +1335,11 @@ class StreamRunner
             if (!position)
                 position = history_->seek(range.first_pts_us);
             if (!position && range.begin != range.end)
-                position = iptv::Timeshift::Position{range.begin, 0, range.generation};
+                position = iptv::Timeshift::Position{range.begin,
+                                                     history_generation_ == range.generation
+                                                         ? iptv_stream_replay_start(&session_)
+                                                         : 0,
+                                                     range.generation};
             history_expired_.store(true, std::memory_order_release);
         }
         if (position)
@@ -1339,7 +1347,8 @@ class StreamRunner
             iptv_native_backend_request_reposition(&adapter_.backend);
             const bool same_timeline = history_generation_ == position->generation;
             adapter_.preserve_subtitles = same_timeline;
-            const int result = iptv_stream_reposition(&session_, position->pts_us);
+            const int result = same_timeline ? iptv_stream_reposition(&session_, position->pts_us)
+                                             : iptv_stream_discontinuity(&session_);
             adapter_.preserve_subtitles = false;
             if (result != IPTV_STREAM_OK)
             {

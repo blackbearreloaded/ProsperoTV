@@ -50,6 +50,8 @@ class Timeshift
     void set_video_pid(std::uint32_t pid);
     // A provider reconnect/discontinuity starts a new retained timeline.
     void discontinuity();
+    // Keep transport and decoder-configuration retention boundaries together.
+    void discard_before(std::uint64_t pts_us, std::uint64_t generation);
 
   private:
     struct Mark

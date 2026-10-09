@@ -74,6 +74,30 @@ TEST(TimeshiftSeek, AccumulatesQueuedAndInFlightStepsUntilANewPictureArrives)
     EXPECT_EQ(seek.take(), 10 * second);
 }
 
+TEST(Timeshift, ExpiredDecoderConfigurationAlsoExpiresTransportAndSeekPositions)
+{
+    iptv::Timeshift history(188 * 32);
+    const auto data = broadcast(20);
+    ASSERT_TRUE(history.append(data.data(), data.size()));
+    const auto old = history.seek(2000000);
+    ASSERT_TRUE(old);
+    history.discard_before(12500000, 0);
+    EXPECT_GE(history.range().first_pts_us, 12500000u);
+    const auto current = history.seek(2000000);
+    ASSERT_TRUE(current);
+    EXPECT_GE(current->pts_us, 12500000u);
+    std::array<std::uint8_t, 188> output;
+    EXPECT_EQ(history.read(old->offset, output.data(), output.size()).status,
+              iptv::Timeshift::ReadStatus::expired);
+    history.discard_before(100000000, 0);
+    EXPECT_FALSE(history.seek(2000000));
+    EXPECT_EQ(history.range().begin, history.range().end);
+    history.discontinuity();
+    ASSERT_TRUE(history.append(data.data(), data.size()));
+    history.discard_before(100000000, 0); // A stale owner cannot trim a new timeline.
+    EXPECT_TRUE(history.seek(2000000));
+}
+
 TEST(TimeshiftSeek, ClampsToMovingHistoryAndAvoidsArithmeticOverflow)
 {
     iptv::TimeshiftSeek seek;
