@@ -2191,6 +2191,19 @@ static int32_t stop_video_worker(backend_state_t *state)
     return result;
 }
 
+static int video_queue_ahead(const backend_state_t *state, uint64_t pts, uint32_t queued)
+{
+    // Keep network/history buffering upstream. Queuing tens of seconds in the
+    // demuxer makes a new audio language wait that long for the displayed picture.
+    // An empty queue must still accept a timestamp jump or a decoder's next input.
+    if (!queued || !atomic_load_explicit(&state->playback_started, memory_order_acquire) ||
+        atomic_load(&state->presented_generation) != atomic_load(&state->stream_generation))
+        return 0;
+    const uint64_t shown = atomic_load_explicit(&state->presented_pts_us, memory_order_acquire);
+    return pts != UINT64_MAX && shown != UINT64_MAX && pts > shown &&
+           pts - shown > PLAYBACK_BUFFER_US;
+}
+
 static int32_t queue_coded_frame(backend_state_t *state, const void *coded_frame,
                                  size_t frame_bytes, uint64_t pts_us, int displayable)
 {
@@ -2218,6 +2231,7 @@ static int32_t queue_coded_frame(backend_state_t *state, const void *coded_frame
         write = atomic_load_explicit(&state->video_queue_write, memory_order_relaxed);
         queued_bytes = atomic_load_explicit(&state->video_queue_bytes, memory_order_acquire);
         if (write - read < VIDEO_QUEUE_CAPACITY &&
+            !video_queue_ahead(state, pts_us, write - read) &&
             (queued_bytes == 0 || frame_bytes <= VIDEO_QUEUE_MAX_BYTES - queued_bytes))
             break;
         (void)sceKernelUsleep(1000u);
@@ -3275,6 +3289,22 @@ int main(void)
     assert(!media_span_ready(60, 5000000, 1000000));
     assert(!media_span_ready(60, 0, UINT64_C(100000000)));
     backend_state_t gate = {0};
+    atomic_store(&gate.presented_pts_us, 1000000);
+    assert(!video_queue_ahead(&gate, 3000001, 1)); // Startup still fills its two-second cushion.
+    atomic_store(&gate.playback_started, 1);
+    assert(!video_queue_ahead(&gate, 3000000, 1));
+    assert(video_queue_ahead(&gate, 3000001, 1));
+    assert(
+        !video_queue_ahead(&gate, 3000001, 0));   // A discontinuity cannot deadlock an empty queue.
+    assert(!video_queue_ahead(&gate, 999999, 1)); // Reordered pictures stay decodable.
+    assert(!video_queue_ahead(&gate, UINT64_MAX, 1));
+    atomic_store(&gate.presented_pts_us, UINT64_MAX);
+    assert(!video_queue_ahead(&gate, 3000001, 1));
+    atomic_store(&gate.presented_pts_us, 1000000);
+    atomic_store(&gate.stream_generation, 1);
+    assert(!video_queue_ahead(&gate, 3000001, 1)); // A seek first needs a picture on its new clock.
+    atomic_store(&gate.stream_generation, 0);
+    atomic_store(&gate.playback_started, 0);
     gate.video_queue = calloc(VIDEO_QUEUE_CAPACITY, sizeof(*gate.video_queue));
     gate.audio_queue = calloc(AUDIO_QUEUE_CAPACITY, sizeof(*gate.audio_queue));
     assert(gate.video_queue && gate.audio_queue);
