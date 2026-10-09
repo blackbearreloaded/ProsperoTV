@@ -10,17 +10,12 @@ and relevant checks work.
 | --- | --- | --- |
 | Local TV sources | Add HDHomeRun and Tvheadend servers, browse and play their channels | Implemented; host checks, PS5 build and console fixture playback pass; physical tuner untested |
 | Phone source management | Add and edit saved playlists/accounts through the paired browser | Implemented; HTTP, persistence, mobile browser and native paired-source acceptance pass |
-| Zapping | Next, previous and previously watched channel during playback | Pending |
-| Playback channel list | Select a channel from a list over the playing video | Pending |
-| Channel banner | Brief channel/guide banner on tune and on request | Pending |
-| Local TV sources | Add HDHomeRun and Tvheadend servers, browse and play their channels | Implemented; host checks and PS5 build pass, console case pending |
-| Phone source management | Add and edit saved playlists/accounts through the paired browser | Implemented; HTTP, persistence and mobile browser checks pass, console case pending |
 | Zapping | Next, previous and previously watched channel during playback | Implemented; 140 UI sanitizer tests and PS5 build pass; console case pending |
 | Playback channel list | Select a channel from a list over the playing video | Implemented; host input/render checks and PS5 build pass; console case pending |
 | Channel banner | Brief channel/guide banner on tune and on request | Implemented; mapped guide, timing and rendered image checks pass; console case pending |
 | Audio/subtitles | Select available language tracks and render subtitles | Embedded/HLS audio and container/DVB/WebVTT subtitles implemented with host checks; live-provider and native acceptance pending |
 | Sleep timer | Stop playback at a selected deadline | Implemented; 134 UI sanitizer tests and PS5 build pass; console case pending |
-| Live pause/rewind | Pause and replay several minutes of the current live channel | In progress: history, controls and decoder/subtitle replay; remaining format/timeline handling and native acceptance pending |
+| Live pause/rewind | Pause and replay several minutes of the current live channel | Implemented for TS/HLS and direct VP9 WebM; 119 core tests, media/subtitle checks, PS5 build and native controls/expiry/format-change cases pass; native caption visibility and subjective sync remain acceptance checks |
 | Deinterlacing | Preserve field-rate motion on interlaced broadcast video | Pending |
 | HDR | Preserve HDR metadata and output HDR on compatible displays | Pending |
 | Multiview | Two or four simultaneous channels, within measured decoder limits | Pending |
@@ -558,3 +553,5 @@ synchronization, switching latency and resource cost remain pending.
 - 2026-10-09 | rewind | 34c39e6 | .30 PPSA88285 | pass: paused H264-toHEVC change expires retired timeline; resume/rewind/live and clean teardown; 117 core/21 media checks | ../psiptv/results/roadmap/console-46/result.json | timestamp reset/subtitle/WebM coverage
 
 - 2026-10-09 | rewind | 2a58893 | .30 PPSA88286 | pass: HLS clock reset, pause/seek/live; 22 media/13 remote checks | ../psiptv/results/roadmap/console-47/result.json | WebM/native captions
+
+- 2026-10-09 | rewind | 3545a66 | .30 PPSA88287 | pass: VP9 WebM pause/seek/live, 119 core sanitizer checks | ../psiptv/results/roadmap/console-48/result.json | field-rate deinterlacing
