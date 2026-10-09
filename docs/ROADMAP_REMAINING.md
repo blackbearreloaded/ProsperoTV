@@ -542,3 +542,5 @@ synchronization, switching latency and resource cost remain pending.
 - 2026-10-09 | rewind | 08b8a46 | .30 PPSA88279 | pass: 4K seek refill; video gaps124->1, late122->1, clean teardown | ../psiptv/results/roadmap/console-37/result.json | formats/metadata/sync
 
 - 2026-10-09 | rewind | 6eb86e1 | host/PS5 build | partial-pass: programme tracks follow historical video PES; 112 core/21 media checks | ../psiptv/results/roadmap/timeshift-programme-result.json | native tracks
+
+- 2026-10-09 | rewind | 72a1254 | .30 PPSA88280 | failed: programme tracks change before queued video; clean teardown | ../psiptv/results/roadmap/console-38/result.json | preserve queued programme media
