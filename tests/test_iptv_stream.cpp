@@ -297,6 +297,28 @@ std::vector<std::uint8_t> TrackPmt(const std::vector<iptv_stream_audio_track_t> 
     return section;
 }
 
+std::vector<std::uint8_t> ProgrammePmt(const std::vector<iptv_stream_audio_track_t> &audio,
+                                       const std::vector<iptv_stream_subtitle_track_t> &subtitles)
+{
+    auto pmt = TrackPmt(audio);
+    pmt.resize(pmt.size() - 4);
+    for (const auto &track : subtitles)
+        pmt.insert(pmt.end(), {6, static_cast<std::uint8_t>(0xe0 | (track.pid >> 8)),
+                               static_cast<std::uint8_t>(track.pid), 0xf0, 10, 0x59, 8,
+                               static_cast<std::uint8_t>(track.language[0]),
+                               static_cast<std::uint8_t>(track.language[1]),
+                               static_cast<std::uint8_t>(track.language[2]), track.subtitling_type,
+                               static_cast<std::uint8_t>(track.composition_page >> 8),
+                               static_cast<std::uint8_t>(track.composition_page),
+                               static_cast<std::uint8_t>(track.ancillary_page >> 8),
+                               static_cast<std::uint8_t>(track.ancillary_page)});
+    const auto length = pmt.size() + 1;
+    pmt[1] = static_cast<std::uint8_t>(0xb0 | (length >> 8));
+    pmt[2] = static_cast<std::uint8_t>(length);
+    AppendCrc(&pmt);
+    return pmt;
+}
+
 class AudioSelectionTest : public testing::Test
 {
   protected:
@@ -382,24 +404,7 @@ class SubtitleStreamTest : public AudioSelectionTest
   protected:
     int subtitles(const std::vector<iptv_stream_subtitle_track_t> &tracks, bool start = false)
     {
-        auto pmt = TrackPmt({{0x111, 0x0f, "eng", 0}});
-        pmt.resize(pmt.size() - 4);
-        for (const auto &track : tracks)
-            pmt.insert(pmt.end(),
-                       {6, static_cast<std::uint8_t>(0xe0 | (track.pid >> 8)),
-                        static_cast<std::uint8_t>(track.pid), 0xf0, 10, 0x59, 8,
-                        static_cast<std::uint8_t>(track.language[0]),
-                        static_cast<std::uint8_t>(track.language[1]),
-                        static_cast<std::uint8_t>(track.language[2]), track.subtitling_type,
-                        static_cast<std::uint8_t>(track.composition_page >> 8),
-                        static_cast<std::uint8_t>(track.composition_page),
-                        static_cast<std::uint8_t>(track.ancillary_page >> 8),
-                        static_cast<std::uint8_t>(track.ancillary_page)});
-        const auto length = pmt.size() + 1;
-        pmt[1] = static_cast<std::uint8_t>(0xb0 | (length >> 8));
-        pmt[2] = static_cast<std::uint8_t>(length);
-        AppendCrc(&pmt);
-        return section(pmt, start);
+        return section(ProgrammePmt({{0x111, 0x0f, "eng", 0}}, tracks), start);
     }
     std::vector<std::uint8_t> pes(std::uint64_t pts = 90000)
     {
@@ -970,6 +975,75 @@ int FixturePpsVersion(const std::vector<std::uint8_t> &picture)
     const auto pps = std::find(picture.begin(), picture.end(), 0x68);
     EXPECT_GE(std::distance(pps, picture.end()), 6);
     return std::distance(pps, picture.end()) >= 6 ? pps[5] : -1;
+}
+
+TEST_F(SubtitleStreamTest, HistoryRestoresProgrammeTracksWithoutRetainedTables)
+{
+    iptv::Timeshift history(188 * 32);
+    ASSERT_TRUE(history.enable_replay());
+    auto initial = std::vector<std::uint8_t>{};
+    AppendPacket(&initial, PsiPacket(0, PatSection()));
+    AppendPacket(&initial, PsiPacket(0x100, ProgrammePmt({{0x111, 0x0f, "eng", 0}},
+                                                         {{0x120, 1, 2, "eng", 0x10}})));
+    AppendPacket(&initial, ConfigurationPacket(0, 1, 1));
+    ASSERT_TRUE(history.append(initial.data(), initial.size()));
+    ASSERT_EQ(iptv_stream_push(&session, initial.data(), initial.size()), IPTV_STREAM_OK);
+    auto changed = std::vector<std::uint8_t>{};
+    auto pending = ConfigurationPacket(1, 1, 2);
+    const auto length = (unsigned(pending[8]) * 256 + pending[9]) - 12;
+    pending[8] = length >> 8;
+    pending[9] = length & 255;
+    std::fill(pending.begin() + 10 + length, pending.end(), 0xff);
+    AppendPacket(&changed, pending); // Old picture completes after the new PMT arrives.
+    auto table =
+        PsiPacket(0x100, ProgrammePmt({{0x113, 0x0f, "jpn", 0}}, {{0x130, 3, 4, "fra", 0x10}}));
+    table[3] = (table[3] & 0xf0) | 1;
+    AppendPacket(&changed, table);
+    // Video settings stay identical: track changes alone must be retained.
+    for (unsigned second = 3; second <= 10; ++second)
+        AppendPacket(&changed, StampedPacket(H264Packet((second - 1) & 15, false), second * 90000));
+    ASSERT_TRUE(history.append(changed.data(), changed.size()));
+    for (const unsigned second : {8u, 7u, 1u, 8u})
+    {
+        const auto position = history.seek(second * 1000000);
+        ASSERT_TRUE(position);
+        ASSERT_EQ(position->pts_us, (second == 1 ? 1u : second - 5) * 1000000u);
+        ASSERT_EQ(history.reposition(&session, *position), IPTV_STREAM_OK);
+        std::array<iptv_stream_audio_track_t, 2> tracks{};
+        std::uint32_t selected = 0;
+        ASSERT_EQ(iptv_stream_audio_tracks(&session, tracks.data(), tracks.size(), &selected), 1u);
+        const bool original = second != 8;
+        EXPECT_EQ(selected, original ? 0x111u : 0x113u);
+        EXPECT_STREQ(tracks[0].language, original ? "eng" : "jpn");
+        ASSERT_EQ(fake.subtitle_tracks.size(), 1u);
+        EXPECT_EQ(fake.subtitle_tracks[0].pid, original ? 0x120u : 0x130u);
+        EXPECT_EQ(fake.subtitle_tracks[0].composition_page, original ? 1u : 3u);
+        EXPECT_STREQ(fake.subtitle_tracks[0].language, original ? "eng" : "fra");
+        std::vector<std::uint8_t> pictures;
+        for (unsigned i = 0; i < 3; ++i)
+            AppendPacket(&pictures, StampedPacket(H264Packet(i, false),
+                                                  (position->pts_us / 1000000 + i) * 90000));
+        ASSERT_EQ(iptv_stream_push(&session, pictures.data(), pictures.size()), IPTV_STREAM_OK);
+        const auto played_audio = fake.audios;
+        ASSERT_EQ(audio(selected, 0), IPTV_STREAM_OK);
+        EXPECT_GT(fake.audios, played_audio);
+        const auto subtitle_pid = original ? 0x120u : 0x130u;
+        ASSERT_EQ(packet(subtitle_pid, 0, true, pes()), IPTV_STREAM_OK);
+        ASSERT_FALSE(fake.captions.empty());
+        EXPECT_EQ(fake.captions.back().track.pid, subtitle_pid);
+    }
+    for (unsigned second = 11; second <= 60; ++second)
+    {
+        const auto next = StampedPacket(H264Packet((second - 1) & 15, false), second * 90000);
+        ASSERT_TRUE(history.append(next.data(), next.size()));
+    }
+    ASSERT_GT(history.range().begin, initial.size() + 2 * 188);
+    ASSERT_EQ(iptv_stream_select_audio(&session, 0), IPTV_STREAM_OK);
+    const auto retained = history.seek(history.range().first_pts_us);
+    ASSERT_TRUE(retained);
+    ASSERT_EQ(history.reposition(&session, *retained), IPTV_STREAM_OK);
+    EXPECT_EQ(session.telemetry.format.audio_pid, 0u);
+    EXPECT_EQ(fake.subtitle_tracks[0].pid, 0x130u);
 }
 
 TEST_F(AudioSelectionTest, DownloadConfigurationSurvivesUnreadTransportExpiry)
