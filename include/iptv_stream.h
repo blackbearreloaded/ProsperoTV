@@ -204,6 +204,10 @@ int iptv_stream_reposition_from(iptv_stream_session_t *session, const iptv_strea
 /* Earliest replay timestamp after bounded configuration history expires.
  * Owner-thread only; older repositions are rejected without resetting playback. */
 uint64_t iptv_stream_replay_start(const iptv_stream_session_t *session);
+/* Configuration-backed interval for an independent download parser. Returns
+ * one when available, zero otherwise. Ownership rules match replay_start(). */
+int iptv_stream_replay_range(const iptv_stream_session_t *session, uint64_t *first_pts_us,
+                             uint64_t *last_pts_us);
 /* Like push(), these run on the stream owner's thread, not concurrently.
  * Returns the total available count, copying at most capacity entries. */
 size_t iptv_stream_audio_tracks(const iptv_stream_session_t *session,

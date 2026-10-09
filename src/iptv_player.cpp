@@ -802,10 +802,6 @@ class StreamRunner
     {
         return paused_.load(std::memory_order_acquire);
     }
-    bool Seeking() const
-    {
-        return scanning_.load(std::memory_order_acquire);
-    }
     void SetStopAfter(unsigned milliseconds)
     {
         stop_deadline_usec_ = 0;
@@ -1317,15 +1313,20 @@ class StreamRunner
         // older seek whose parser reset was still in flight. Use the same owner
         // lock as UpdateLiveControls through dequeue, reset and cursor change.
         std::lock_guard control_lock(control_mutex_);
-        history_->discard_before(iptv_stream_replay_start(&session_), history_generation_);
         const auto range = history_->range();
+        if (range.replay_result != IPTV_STREAM_OK)
+        {
+            read_ahead_result_.store(range.replay_result, std::memory_order_release);
+            return false;
+        }
         std::optional<iptv::Timeshift::Position> position;
         {
             std::lock_guard lock(history_request_mutex_);
             position.swap(history_request_);
         }
         if (position &&
-            (position->offset < range.begin || position->generation != range.generation))
+            (position->offset < range.begin || position->generation != range.generation ||
+             position->pts_us < range.first_pts_us))
             position = history_->seek(range.first_pts_us);
         if (Paused() && !position)
         {
@@ -1338,53 +1339,31 @@ class StreamRunner
         {
             if (!position)
                 position = history_->seek(range.first_pts_us);
-            if (!position && range.begin != range.end)
-                position = iptv::Timeshift::Position{range.begin,
-                                                     history_generation_ == range.generation
-                                                         ? iptv_stream_replay_start(&session_)
-                                                         : 0,
-                                                     range.generation};
             history_expired_.store(true, std::memory_order_release);
+            if (!position)
+            {
+                // Wait for complete configuration metadata in the new retained
+                // window. Guessing old settings here corrupts headerless video.
+                chunk = 0;
+                return true;
+            }
         }
         if (position)
         {
             iptv_native_backend_request_reposition(&adapter_.backend);
             const bool same_timeline = history_generation_ == position->generation;
-            if (same_timeline && read >= range.begin && read < position->offset)
+            adapter_.preserve_subtitles = same_timeline;
+            const int result = history_->reposition(&session_, *position);
+            adapter_.preserve_subtitles = false;
+            if (result == IPTV_STREAM_INVALID_ARGUMENT)
             {
-                // Advance the existing parser through skipped bytes to discover
-                // parameter changes. Bound each step so input/Stop can intervene.
-                const auto limit = static_cast<std::size_t>(
-                    std::min<std::uint64_t>(kReadBytes, position->offset - read));
-                const auto copied = history_->read(read, read_ahead_buffer_, limit);
-                const bool usable = copied.bytes && copied.generation == position->generation;
-                scanning_.store(usable, std::memory_order_release);
-                if (usable)
-                {
-                    const bool finish = read + copied.bytes == position->offset;
-                    const int result =
-                        iptv_stream_scan(&session_, read_ahead_buffer_, copied.bytes, finish);
-                    if (result != IPTV_STREAM_OK)
-                    {
-                        scanning_.store(false, std::memory_order_release);
-                        read_ahead_result_.store(result, std::memory_order_release);
-                        return false;
-                    }
-                    read += copied.bytes;
-                    read_ahead_read_.store(read, std::memory_order_release);
-                }
-                // The next iteration checks expiry/new timeline and any newer
-                // request before resetting the decoder at the chosen position.
+                // The producer may have expired this position after our range
+                // snapshot. Re-evaluate it rather than resetting with old data.
                 std::lock_guard lock(history_request_mutex_);
                 history_request_ = *position;
                 chunk = 0;
                 return true;
             }
-            scanning_.store(false, std::memory_order_release);
-            adapter_.preserve_subtitles = same_timeline;
-            const int result = same_timeline ? iptv_stream_reposition(&session_, position->pts_us)
-                                             : iptv_stream_discontinuity(&session_);
-            adapter_.preserve_subtitles = false;
             if (result != IPTV_STREAM_OK)
             {
                 read_ahead_result_.store(result, std::memory_order_release);
@@ -1397,8 +1376,6 @@ class StreamRunner
             history_generation_ = position->generation;
             read_ahead_read_.store(read, std::memory_order_release);
         }
-        else
-            scanning_.store(false, std::memory_order_release);
         const auto copied = history_->read(read, read_ahead_buffer_, kReadBytes);
         chunk = copied.generation == history_generation_ ? copied.bytes : 0;
         // A producer may have advanced the retention boundary since the range
@@ -1417,7 +1394,7 @@ class StreamRunner
         if (live_)
         {
             history_.reset(new (std::nothrow) iptv::Timeshift());
-            if (history_ && !history_->available())
+            if (history_ && (!history_->available() || !history_->enable_replay()))
                 history_.reset();
         }
         read_ahead_buffer_ = new (std::nothrow) std::uint8_t[history_ ? kReadBytes : kReadAheadBytes];
@@ -1537,7 +1514,6 @@ class StreamRunner
         read_ahead_buffer_ = nullptr;
         history_.reset();
         history_request_.reset();
-        scanning_.store(false, std::memory_order_release);
         history_generation_ = 0;
         paused_.store(false, std::memory_order_release);
         history_expired_.store(false, std::memory_order_release);
@@ -1580,7 +1556,6 @@ class StreamRunner
     std::atomic<bool> paused_{false}, history_expired_{false};
     std::mutex history_request_mutex_;
     std::optional<iptv::Timeshift::Position> history_request_;
-    std::atomic<bool> scanning_{false};
     std::atomic<std::uint64_t> history_generation_{0};
     std::uint8_t *read_ahead_buffer_ = nullptr;
     void *read_ahead_thread_ = nullptr;
@@ -1788,7 +1763,7 @@ FeedResult FeedRequest(iptv::http::StreamRequest *request, StreamRunner *runner,
         }
         const std::uint64_t presented = runner->PresentedFrames();
         const std::uint64_t now = MonotonicUsec();
-        if (presented > last_presented || runner->Paused() || runner->Seeking())
+        if (presented > last_presented || runner->Paused())
         {
             last_presented = presented;
             last_progress = now;
@@ -1853,7 +1828,7 @@ int RunWebm(iptv::http::StreamRequest *request, StreamRunner *runner,
         result = iptv_webm_push(&parser, read_buffer, static_cast<std::size_t>(read));
         const std::uint64_t presented = runner->PresentedFrames();
         const std::uint64_t now = MonotonicUsec();
-        if (presented > last_presented || runner->Paused() || runner->Seeking())
+        if (presented > last_presented || runner->Paused())
         {
             last_presented = presented;
             last_progress = now;
@@ -2056,7 +2031,7 @@ int RunHlsMedia(const char *source_url, StreamRunner *runner, std::uint8_t *read
             return finished == IPTV_STREAM_OK && runner->HasPresentedVideo() ? 0 : -1;
         }
         const std::uint64_t presented = runner->PresentedFrames();
-        if (presented > last_presented || runner->Paused() || runner->Seeking())
+        if (presented > last_presented || runner->Paused())
         {
             stale_refreshes = 0;
             last_presented = presented;

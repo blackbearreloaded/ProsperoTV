@@ -2,6 +2,7 @@
 // Copyright (C) 2026 BlackBearReloaded
 // SPDX-License-Identifier: GPL-3.0-or-later
 #pragma once
+#include "iptv_stream.h"
 #include <cstddef>
 #include <cstdint>
 #include <deque>
@@ -24,6 +25,7 @@ class Timeshift
     {
         std::uint64_t begin = 0, end = 0, first_pts_us = 0, last_pts_us = 0, generation = 0;
         bool timed = false;
+        int replay_result = IPTV_STREAM_OK;
     };
     enum class ReadStatus
     {
@@ -38,6 +40,13 @@ class Timeshift
         std::uint64_t generation = 0; // Captured under the same lock as the byte copy.
     };
     explicit Timeshift(std::size_t bytes = max_bytes, std::uint64_t duration_us = max_duration_us);
+    ~Timeshift();
+    // Enable before the first append. Settings are parsed on download, with no
+    // decoder callbacks, so unread headers survive byte-ring expiry.
+    bool enable_replay();
+    // Owner-thread only, after interrupting native submission. The history lock
+    // protects validation and copying through the playback reset callback.
+    int reposition(iptv_stream_session_t *playback, const Position &position);
     bool available() const
     {
         return storage_ != nullptr;
@@ -62,6 +71,7 @@ class Timeshift
     };
     void index();
     void trim();
+    Range range_locked() const;
     void packet(const std::uint8_t *data, std::uint64_t offset);
     void copy(std::uint64_t offset, std::uint8_t *out, std::size_t bytes) const;
     struct Unmap
@@ -78,6 +88,9 @@ class Timeshift
     std::uint64_t raw_ticks_ = 0, latest_us_ = 0;
     bool synchronized_ = false, have_ticks_ = false;
     std::deque<Mark> marks_;
+    iptv_stream_session_t metadata_{};
+    bool replay_enabled_ = false;
+    int replay_result_ = IPTV_STREAM_OK;
 };
 
 // Controls keep their requested position until a picture from the new decoder

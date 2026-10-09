@@ -1064,6 +1064,95 @@ TEST_F(AudioSelectionTest, DownloadReplayRejectsUnavailableHistoryBeforeResettin
     EXPECT_EQ(fake.discontinuities, 1u);
 }
 
+TEST_F(AudioSelectionTest, LiveHistoryRestoresUnreadSettingsAfterOverwriteAndProviderReset)
+{
+    iptv::Timeshift history(188 * 16);
+    ASSERT_TRUE(history.enable_replay());
+    EXPECT_FALSE(history.enable_replay());
+    const auto first = StreamBytes(0x0f, ConfigurationPacket(0, 1, 1));
+    ASSERT_TRUE(history.append(first.data(), first.size()));
+    ASSERT_EQ(iptv_stream_push(&session, first.data(), first.size()), IPTV_STREAM_OK);
+    const auto old = history.seek(1000000);
+    ASSERT_TRUE(old);
+    std::vector<std::uint8_t> unread;
+    AppendPacket(&unread, ConfigurationPacket(1, 2, 2));
+    for (unsigned second = 3; second <= 45; ++second)
+        AppendPacket(&unread, StampedPacket(H264Packet((second - 1) & 15, false), second * 90000));
+    // One append larger than the entire ring must still retain the settings
+    // from its overwritten prefix, just like a series of network reads.
+    ASSERT_TRUE(history.append(unread.data(), unread.size()));
+    ASSERT_GT(history.range().begin, first.size() + 188);
+    ASSERT_EQ(history.range().replay_result, IPTV_STREAM_OK);
+    EXPECT_EQ(fake.videos, 1u);
+    EXPECT_EQ(history.reposition(&session, *old), IPTV_STREAM_INVALID_ARGUMENT);
+    EXPECT_EQ(fake.discontinuities, 0u);
+    auto resume = history.seek(history.range().first_pts_us);
+    ASSERT_TRUE(resume);
+    ASSERT_EQ(history.reposition(&session, *resume), IPTV_STREAM_OK);
+    std::array<std::uint8_t, 188 * 16> bytes{};
+    auto retained = history.read(resume->offset, bytes.data(), bytes.size());
+    ASSERT_GT(retained.bytes, 0u);
+    ASSERT_EQ(iptv_stream_push(&session, bytes.data(), retained.bytes), IPTV_STREAM_OK);
+    ASSERT_GT(fake.video_packets.size(), 1u);
+    EXPECT_EQ(FixturePpsVersion(fake.video_packets[1]), 0x82);
+
+    for (const bool explicit_reset : {false, true})
+    {
+        const auto generation = history.range().generation;
+        const auto previous = *resume;
+        const unsigned version = explicit_reset ? 4 : 3;
+        if (explicit_reset)
+        {
+            history.discontinuity();
+            EXPECT_FALSE(history.range().timed);
+            EXPECT_FALSE(history.seek(1000000));
+        }
+        std::vector<std::uint8_t> reset = StreamBytes(0x0f, ConfigurationPacket(0, version, 1));
+        AppendPacket(&reset, StampedPacket(H264Packet(1, false), 2 * 90000));
+        AppendPacket(&reset, StampedPacket(H264Packet(2, false), 3 * 90000));
+        ASSERT_TRUE(history.append(reset.data(), reset.size()));
+        EXPECT_EQ(history.range().generation, generation + 1);
+        ASSERT_EQ(history.range().replay_result, IPTV_STREAM_OK);
+        EXPECT_EQ(history.reposition(&session, previous), IPTV_STREAM_INVALID_ARGUMENT);
+        resume = history.seek(1000000);
+        ASSERT_TRUE(resume);
+        ASSERT_EQ(history.reposition(&session, *resume), IPTV_STREAM_OK);
+        retained = history.read(resume->offset, bytes.data(), bytes.size());
+        const auto before = fake.video_packets.size();
+        ASSERT_EQ(iptv_stream_push(&session, bytes.data(), retained.bytes), IPTV_STREAM_OK);
+        ASSERT_GT(fake.video_packets.size(), before);
+        EXPECT_EQ(FixturePpsVersion(fake.video_packets[before]), 0x80 | version);
+    }
+}
+
+TEST_F(AudioSelectionTest, LiveHistoryDoesNotSeekPastTheCompletedMetadata)
+{
+    iptv::Timeshift history(188 * 32);
+    ASSERT_TRUE(history.enable_replay());
+    EXPECT_FALSE(history.range().timed);
+    const auto first = StreamBytes(0x0f, ConfigurationPacket(0, 1, 1));
+    ASSERT_TRUE(history.append(first.data(), first.size()));
+    auto pending = ConfigurationPacket(1, 2, 20);
+    const auto length = (unsigned(pending[8]) * 256 + pending[9]) - 12;
+    pending[8] = length >> 8;
+    pending[9] = length & 255;
+    std::fill(pending.begin() + 10 + length, pending.end(), 0xff);
+    ASSERT_TRUE(history.append(pending.data(), pending.size()));
+    EXPECT_EQ(history.range().last_pts_us, 1000000u);
+    auto position = history.seek(UINT64_MAX);
+    ASSERT_TRUE(position);
+    EXPECT_EQ(position->pts_us, 1000000u);
+    const auto next = StampedPacket(H264Packet(2, false), 21 * 90000);
+    ASSERT_TRUE(history.append(next.data(), next.size()));
+    EXPECT_GE(history.range().last_pts_us, 20000000u);
+    const auto following = StampedPacket(H264Packet(3, false), 26 * 90000);
+    ASSERT_TRUE(history.append(following.data(), following.size()));
+    position = history.seek(UINT64_MAX);
+    ASSERT_TRUE(position);
+    EXPECT_GE(position->pts_us, 20000000u);
+    EXPECT_EQ(fake.videos, 0u);
+}
+
 TEST_F(AudioSelectionTest, RepeatedSeeksRestoreHistoricalParameterIdsInBothDirections)
 {
     const auto first = StreamBytes(0x0f, ConfigurationPacket(0, 1, 1));

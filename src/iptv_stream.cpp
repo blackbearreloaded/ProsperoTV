@@ -2551,6 +2551,18 @@ int iptv_stream_reposition(iptv_stream_session_t *session, uint64_t pts_us)
     return iptv_stream_reposition_from(session, session, pts_us);
 }
 
+int iptv_stream_replay_range(const iptv_stream_session_t *session, uint64_t *first_pts_us,
+                             uint64_t *last_pts_us)
+{
+    const auto *impl =
+        valid_session(session) ? static_cast<const impl_t *>(session->_impl) : nullptr;
+    if (!impl || !impl->video_configurations || !first_pts_us || !last_pts_us)
+        return 0;
+    *first_pts_us = std::max(impl->video_history_floor, impl->video_configurations->pts_us);
+    *last_pts_us = impl->video_high_water;
+    return *first_pts_us <= *last_pts_us;
+}
+
 int iptv_stream_reposition_from(iptv_stream_session_t *session, const iptv_stream_session_t *source,
                                 uint64_t pts_us)
 {
@@ -2567,9 +2579,10 @@ int iptv_stream_reposition_from(iptv_stream_session_t *session, const iptv_strea
     {
         if (!history->video_configurations)
             return IPTV_STREAM_INVALID_STATE;
-        if (pts_us < history->video_configurations->pts_us || pts_us > history->video_high_water ||
-            (impl->pmt_seen && !same_video_program(&impl->format, &history->format)))
+        if (pts_us < history->video_configurations->pts_us || pts_us > history->video_high_water)
             return IPTV_STREAM_INVALID_ARGUMENT;
+        if (impl->pmt_seen && !same_video_program(&impl->format, &history->format))
+            return IPTV_STREAM_UNSUPPORTED_FORMAT;
     }
     video_parameters_t restored;
     size_t restored_bytes = 0;
