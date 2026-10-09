@@ -47,8 +47,9 @@ reported explicitly.
 History storage now uses its own bounded anonymous mapping instead of allocating
 512 MiB from the application's 512 MiB heap. Its lifetime remains scoped to the
 history owner, and allocation failure leaves it unavailable. All six existing
-history tests pass under ASan/UBSan with the mapped storage. Native build and
-foreground integration remain pending for this change.
+history tests pass under ASan/UBSan with the mapped storage, and the native
+application build passes. Foreground integration and hardware acceptance remain
+pending for this change.
 
 Native control primitives pause both workers, redraw the frozen picture for the
 overlay, and adjust video pacing on resume. Repositioning releases submissions
@@ -68,10 +69,13 @@ The transport reposition API now restores the retained video's extended clock
 and resets parser buffers and subtitle timing. A regression replays forwards and
 backwards across two timestamp wraps, including an exact wrap, and checks the
 video, audio and subtitle timestamps without reopening the decoder. All 95 core
-tests pass under ASan/UBSan on the VOD-fixes baseline. Player calls to this API,
+tests pass under ASan/UBSan on the VOD-fixes baseline. The native application
+also compiles and links with the reposition API. Player calls to this API,
 decoder parameter replay, subtitle history,
 controls, watchdog handling and console acceptance remain to be implemented or
 validated before this roadmap item is complete.
+
+- 2026-10-08 | rewind | 4c63161 | host/PS5 build | partial-pass: mapped history and clock replay | ../psiptv/results/roadmap/timeshift-clock-native-result.json | integrate foreground controls
 
 ## Source additions
 
