@@ -429,6 +429,12 @@ bool run_menu(ptv::Model &model, ptv::Settings *settings, const LastPlayback &la
                                            (TV_DEBUG_TRACE != 0 ? " debug trace" : ""));
         ptv::App &app = *owned;
         app.set_profile_name(g_profile_name);
+        // Normal applications see USB mounts in their own filesystem namespace.
+        const std::string usb_root = tv::storage::elevated() ? "/mnt" : "";
+        app.set_usb_root(usb_root);
+        if (TV_DEV_SCRIPTS != 0)
+            say("[TV] USB namespace root=%s drives=%zu", usb_root.empty() ? "/" : usb_root.c_str(),
+                ptv::usb_drives(usb_root).size());
         if (!notice.empty())
             app.remote_notice(notice.c_str());
         if (TV_DEV_SCRIPTS != 0 && !tv::storage::elevated())
