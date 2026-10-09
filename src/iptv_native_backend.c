@@ -200,11 +200,8 @@ typedef struct native_video_mode
 } native_video_mode_t;
 
 static const native_video_mode_t video_modes[] = {
-    /* H.264 uses these rows for level and geometry limits. VideoDec2 receives
-     * the exact in-band profile below so interlaced Main streams are not
-     * opened as High-profile sessions. */
-    /* AVC field pictures require a whole pair of 16-line macroblock rows. */
-    {IPTV_NATIVE_CODEC_H264, 0, 1, IPTV_NATIVE_H264_PROFILE_HIGH, 41, 1280, 736},
+    /* AVC High includes the supported Main and Baseline decoding tools. */
+    {IPTV_NATIVE_CODEC_H264, 0, 1, IPTV_NATIVE_H264_PROFILE_HIGH, 41, 1280, 720},
     {IPTV_NATIVE_CODEC_H264, 0, 1, IPTV_NATIVE_H264_PROFILE_HIGH, 51, 1920, 1088},
     {IPTV_NATIVE_CODEC_H264, 0, 1, IPTV_NATIVE_H264_PROFILE_HIGH, 51, 2560, 1440},
     {IPTV_NATIVE_CODEC_H264, 0, 1, IPTV_NATIVE_H264_PROFILE_HIGH, 52, 3840, 2176},
@@ -1205,7 +1202,7 @@ static int32_t initialize_video(backend_state_t *state)
     decoder_config.size = sizeof(decoder_config);
     decoder_config.resource_type = 1;
     decoder_config.codec_type = state->mode->decoder_codec;
-    decoder_config.profile = state->config.codec != IPTV_NATIVE_CODEC_VP9_PROFILE0
+    decoder_config.profile = state->config.codec == IPTV_NATIVE_CODEC_HEVC
                                  ? state->config.profile
                                  : state->mode->decoder_profile;
     decoder_config.max_level = state->mode->max_level;

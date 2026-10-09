@@ -557,3 +557,5 @@ synchronization, switching latency and resource cost remain pending.
 - 2026-10-09 | rewind | 3545a66 | .30 PPSA88287 | pass: VP9 WebM pause/seek/live, 119 core sanitizer checks | ../psiptv/results/roadmap/console-48/result.json | field-rate deinterlacing
 
 - 2026-10-09 | fields | 750163a | .30 PPSA88288 | failed: first H264 picture rejected 0x811D0303; healthy teardown | ../psiptv/results/roadmap/console-49/result.json | framing/configuration
+
+- 2026-10-09 | fields | 827f30b | .30 PPSA88289 | failed: aligned height unchanged;3750 host frames identical | ../psiptv/results/roadmap/console-50/result.json | AVC profile ceiling
