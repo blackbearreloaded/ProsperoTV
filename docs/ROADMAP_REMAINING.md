@@ -123,7 +123,7 @@ The configuration tests replay both directions across real H.264 and HEVC setup
 changes, strip in-band headers, and compare pixels decoded by fresh decoders.
 They also cover bounded retention, rejected expired seeks, untimed changes and
 provider resets. This applies to compatible decoder formats: resolution/profile
-changes still follow the existing reopen path.
+changes still require decoder reopen work.
 All 103 core and 21 media/subtitle sanitizer tests and the application-only PS5
 build pass at 289d250. No native configuration-replay acceptance is claimed.
 
@@ -176,6 +176,22 @@ decoded audio frames and clean teardown. Three audio/three video queue gaps
 remain; audible impact and A/V synchronization are not proven by these checks.
 Evidence: `../psiptv/results/roadmap/console-34/result.json`.
 
+Download-history replay foundation (8eb5e7e): a playback parser can now restore
+configuration from an independent download parser, without retaining pointers
+into its lifetime. Missing, expired and not-yet-scanned positions are rejected
+before playback resets. A successful restore replaces stale local configuration
+history; older positions still require the download parser's history.
+The regression overwrites unread configuration headers in a small transport ring
+while playback remains paused, then resumes headerless pictures with the correct
+configuration. All 107 core checks pass with explicit ASan/UBSan flags. The real
+H.264/HEVC replay test also passes under sanitizers, comparing decoded pixels
+across both local and independent-parser restoration.
+The application-only PS5 build passes at 8eb5e7e; no new console package was
+installed. Evidence: `../psiptv/results/roadmap/timeshift-download-result.json`.
+This API is not yet connected to StreamRunner's download loop. Producer/consumer
+ordering, provider generations and scan-boundary readiness must be integrated
+before the unread-expiry bug can be considered fixed in the application.
+
 - 2026-10-08 | rewind | 4c63161 | host/PS5 build | partial-pass: mapped history and clock replay | ../psiptv/results/roadmap/timeshift-clock-native-result.json | integrate foreground controls
 - 2026-10-08 | rewind | ec377c9 | host/PS5 build | partial-pass: foreground controls | ../psiptv/results/roadmap/timeshift-player-result.json | decoder/subtitle replay, native acceptance
 - 2026-10-08 | rewind | 7ef62d8 | host/PS5 build | partial-pass: parameter replay | ../psiptv/results/roadmap/timeshift-parameters-result.json | configuration versions, native acceptance
@@ -185,6 +201,7 @@ Evidence: `../psiptv/results/roadmap/console-34/result.json`.
 - 2026-10-08 | rewind | 1c8e33e | host/PS5 build | partial-pass: forward configuration scan | ../psiptv/results/roadmap/timeshift-scan-result.json | native acceptance and remaining formats
 - 2026-10-08 | rewind | c6e6afb | .30 PPSA88275 | partial-pass: native pause/seek/live controls | ../psiptv/results/roadmap/console-33/result.json | sync, expiry and remaining formats
 - 2026-10-08 | rewind | f442b03 | .30 PPSA88276 | partial-pass: native AAC seek reset | ../psiptv/results/roadmap/console-34/result.json | timing, expiry and remaining formats
+- 2026-10-08 | rewind | 8eb5e7e | host/PS5 build | partial-pass: independent download configuration replay | ../psiptv/results/roadmap/timeshift-download-result.json | connect producer loop, timeline ordering, native expiry acceptance
 
 ## Source additions
 
