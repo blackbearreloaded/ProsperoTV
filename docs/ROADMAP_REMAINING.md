@@ -528,3 +528,5 @@ The generic runner flagged the settings label `hide_failed=0`; the scoped
 validator checked all four receipts and complete installed hashes independently.
 This proves baseline playback only. Track selection, subtitle visibility and
 synchronization, switching latency and resource cost remain pending.
+
+- 2026-10-09 | rewind | e0c3ec8 | .30 PPSA88277 | partial-pass: download metadata, 330s expiry/recovery, seek/live, clean teardown | ../psiptv/results/roadmap/console-35/result.json | formats/sync
