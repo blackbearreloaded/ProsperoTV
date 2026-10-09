@@ -19,10 +19,11 @@ extern "C"
     int iptv_player_run_with_headers(const char *url, const char *channel_name,
                                      const char *user_agent, const char *referrer,
                                      int reconnect_live);
+    /* Live history is independent of reconnect policy; disable it for VOD/catch-up. */
     int iptv_player_run_authenticated(const char *url, const char *channel_name,
                                       const char *user_agent, const char *referrer,
                                       const char *authorization, const char *credential_origin,
-                                      unsigned stop_after_ms, int reconnect_live);
+                                      unsigned stop_after_ms, int reconnect_live, int live);
     const char *iptv_player_last_error(void);
     /* Monotonic deadline shared across channel switches and URL retries; 0 disables it. */
     void iptv_player_set_sleep_deadline(uint64_t deadline_usec);

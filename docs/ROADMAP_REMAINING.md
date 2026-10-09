@@ -144,8 +144,18 @@ application build pass. The foreground changes
 have a frozen earlier test package (446ca92, PPSA88273). Case31 launched on .30
 and rendered the pairing screen, but its code expired before the playback
 controls connected, leaving native timeshift acceptance inconclusive.
-The configuration changes are not installed,
-and no timeshift PR is open.
+No timeshift PR is open.
+
+Case32 installed the forward-scan build as PPSA88274 and paired successfully.
+The synthetic playlist played for 155 seconds (3,797 presented pictures,
+7,155 decoded audio frames, clean player teardown), but history never became
+available. The channel request used the reconnect flag to enable history;
+custom playlists intentionally do not reconnect automatically. Live requests
+now carry a separate flag, enabled for channel playback and disabled for movies
+and archived programmes. Native timeshift acceptance remains pending for this fix.
+All 146 UI sanitizer tests and the PS5 application-only build pass. The request
+tests distinguish a playlist channel, a movie, a past programme and the currently
+airing programme. Evidence: `../psiptv/results/roadmap/timeshift-live-result.json`.
 
 - 2026-10-08 | rewind | 4c63161 | host/PS5 build | partial-pass: mapped history and clock replay | ../psiptv/results/roadmap/timeshift-clock-native-result.json | integrate foreground controls
 - 2026-10-08 | rewind | ec377c9 | host/PS5 build | partial-pass: foreground controls | ../psiptv/results/roadmap/timeshift-player-result.json | decoder/subtitle replay, native acceptance

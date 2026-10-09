@@ -2486,7 +2486,7 @@ int RunDirect(const char *url, StreamRunner *runner, std::uint8_t *read_buffer, 
 } // namespace
 
 static int RunPlayer(const char *url, const char *channel_name, const char *user_agent,
-                     const char *referrer, unsigned stop_after_ms, bool reconnect_live,
+                     const char *referrer, unsigned stop_after_ms, bool reconnect_live, bool live,
                      const char *authorization = nullptr, const char *credential_origin = nullptr)
 {
     const std::uint64_t playback_started_us = MonotonicUsec();
@@ -2540,7 +2540,7 @@ static int RunPlayer(const char *url, const char *channel_name, const char *user
     else
     {
         runner->SetStopAfter(stop_after_ms);
-        runner->SetLive(reconnect_live);
+        runner->SetLive(live);
 #if IPTV_PROBE
         if (!UrlLooksLikeHls(url) && !UrlLooksLikeWebm(url))
             RunCurlDownloadProbe(url, headers, runner);
@@ -2642,16 +2642,16 @@ static int RunPlayer(const char *url, const char *channel_name, const char *user
 int iptv_player_run_with_headers(const char *url, const char *channel_name, const char *user_agent,
                                  const char *referrer, int reconnect_live)
 {
-    return RunPlayer(url, channel_name, user_agent, referrer, 0, reconnect_live != 0);
+    return RunPlayer(url, channel_name, user_agent, referrer, 0, reconnect_live != 0, true);
 }
 
 int iptv_player_run_authenticated(const char *url, const char *channel_name, const char *user_agent,
                                   const char *referrer, const char *authorization,
                                   const char *credential_origin, unsigned stop_after_ms,
-                                  int reconnect_live)
+                                  int reconnect_live, int live)
 {
     return RunPlayer(url, channel_name, user_agent, referrer, stop_after_ms, reconnect_live != 0,
-                     authorization, credential_origin);
+                     live != 0, authorization, credential_origin);
 }
 
 const char *iptv_player_last_error(void)
@@ -2757,5 +2757,5 @@ int iptv_player_run(const char *url, const char *channel_name)
 
 int iptv_player_run_controlled(const char *url, const char *channel_name, unsigned stop_after_ms)
 {
-    return RunPlayer(url, channel_name, nullptr, nullptr, stop_after_ms, false);
+    return RunPlayer(url, channel_name, nullptr, nullptr, stop_after_ms, false, false);
 }

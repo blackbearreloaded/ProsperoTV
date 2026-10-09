@@ -883,7 +883,7 @@ PlaybackOutcome play_candidates(const ptv::PlayRequest &request, unsigned stop_a
             request.referrer.empty() ? nullptr : request.referrer.c_str(),
             request.authorization.empty() ? nullptr : request.authorization.c_str(),
             request.credential_origin.empty() ? nullptr : request.credential_origin.c_str(),
-            stop_after_ms, request.reconnect_live ? 1 : 0);
+            stop_after_ms, request.reconnect_live ? 1 : 0, request.live ? 1 : 0);
         if (archive_path != nullptr)
         {
             append_autotest_receipt(archive_path, kLatestReceiptPath);

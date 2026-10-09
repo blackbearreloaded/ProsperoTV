@@ -45,6 +45,7 @@ struct PlayRequest
     std::string authorization, credential_origin;
     std::uint64_t source_id = 0;
     bool reconnect_live = false;
+    bool live = false;
     bool record_channel_result = true;
     PortalCredentials portal;
     std::string portal_command;

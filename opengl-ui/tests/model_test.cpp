@@ -380,6 +380,7 @@ TEST_F(ModelTest, PlayingQueuesTheAddressesAndRemembersTheChannel)
     ASSERT_EQ(request.urls.size(), 1u);
     EXPECT_EQ(request.urls[0], "https://streams.example.invalid/ember/index.m3u8");
     EXPECT_FALSE(request.reconnect_live);
+    EXPECT_TRUE(request.live);
     EXPECT_TRUE(model.is_recent(model.channel(ember)));
     model.close();
 

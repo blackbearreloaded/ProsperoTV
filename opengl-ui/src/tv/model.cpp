@@ -876,6 +876,7 @@ bool Model::play(unsigned catalog_index)
         if (channel.portal_command.empty())
             return false;
     }
+    play_request_.live = true;
     play_request_.reconnect_live = active_source_ == iptv::SourceKind::Xtream ||
                                    active_source_ == iptv::SourceKind::HDHomeRun ||
                                    active_source_ == iptv::SourceKind::Tvheadend;
