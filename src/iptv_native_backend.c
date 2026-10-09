@@ -1220,9 +1220,10 @@ static int32_t initialize_video(backend_state_t *state)
             ? 8
         : state->config.codec == IPTV_NATIVE_CODEC_H264 ? 6
                                                         : 4;
-    /* Broadcast 4K HEVC streams can signal six DPB pictures. Four makes
-     * VideoDec2 reject their first access unit with 0x811D0302. */
-    if (state->config.codec == IPTV_NATIVE_CODEC_HEVC && state->mode->decoder_max_width >= 3840u)
+    /* HEVC at any resolution can need more than four DPB pictures: even
+     * ordinary 1080p x265 signals five. Keep the proven six-picture budget
+     * for preview and foreground decoders, not only the 4K mode. */
+    if (state->config.codec == IPTV_NATIVE_CODEC_HEVC)
         decoder_config.max_dpb_frames = 6;
     decoder_config.pipeline_depth = 1u;
     decoder_config.compute_queue = (uint64_t)state->compute_queue;
