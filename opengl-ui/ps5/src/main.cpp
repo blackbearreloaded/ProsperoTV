@@ -28,6 +28,7 @@
 #include "platform/ps5/system.hpp"
 #include "tv/app.hpp"
 #include "tv/diag.hpp"
+#include "tv/i18n.hpp"
 #include "tv/remote_input.hpp"
 #include "tv_build_options.h"
 #include "tv_dev.hpp"
@@ -66,6 +67,7 @@
 extern "C" int sceKernelUsleep(std::uint32_t microseconds);
 extern "C" int sceSysmoduleLoadModule(std::uint32_t id);
 extern "C" int sceCommonDialogInitialize(void);
+extern "C" int sceSystemServiceParamGetInt(int parameter, int *value);
 extern "C" int sceUserServiceInitialize(void *);
 extern "C" int sceUserServiceGetInitialUser(std::int32_t *);
 extern "C" int sceUserServiceGetUserName(std::int32_t, char *, std::size_t);
@@ -977,6 +979,7 @@ std::int32_t g_decoder_modules[6] = {};
 void trace_header()
 {
     using ptv::diag::event;
+    event("interface language=%s", ptv::interface_language());
     event("######## ProsperoTV diagnostic log: version %s, title %s, built %s %s ########",
           read_content_version(tv::storage::app_file("sce_sys/param.json")).c_str(), TV_TITLE_ID,
           __DATE__, __TIME__);
@@ -1145,6 +1148,11 @@ int main()
     // be asked for while the process has a single thread: nothing above or in
     // it starts one.
     tv::storage::initialize();
+    int language = 1;
+    const int language_result = sceSystemServiceParamGetInt(1, &language);
+    ptv::set_console_language(language_result == 0 ? language : 1);
+    say("[TV] interface language=%s system=%d query=%d", ptv::interface_language(), language,
+        language_result);
     // Keep UserService alive for the title's lifetime. The menu and player
     // attach their controllers to the same initial user and do not own it.
     const int user_service = sceUserServiceInitialize(nullptr);
@@ -1341,21 +1349,30 @@ int main()
                     iptv_player_live_state_t live{};
                     iptv_player_live_state(&live);
                     osd.set_live_state(live);
-                    if (TV_DEV_SCRIPTS != 0 && live.available)
+                    if (TV_DEV_SCRIPTS != 0)
                     {
                         static std::uint64_t last_sample = 0;
                         const auto now = ptv::platform::monotonic_us();
                         if (now - last_sample >= 1000000)
                         {
                             last_sample = now;
-                            say("[TV] live-history first=%llu last=%llu position=%llu paused=%u "
-                                "expired=%u audio=%u audio_track=%u subtitle_track=%u",
-                                static_cast<unsigned long long>(live.first_us),
-                                static_cast<unsigned long long>(live.last_us),
-                                static_cast<unsigned long long>(live.position_us), live.paused,
-                                live.expired, audio.selected_pid,
-                                audio.count ? audio.tracks[0].pid : 0u,
-                                subtitle_state.tracks.empty() ? 0u : subtitle_state.tracks[0].id);
+                            say("[TV] playback-tracks audio=%u count=%u pending=%u result=%d "
+                                "disabled=%u subtitle=%u count=%zu error=%d",
+                                audio.selected_pid, audio.count, audio.pending, audio.result,
+                                audio.disabled, subtitle_state.selected,
+                                subtitle_state.tracks.size(),
+                                static_cast<int>(subtitle_state.error));
+                            if (live.available)
+                                say("[TV] live-history first=%llu last=%llu position=%llu "
+                                    "paused=%u "
+                                    "expired=%u audio=%u audio_track=%u subtitle_track=%u",
+                                    static_cast<unsigned long long>(live.first_us),
+                                    static_cast<unsigned long long>(live.last_us),
+                                    static_cast<unsigned long long>(live.position_us), live.paused,
+                                    live.expired, audio.selected_pid,
+                                    audio.count ? audio.tracks[0].pid : 0u,
+                                    subtitle_state.tracks.empty() ? 0u
+                                                                  : subtitle_state.tracks[0].id);
                         }
                     }
                     const int handled = osd.input(action, ptv::platform::monotonic_us());
@@ -1375,11 +1392,28 @@ int main()
                 {
                     const auto subtitles = iptv::player_subtitles().at(
                         pts <= INT64_MAX ? static_cast<std::int64_t>(pts) : -1);
-                    return static_cast<ptv::PlaybackOsd *>(context)->draw(
-                               surface, bytes, pitch, sh, width, height, depth,
-                               ptv::platform::monotonic_us(), subtitles, hdr)
-                               ? 1
-                               : 0;
+                    const bool drawn = static_cast<ptv::PlaybackOsd *>(context)->draw(
+                        surface, bytes, pitch, sh, width, height, depth,
+                        ptv::platform::monotonic_us(), subtitles, hdr);
+                    if (TV_DEV_SCRIPTS != 0)
+                    {
+                        static std::int64_t last_start = -1;
+                        static std::size_t last_count = 0;
+                        const auto start = subtitles.empty() ? -1 : subtitles.front()->start_us;
+                        if (start != last_start || subtitles.size() != last_count)
+                        {
+                            last_start = start;
+                            last_count = subtitles.size();
+                            say("[TV] playback-cues pts=%llu count=%zu start=%lld end=%lld "
+                                "drawn=%d",
+                                static_cast<unsigned long long>(pts), subtitles.size(),
+                                static_cast<long long>(start),
+                                static_cast<long long>(
+                                    subtitles.empty() ? -1 : subtitles.front()->end_us),
+                                drawn ? 1 : 0);
+                        }
+                    }
+                    return drawn ? 1 : 0;
                 },
                 &controls);
         }

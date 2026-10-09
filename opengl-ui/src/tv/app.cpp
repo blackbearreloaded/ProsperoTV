@@ -2,6 +2,7 @@
 // Copyright (C) 2026 BlackBearReloaded
 // SPDX-License-Identifier: GPL-3.0-or-later
 
+#include "tv/i18n.hpp"
 #include "tv/app.hpp"
 
 #include "tv/diag.hpp"
@@ -94,19 +95,19 @@ const char *source_label(iptv::SourceKind source)
     switch (source)
     {
     case iptv::SourceKind::Custom:
-        return "Your playlist";
+        return tr("Your playlist");
     case iptv::SourceKind::Xtream:
-        return "Your account";
+        return tr("Your account");
     case iptv::SourceKind::Portal:
-        return "Your portal";
+        return tr("Your portal");
     case iptv::SourceKind::HDHomeRun:
-        return "Your HDHomeRun tuner";
+        return tr("Your HDHomeRun tuner");
     case iptv::SourceKind::Tvheadend:
-        return "Your Tvheadend server";
+        return tr("Your Tvheadend server");
     case iptv::SourceKind::BuiltIn:
         break;
     }
-    return "iptv-org public list";
+    return tr("iptv-org public list");
 }
 
 } // namespace
@@ -149,8 +150,12 @@ App::App(Model &model, const ui::Fonts &fonts, std::uint32_t glass_texture,
     tabs_.style.track = false;
     tabs_.style.focus_ring = false;
     tabs_.style.on_page = true;
-    tabs_.set_tabs(
-        {{"Live TV"}, {"On demand"}, {"Favorites"}, {"Sources"}, {"Settings"}, {"About"}});
+    tabs_.set_tabs({{tr("Live TV")},
+                    {tr("On demand")},
+                    {tr("Favorites")},
+                    {tr("Sources")},
+                    {tr("Settings")},
+                    {tr("About")}});
     tabs_.set_bounds({420.0f, kHeaderY - 28.0f, 1150.0f, 56.0f});
     tabs_.set_focused(false);
     tabs_.set_active(std::clamp(model.view.tab, 0, kTabCount - 1), true);
@@ -159,54 +164,58 @@ App::App(Model &model, const ui::Fonts &fonts, std::uint32_t glass_texture,
     form_.style.on_page = false;
     form_.style.label_ratio = 0.56f;
     form_.style.control_width = 380.0f;
-    form_.add_header("Interface");
-    form_.add_toggle(kRowMotion, "Reduce motion", settings.reduced_motion).description =
-        "Screens fade instead of sliding, and the sky stands still.";
-    form_.add_toggle(kRowSounds, "Interface sounds", settings.sounds);
-    form_.add_slider(kRowVolume, "Volume", settings.volume, 0, 100, 5).unit = "%";
+    form_.style.on_text = tr("On");
+    form_.style.off_text = tr("Off");
+    form_.add_header(tr("INTERFACE"));
+    form_.add_toggle(kRowMotion, tr("Reduce motion"), settings.reduced_motion).description =
+        tr("Screens fade instead of sliding, and the sky stands still.");
+    form_.add_toggle(kRowSounds, tr("Interface sounds"), settings.sounds);
+    form_.add_slider(kRowVolume, tr("Volume"), settings.volume, 0, 100, 5).unit = "%";
     form_
-        .add_choice(kRowResolution, "Menu sharpness", {"Best for this TV", "1080p"},
+        .add_choice(kRowResolution, tr("Menu sharpness"), {tr("Best for this TV"), "1080p"},
                     settings.resolution)
-        .description = "Takes effect the next time the menu opens. Video keeps its own size.";
-    form_.add_header("Phone remote");
-    form_.add_action(kRowPair, "Pair a phone").chevron = true;
-    form_.add_value(kRowPhones, "Remembered phones", "0");
-    form_.add_action(kRowForgetPhones, "Forget paired phones");
-    form_.add_header("Channel list");
-    form_.add_value(kRowChannels, "Channels", "");
-    form_.add_action(kRowUpdate, "Download it again now");
-    form_.add_toggle(kRowHideFailed, "Hide channels that failed", settings.hide_failed);
-    form_.add_toggle(kRowResume, "Start on the last channel", settings.resume_last);
-    form_.add_toggle(kRowPreview, "Live previews", settings.live_preview).description =
-        "Play the focused channel in the large television, muted, after a moment.";
+        .description = tr("Takes effect the next time the menu opens. Video keeps its own size.");
+    form_.add_header(tr("PHONE REMOTE"));
+    form_.add_action(kRowPair, tr("Pair a phone")).chevron = true;
+    form_.add_value(kRowPhones, tr("Remembered phones"), "0");
+    form_.add_action(kRowForgetPhones, tr("Forget paired phones"));
+    form_.add_header(tr("CHANNEL LIST"));
+    form_.add_value(kRowChannels, tr("Channels"), "");
+    form_.add_action(kRowUpdate, tr("Download it again now"));
+    form_.add_toggle(kRowHideFailed, tr("Hide channels that failed"), settings.hide_failed);
+    form_.add_toggle(kRowResume, tr("Start on the last channel"), settings.resume_last);
+    form_.add_toggle(kRowPreview, tr("Live previews"), settings.live_preview).description =
+        tr("Play the focused channel in the large television, muted, after a moment.");
     model.set_hide_failed(settings.hide_failed);
     form_
-        .add_choice(kRowSleep, "Sleep timer",
-                    {"Off", "15 minutes", "30 minutes", "60 minutes", "90 minutes", "120 minutes"},
+        .add_choice(kRowSleep, tr("Sleep timer"),
+                    {tr("Off"), tr("15 minutes"), tr("30 minutes"), tr("60 minutes"),
+                     tr("90 minutes"), tr("120 minutes")},
                     static_cast<int>(model.sleep_timer.choice()))
         .description =
-        "Stops video after this time, including channel changes. Resets when the app closes.";
-    form_.add_value(kRowSleepRemaining, "Time remaining", "Off");
-    form_.add_header("Troubleshooting");
-    form_.add_toggle(kRowDiagnostics, "Diagnostic log", settings.diagnostics).description =
-        "Records what the app does in logs/debug-trace.txt, to send with a report.";
-    form_.add_action(kRowReport, "Export failure report to USB").description =
-        "Saves the most recent playback failure without account details or stream addresses.";
-    form_.add_header("Household");
-    form_.add_value(kRowProfile, "Console profile", "Current console user").description =
+        tr("Stops video after this time, including channel changes. Resets when the app closes.");
+    form_.add_value(kRowSleepRemaining, tr("Time remaining"), tr("Off"));
+    form_.add_header(tr("TROUBLESHOOTING"));
+    form_.add_toggle(kRowDiagnostics, tr("Diagnostic log"), settings.diagnostics).description =
+        tr("Records what the app does in logs/debug-trace.txt, to send with a report.");
+    form_.add_action(kRowReport, tr("Export failure report to USB")).description =
+        tr("Saves the most recent playback failure without account details or stream addresses.");
+    form_.add_header(tr("HOUSEHOLD"));
+    form_.add_value(kRowProfile, tr("Console profile"), tr("Current console user"))
+        .description = tr(tr(
         "Sources, favorites, history and paired phones belong to the console user who opened the "
-        "app.";
-    form_.add_header("Parental controls");
-    form_.add_value(kRowParentState, "Protection", "");
-    form_.add_action(kRowParentPin, "Set or change parent PIN");
-    form_.add_action(kRowParentUnlock, "Unlock parental controls");
-    form_.add_action(kRowParentLock, "Lock parental controls now");
-    form_.add_action(kRowKids, "Toggle kids-only mode").description =
-        "Only Kids categories and categories you approve. Provider labels should be reviewed.";
-    form_.add_action(kRowRemovePin, "Remove parent PIN");
-    form_.add_header("Backup and restore");
-    form_.add_action(kRowBackup, "Back up to USB");
-    form_.add_action(kRowRestore, "Restore from USB");
+        "app."));
+    form_.add_header(tr("PARENTAL CONTROLS"));
+    form_.add_value(kRowParentState, tr("Protection"), "");
+    form_.add_action(kRowParentPin, tr("Set or change parent PIN"));
+    form_.add_action(kRowParentUnlock, tr("Unlock parental controls"));
+    form_.add_action(kRowParentLock, tr("Lock parental controls now"));
+    form_.add_action(kRowKids, tr("Toggle kids-only mode")).description =
+        tr("Only Kids categories and categories you approve. Provider labels should be reviewed.");
+    form_.add_action(kRowRemovePin, tr("Remove parent PIN"));
+    form_.add_header(tr("BACKUP AND RESTORE"));
+    form_.add_action(kRowBackup, tr("Back up to USB"));
+    form_.add_action(kRowRestore, tr("Restore from USB"));
     form_.set_bounds(kSettingsPanel.inset(22.0f));
     // The viewer's switch; a debug build or a scripted run keeps its own.
     diag::set_enabled(settings.diagnostics);
@@ -237,7 +246,7 @@ void App::set_volume(int volume)
 
 void App::set_profile_name(std::string name)
 {
-    form_.set_value_text(kRowProfile, name.empty() ? "Current console user" : std::move(name));
+    form_.set_value_text(kRowProfile, name.empty() ? tr("Current console user") : std::move(name));
 }
 
 void App::remote_notice(const char *message)
@@ -250,7 +259,7 @@ void App::phone_connected()
 {
     diag::event("phone connected (pairing screen %s)", pairing_open_ ? "open" : "closed");
     if (std::exchange(pairing_open_, false))
-        remote_notice("Phone connected");
+        remote_notice(tr("Phone connected"));
 }
 
 void App::open_storage(StorageAction action, ui::Feedback &feedback)
@@ -260,7 +269,7 @@ void App::open_storage(StorageAction action, ui::Feedback &feedback)
     usb_drives_ = usb_drives(usb_root_);
     if (usb_drives_.empty())
     {
-        remote_notice("Connect a readable USB drive, then try again.");
+        remote_notice(tr("Connect a readable USB drive, then try again."));
         return;
     }
     storage_action_ = action;
@@ -273,23 +282,23 @@ void App::storage_question(ui::Feedback &feedback)
     const bool restore = storage_action_ == StorageAction::restore;
     const bool report = storage_action_ == StorageAction::report;
     ui::DialogContent content;
-    content.title = restore  ? "Restore from USB?"
-                    : report ? "Export failure report?"
-                             : "Back up to USB?";
-    content.body = "Drive: " + usb_drives_[usb_choice_] + "\n";
+    content.title = restore  ? tr("Restore from USB?")
+                    : report ? tr("Export failure report?")
+                             : tr("Back up to USB?");
+    content.body = tr("Drive: ") + usb_drives_[usb_choice_] + "\n";
     content.body +=
-        restore ? "ProsperoTV-backup.sqlite3 will replace this profile's sources, favorites and "
-                  "settings."
+        restore ? tr("ProsperoTV-backup.sqlite3 will replace this profile's sources, favorites and "
+                     "settings.")
         : report
-            ? "Saves ProsperoTV-failure.txt. Account details and stream addresses are excluded."
-            : "Saves ProsperoTV-backup.sqlite3, replacing any previous backup on this drive. It "
-              "contains your provider passwords: keep the drive private.";
-    content.buttons = {{"Cancel"}};
+            ? tr("Saves ProsperoTV-failure.txt. Account details and stream addresses are excluded.")
+            : tr("Saves ProsperoTV-backup.sqlite3, replacing any previous backup on this drive. It "
+                 "contains your provider passwords: keep the drive private.");
+    content.buttons = {{tr("Cancel")}};
     if (usb_drives_.size() > 1)
-        content.buttons.push_back({"Next drive"});
-    content.buttons.push_back({restore  ? "Restore"
-                               : report ? "Export"
-                                        : "Back up",
+        content.buttons.push_back({tr("Next drive")});
+    content.buttons.push_back({restore  ? tr("Restore")
+                               : report ? tr("Export")
+                                        : tr("Back up"),
                                ui::ButtonKind::primary, restore});
     storage_dialog_.open(std::move(content), feedback);
 }
@@ -326,8 +335,8 @@ void App::draw_pairing(ui::Canvas &canvas) const
     const auto &theme = shared_.theme;
     list.rounded_rect({0, 0, kWidth, kHeight}, 0, tone::night.with_alpha(0.88f));
     draw_glass(canvas, theme, {300, 170, 1320, 730}, 28);
-    ui::text(list, fonts.display, "Pair a phone", 380, 255, 54, theme.text);
-    ui::text(list, fonts.regular, "Use the same Wi-Fi as your PS5.", 380, 305, 26,
+    ui::text(list, fonts.display, tr("Pair a phone"), 380, 255, 54, theme.text);
+    ui::text(list, fonts.regular, tr("Use the same Wi-Fi as your PS5."), 380, 305, 26,
              theme.text_muted);
     if (pair_qr_size_ > 0)
     {
@@ -341,24 +350,27 @@ void App::draw_pairing(ui::Canvas &canvas) const
                     list.rounded_rect({left + (x + 4) * cell, top + (y + 4) * cell, cell, cell}, 0,
                                       Color::rgb(0x000000));
     }
-    ui::text(list, fonts.semibold, "1. Scan to open the remote", 825, 390, 30, theme.text);
-    ui::text(list, fonts.regular, pair_url_.empty() ? "Remote unavailable" : pair_url_, 825, 442,
-             28, theme.text_muted);
-    ui::text(list, fonts.semibold, "2. Enter this code on your phone", 825, 515, 30, theme.text);
+    ui::text(list, fonts.semibold, tr("1. Scan to open the remote"), 825, 390, 30, theme.text);
+    ui::text(list, fonts.regular, pair_url_.empty() ? tr("Remote unavailable") : pair_url_, 825,
+             442, 28, theme.text_muted);
+    ui::text(list, fonts.semibold, tr("2. Enter this code on your phone"), 825, 515, 30,
+             theme.text);
     if (!pair_code_.empty())
     {
         ui::text(list, fonts.mono, pair_code_, 825, 620, 78, tone::accent);
-        ui::text(list, fonts.regular, "Expires in " + std::to_string(pair_seconds_) + " seconds",
-                 825, 680, 26, theme.text_muted);
+        ui::text(list, fonts.regular,
+                 tr("Expires in ") + std::to_string(pair_seconds_) + tr(" seconds"), 825, 680, 26,
+                 theme.text_muted);
     }
     else
     {
-        ui::text(list, fonts.semibold, "Code expired or unavailable", 825, 602, 28, tone::accent);
-        ui::text(list, fonts.regular, "Press X for a new code", 825, 652, 26, theme.text_muted);
+        ui::text(list, fonts.semibold, tr("Code expired or unavailable"), 825, 602, 28,
+                 tone::accent);
+        ui::text(list, fonts.regular, tr("Press X for a new code"), 825, 652, 26, theme.text_muted);
     }
-    ui::text(list, fonts.regular, "Your browser reconnects automatically on future visits.", 380,
-             800, 26, theme.text_muted);
-    ui::text(list, fonts.semibold, "Circle: Close", 1380, 850, 24, theme.text_muted);
+    ui::text(list, fonts.regular, tr("Your browser reconnects automatically on future visits."),
+             380, 800, 26, theme.text_muted);
+    ui::text(list, fonts.semibold, tr("Circle: Close"), 1380, 850, 24, theme.text_muted);
 }
 
 void App::show_tab(int index, bool glide)
@@ -408,14 +420,14 @@ void App::refresh(ui::Feedback &feedback)
     if (model.refreshing())
     {
         feedback.play(audio::Cue::error, 1.0f, 0.0f, 0.6f);
-        shared_.toasts.push(ui::StatusKind::info, "The channel list is already being updated");
+        shared_.toasts.push(ui::StatusKind::info, tr("The channel list is already being updated"));
         return;
     }
     feedback.play(audio::Cue::select);
     model.refresh();
     if (model.refreshing())
-        shared_.toasts.push(ui::StatusKind::info, "Updating the channel list",
-                            "You can keep browsing while it downloads.");
+        shared_.toasts.push(ui::StatusKind::info, tr("Updating the channel list"),
+                            tr("You can keep browsing while it downloads."));
 }
 
 void App::open_failure(ui::Feedback &feedback)
@@ -427,18 +439,19 @@ void App::open_failure(ui::Feedback &feedback)
     named.name = failure->channel_name;
     ui::DialogContent content;
     content.icon = ui::StatusKind::danger;
-    content.title = "Couldn't open " + shown_name(shared_.fonts, named);
+    content.title = tr("Couldn't open ") + shown_name(shared_.fonts, named);
     content.body = failure->reason;
     diag::event("failure dialog: \"%s\" attempts=%u retry=%d reason=\"%s\"",
                 failure->channel_name.c_str(), failure->attempts, failure->can_retry ? 1 : 0,
                 failure->reason.c_str());
     if (failure->attempts > 1)
         content.body +=
-            "\nAll " + group_digits(failure->attempts) + " of its addresses were tried.";
+            "\nAll " + group_digits(failure->attempts) + tr(" of its addresses were tried.");
     if (failure->can_retry)
-        content.buttons = {{"Try again", ui::ButtonKind::primary}, {"Back to the channels"}};
+        content.buttons = {{tr("Try again"), ui::ButtonKind::primary},
+                           {tr("Back to the channels")}};
     else
-        content.buttons = {{"Back to the channels", ui::ButtonKind::primary}};
+        content.buttons = {{tr("Back to the channels"), ui::ButtonKind::primary}};
     failure_.open(std::move(content), feedback);
 }
 
@@ -525,7 +538,7 @@ void App::handle_screen(const InputFrame &input, ui::Feedback &feedback)
         {
             model.clear_filters();
             feedback.play(audio::Cue::back);
-            shared_.toasts.push(ui::StatusKind::info, "Search cleared");
+            shared_.toasts.push(ui::StatusKind::info, tr("Search cleared"));
         }
         else if (browsing() && browse_.back(feedback))
         {
@@ -553,7 +566,7 @@ void App::handle_screen(const InputFrame &input, ui::Feedback &feedback)
         {
             const auto channel = browse_.focused();
             if (!channel || !multiview_.choose(std::string(channel->id)))
-                shared_.toasts.push(ui::StatusKind::warning, "Channel unavailable or locked");
+                shared_.toasts.push(ui::StatusKind::warning, tr("Channel unavailable or locked"));
             break;
         }
         case BrowseScreen::Result::search:
@@ -733,8 +746,8 @@ void App::step(const InputFrame &input, float dt, ui::Feedback &feedback)
         else
         {
             announcements_.push(ui::StatusKind::info,
-                                "ProsperoTV " + offer.version + " is available",
-                                "Get it from homebrew.page.", 10.0f);
+                                "ProsperoTV " + offer.version + tr(" is available"),
+                                tr("Get it from homebrew.page."), 10.0f);
         }
     }
 
@@ -840,18 +853,18 @@ void App::step(const InputFrame &input, float dt, ui::Feedback &feedback)
     form_.set_choice(kRowSleep, static_cast<int>(model.sleep_timer.choice()));
     const auto remaining = model.sleep_timer.remaining_minutes(platform::monotonic_us());
     form_.set_value_text(kRowSleepRemaining,
-                         remaining ? std::to_string(remaining) + " min" : "Off");
-    form_.set_value_text(kRowParentState, !parental.valid()      ? "Settings unreadable - locked"
-                                          : !parental.enabled()  ? "No PIN"
-                                          : parental.kids_only() ? "Kids only"
-                                          : parental.unlocked()  ? "Unlocked this session"
-                                                                 : "Adult content locked");
+                         remaining ? std::to_string(remaining) + " min" : tr("Off"));
+    form_.set_value_text(kRowParentState, !parental.valid()     ? tr("Settings unreadable - locked")
+                                          : !parental.enabled() ? tr("No PIN")
+                                          : parental.kids_only() ? tr("Kids only")
+                                          : parental.unlocked()  ? tr("Unlocked this session")
+                                                                 : tr("Adult content locked"));
     form_.set_disabled(kRowRemovePin, !parental.enabled() || !parental.unlocked());
     form_.set_disabled(kRowKids, !parental.enabled());
     form_.set_disabled(kRowParentUnlock, !parental.enabled() || parental.unlocked());
     form_.set_disabled(kRowParentLock, !parental.enabled() || !parental.unlocked());
-    form_.set_value_text(kRowChannels,
-                         model.has_catalog() ? group_digits(model.channel_count()) : "None yet");
+    form_.set_value_text(kRowChannels, model.has_catalog() ? group_digits(model.channel_count())
+                                                           : tr("None yet"));
     follow_channel(dt);
 
     tabs_.update(dt);
@@ -897,7 +910,7 @@ void App::draw_status(ui::Canvas &canvas) const
     switch (model.level())
     {
     case Level::busy:
-        text = model.has_catalog() ? "Updating" : "Downloading";
+        text = model.has_catalog() ? tr("Updating") : tr("Downloading");
         // A large list takes a while: say how far it is, in thousands.
         if (const unsigned so_far = model.refresh_progress() / 1000u * 1000u; so_far != 0)
             text += "  " + group_digits(so_far);
@@ -912,7 +925,7 @@ void App::draw_status(ui::Canvas &canvas) const
         dot = tone::bad;
         break;
     case Level::ready:
-        text = group_digits(model.channel_count()) + " channels";
+        text = group_digits(model.channel_count()) + tr(" channels");
         break;
     }
     const bool busy = model.refreshing();
@@ -965,9 +978,9 @@ void App::draw_settings(ui::Canvas &canvas) const
     ui::Painter paint(list, fonts, theme, canvas.glass);
 
     list.push_opacity(tween::stagger(page_age_, 0, 0.06f, 0.45f));
-    ui::text(list, fonts.semibold, "HOW THE MENUS BEHAVE", kMargin, 162.0f, 18.0f, tone::accent,
+    ui::text(list, fonts.semibold, tr("HOW THE MENUS BEHAVE"), kMargin, 162.0f, 18.0f, tone::accent,
              gfx::Align::left, 4.0f);
-    paint.heading("Settings", kMargin - 3.0f, 224.0f, 60.0f);
+    paint.heading(tr("Settings"), kMargin - 3.0f, 224.0f, 60.0f);
     list.pop_opacity();
 
     list.push_opacity(tween::stagger(page_age_, 1, 0.06f, 0.45f));
@@ -984,7 +997,7 @@ void App::draw_settings(ui::Canvas &canvas) const
     const float x = kGlancePanel.x + 40.0f;
     const float right = kGlancePanel.x + kGlancePanel.w - 40.0f;
     float y = kGlancePanel.y + 56.0f;
-    ui::text(list, fonts.semibold, "AT A GLANCE", x, y, 16.0f, tone::accent, gfx::Align::left,
+    ui::text(list, fonts.semibold, tr("AT A GLANCE"), x, y, 16.0f, tone::accent, gfx::Align::left,
              3.0f);
     y += 22.0f;
     const auto fact = [&](const char *label, const std::string &value)
@@ -994,12 +1007,13 @@ void App::draw_settings(ui::Canvas &canvas) const
         ui::text(list, fonts.semibold, value, right, y, 23.0f, theme.text, gfx::Align::right);
         list.rounded_rect({x, y + 22.0f, right - x, 1.0f}, 0.0f, kWhite.with_alpha(0.1f));
     };
-    fact("Source", source_label(model.active_source()));
-    fact("Channels", model.has_catalog() ? group_digits(model.channel_count()) : "None yet");
-    fact("Favorites", group_digits(model.group_size(Group::favorites)));
-    fact("Recent channels", group_digits(model.group_size(Group::recent)));
+    fact(tr("Source"), source_label(model.active_source()));
+    fact(tr("Channels"),
+         model.has_catalog() ? group_digits(model.channel_count()) : tr("None yet"));
+    fact(tr("Favorites"), group_digits(model.group_size(Group::favorites)));
+    fact(tr("Recent channels"), group_digits(model.group_size(Group::recent)));
     ui::paragraph(list, fonts.regular,
-                  "Who made ProsperoTV, and how channels get here, is on the About tab.", x,
+                  tr("Who made ProsperoTV, and how channels get here, is on the About tab."), x,
                   y + 76.0f, 21.0f, right - x, 30.0f, theme.text_muted, 3);
     list.pop_transform();
     list.pop_opacity();
@@ -1015,9 +1029,9 @@ void App::draw_about(ui::Canvas &canvas) const
     const Color rule_color = kWhite.with_alpha(0.12f);
 
     list.push_opacity(tween::stagger(page_age_, 0, 0.06f, 0.45f));
-    ui::text(list, fonts.semibold, "CREDITS AND HOW IT WORKS", kMargin, 162.0f, 18.0f, tone::accent,
-             gfx::Align::left, 4.0f);
-    paint.heading("About", kMargin - 3.0f, 224.0f, 60.0f);
+    ui::text(list, fonts.semibold, tr("CREDITS AND HOW IT WORKS"), kMargin, 162.0f, 18.0f,
+             tone::accent, gfx::Align::left, 4.0f);
+    paint.heading(tr("About"), kMargin - 3.0f, 224.0f, 60.0f);
     list.pop_opacity();
 
     // A panel is written from the top down: each piece leaves `y` where the
@@ -1045,29 +1059,32 @@ void App::draw_about(ui::Canvas &canvas) const
     x = kCreditsPanel.x + 40.0f;
     width = kCreditsPanel.w - 80.0f;
     y = kCreditsPanel.y + 56.0f;
-    ui::text(list, fonts.semibold, "PROJECT CREDITS", x, y, 16.0f, tone::accent, gfx::Align::left,
-             3.0f);
+    ui::text(list, fonts.semibold, tr("PROJECT CREDITS"), x, y, 16.0f, tone::accent,
+             gfx::Align::left, 3.0f);
     draw_mark(list, x + 34.0f, y + 74.0f, 68.0f);
     paint.heading("ProsperoTV", x + 88.0f, y + 74.0f, 40.0f);
-    ui::text(list, fonts.mono, "Version " + version_, x + 90.0f, y + 108.0f, 20.0f,
+    ui::text(list, fonts.mono, tr("Version ") + version_, x + 90.0f, y + 108.0f, 20.0f,
              theme.text_muted);
     y += 164.0f;
-    words("Live television for PS5 homebrew, brought to you by BlackBearReloaded. Unofficial, and "
-          "free software under the GNU General Public License, version 3 or later.",
-          theme.text, 3, 23.0f);
+    words(
+        tr("Live television for PS5 homebrew, brought to you by BlackBearReloaded. Unofficial, and "
+           "free software under the GNU General Public License, version 3 or later."),
+        theme.text, 3, 23.0f);
     rule();
-    kicker("CHANNEL LIST");
-    words("The built-in list is the public playlist of the iptv-org community project. All credit "
-          "for it goes to its maintainers.",
-          theme.text, 2);
+    kicker(tr("CHANNEL LIST"));
+    words(
+        tr("The built-in list is the public playlist of the iptv-org community project. All credit "
+           "for it goes to its maintainers."),
+        theme.text, 2);
     ui::text(list, fonts.semibold, "github.com/iptv-org/iptv", x, y, 22.0f, tone::accent);
     y += 31.0f;
     rule();
-    kicker("THANKS");
-    words("Thanks to JMUtechnologies for testing and feedback, to the whole PS5 homebrew "
-          "community, and to every developer whose tools and libraries make ProsperoTV possible.",
-          theme.text, 3);
-    ui::text(list, fonts.regular, "Menu sound effects made with ElevenLabs.", x,
+    kicker(tr("THANKS"));
+    words(
+        tr("Thanks to JMUtechnologies for testing and feedback, to the whole PS5 homebrew "
+           "community, and to every developer whose tools and libraries make ProsperoTV possible."),
+        theme.text, 3);
+    ui::text(list, fonts.regular, tr("Menu sound effects made with ElevenLabs."), x,
              kCreditsPanel.y + kCreditsPanel.h - 36.0f, 19.0f, theme.text_muted);
     list.pop_opacity();
 
@@ -1079,9 +1096,9 @@ void App::draw_about(ui::Canvas &canvas) const
     x = kGuidePanel.x + 40.0f;
     width = kGuidePanel.w - 80.0f;
     y = kGuidePanel.y + 56.0f;
-    ui::text(list, fonts.semibold, "GETTING STARTED", x, y, 16.0f, tone::accent, gfx::Align::left,
-             3.0f);
-    paint.heading("Three ways to get channels", x - 2.0f, y + 66.0f, 40.0f);
+    ui::text(list, fonts.semibold, tr("GETTING STARTED"), x, y, 16.0f, tone::accent,
+             gfx::Align::left, 3.0f);
+    paint.heading(tr("Sources for your TV"), x - 2.0f, y + 66.0f, 40.0f);
     y += 126.0f;
     const float column = x + 150.0f;
     const auto way = [&](const char *label, const char *value)
@@ -1092,21 +1109,22 @@ void App::draw_about(ui::Canvas &canvas) const
                  column, y, 22.0f, theme.text);
         y += 46.0f;
     };
-    way("BUILT IN", "The iptv-org list, ready at the first launch");
-    way("PLAYLIST", "Any M3U playlist, by its web address");
-    way("ACCOUNT", "An Xtream Codes account from your provider");
+    way(tr("BUILT IN"), tr("The iptv-org list, ready at the first launch"));
+    way(tr("PLAYLIST"), tr("Any M3U playlist, by its web address"));
+    way(tr("ACCOUNT"), tr("An Xtream Codes account from your provider"));
     y -= 6.0f;
-    words("Choose and set them up on the Sources tab.", theme.text_muted, 1, 21.0f);
+    words(tr("Choose and set them up on the Sources tab."), theme.text_muted, 1, 21.0f);
     rule();
-    kicker("PLAYBACK");
-    words("H.264, HEVC and VP9 video, up to 4K, through the console's own decoder. When a channel "
-          "lists several addresses they are tried in turn.",
-          theme.text, 3);
+    kicker(tr("PLAYBACK"));
+    words(
+        tr("H.264, HEVC and VP9 video, up to 4K, through the console's own decoder. When a channel "
+           "lists several addresses they are tried in turn."),
+        theme.text, 3);
     rule();
-    kicker("GOOD TO KNOW");
-    words("ProsperoTV hosts no streams of its own: every channel plays from the address its "
-          "playlist gives, and channels come and go without notice. Your sources, favorites and "
-          "recent channels stay on this console.",
+    kicker(tr("GOOD TO KNOW"));
+    words(tr("ProsperoTV hosts no streams of its own: every channel plays from the address its "
+             "playlist gives, and channels come and go without notice. Your sources, favorites and "
+             "recent channels stay on this console."),
           theme.text, 4);
     list.pop_transform();
     list.pop_opacity();
@@ -1152,7 +1170,7 @@ void App::draw_tuning(Frame &frame, const std::string &channel_id, float t,
 
     // What is opening.
     const float cx = kWidth * 0.5f;
-    ui::text(list, fonts.semibold, "TUNING IN", cx, 662.0f + lift * 0.5f, 18.0f, tone::accent,
+    ui::text(list, fonts.semibold, tr("TUNING IN"), cx, 662.0f + lift * 0.5f, 18.0f, tone::accent,
              gfx::Align::center, 5.0f);
     if (channel)
     {
@@ -1192,9 +1210,9 @@ void App::draw_hints(ui::Canvas &canvas) const
     case kFavorites:
         count = browse_.hints(hints, 5);
         hints[count++] = {ui::Button::touchpad,
-                          tabs_.active() == kFavorites ? "Folders" : "Categories"};
+                          tabs_.active() == kFavorites ? tr("Folders") : tr("Categories")};
         hints[count++] = {ui::Button::left_stick,
-                          multiview_.choosing() ? "Back to multiview" : "Multiview"};
+                          multiview_.choosing() ? tr("Back to multiview") : tr("Multiview")};
         break;
     case kSources:
         count = sources_.hints(hints, 6);
@@ -1204,18 +1222,18 @@ void App::draw_hints(ui::Canvas &canvas) const
         break;
     case kSettings:
         if (form_.uses_horizontal())
-            hints[count++] = {ui::Button::dpad, "Change"};
+            hints[count++] = {ui::Button::dpad, tr("Change")};
         else
-            hints[count++] = {ui::Button::cross, "Choose"};
+            hints[count++] = {ui::Button::cross, tr("Choose")};
         break;
     default:
         break;
     }
     if (tabs_.active() < kSettings && tabs_.active() != kVod)
-        hints[count++] = {ui::Button::options, "Update"};
+        hints[count++] = {ui::Button::options, tr("Update")};
     if (tabs_.active() != kLive && tabs_.active() != kVod &&
         !(browsing() && shared_.model.filtering()))
-        hints[count++] = {ui::Button::circle, "Live TV"};
+        hints[count++] = {ui::Button::circle, tr("Live TV")};
     ui::HintLayout layout;
     layout.size = 36.0f;
     layout.text_size = 23.0f;
@@ -1230,7 +1248,7 @@ void App::draw_hints(ui::Canvas &canvas) const
     // forget, and whoever looks at a picture of the screen should know too.
     if (diag::enabled())
     {
-        constexpr char kSign[] = "Diagnostic log on";
+        const char *kSign = tr("Diagnostic log on");
         const float width = canvas.fonts.semibold.measure(kSign, 20.0f);
         const float right = kWidth - kMargin;
         canvas.list.circle(right - width - 16.0f, 1055.0f, 5.0f, tone::ember);
@@ -1287,9 +1305,9 @@ void App::draw(Frame &frame) const
     if (storage_busy_)
     {
         over.list.rounded_rect({0, 0, kWidth, kHeight}, 0, tone::night.with_alpha(0.94f));
-        ui::text(over.list, over.fonts.semibold, "Working with the USB drive...", kWidth / 2, 490,
-                 40, shared_.theme.text, gfx::Align::center);
-        ui::text(over.list, over.fonts.regular, "Keep the drive connected until this finishes.",
+        ui::text(over.list, over.fonts.semibold, tr("Working with the USB drive..."), kWidth / 2,
+                 490, 40, shared_.theme.text, gfx::Align::center);
+        ui::text(over.list, over.fonts.regular, tr("Keep the drive connected until this finishes."),
                  kWidth / 2, 555, 26, shared_.theme.text_muted, gfx::Align::center);
         over.list.arc(kWidth / 2, 635, 22, 4, shared_.clock * 4, 2.2f, tone::accent);
     }

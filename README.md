@@ -510,8 +510,9 @@ The remaining ideas are not scheduled or promised.
   behind a code, and a mode that shows only the channels for children.
 - **Profiles.** Favorites, recent channels and sources for each person
   signed in on the console.
-- **The interface in other languages.** The menus in the language the
-  console is set to.
+- [x] **The interface in other languages.** Menus follow the console's
+  English, Spanish, French, German, Italian, Portuguese or Dutch setting.
+  Other languages fall back to English; provider content keeps its own text.
 - **Backup and restore.** Copying sources, favorites and settings to a USB
   drive, and bringing them back on this console or another.
 - **Reporting a channel that fails.** Saving what the app knows about a

@@ -2,6 +2,7 @@
 // Copyright (C) 2026 BlackBearReloaded
 // SPDX-License-Identifier: GPL-3.0-or-later
 
+#include "tv/i18n.hpp"
 #include "tv/model.hpp"
 #include "tv/category_path.hpp"
 
@@ -42,19 +43,19 @@ const char *source_name(iptv::SourceKind source)
     switch (source)
     {
     case iptv::SourceKind::Custom:
-        return "your playlist";
+        return tr("your playlist");
     case iptv::SourceKind::Xtream:
-        return "your Xtream account";
+        return tr("your Xtream account");
     case iptv::SourceKind::Portal:
-        return "your MAC-code portal";
+        return tr("your MAC-code portal");
     case iptv::SourceKind::HDHomeRun:
-        return "your HDHomeRun tuner";
+        return tr("your HDHomeRun tuner");
     case iptv::SourceKind::Tvheadend:
-        return "your Tvheadend server";
+        return tr("your Tvheadend server");
     case iptv::SourceKind::BuiltIn:
         break;
     }
-    return "the iptv-org catalog";
+    return tr("the iptv-org catalog");
 }
 
 bool valid_credential(const char *value)
@@ -127,7 +128,7 @@ std::string fetch_problem(iptv::http::Status network, const iptv::http::FetchRes
 {
     using iptv::http::Status;
     if (network != Status::ok)
-        return "The console could not start its network connection.";
+        return tr("The console could not start its network connection.");
     if (account && account_status != iptv::XtreamStatus::ok)
     {
         std::string text = iptv::XtreamStatusDescription(account_status);
@@ -140,25 +141,26 @@ std::string fetch_problem(iptv::http::Status network, const iptv::http::FetchRes
     {
     case Status::ok:
         std::snprintf(text, sizeof(text),
-                      "The playlist has no channels that can be played (%u entries skipped).",
+                      tr("The playlist has no channels that can be played (%u entries skipped)."),
                       static_cast<unsigned>(skipped));
         return text;
     case Status::http_status_error:
-        std::snprintf(text, sizeof(text), "The server answered with error %d.", fetch.http_status);
+        std::snprintf(text, sizeof(text), tr("The server answered with error %d."),
+                      fetch.http_status);
         return text;
     case Status::deadline_exceeded:
-        return "The server took too long to answer.";
+        return tr("The server took too long to answer.");
     case Status::response_too_large:
-        return "The channel list is larger than this app can load.";
+        return tr("The channel list is larger than this app can load.");
     case Status::unsupported_url:
     case Status::invalid_argument:
-        return "The address is not one this app can open.";
+        return tr("The address is not one this app can open.");
     case Status::redirect_error:
-        return "The server sent the app in a circle.";
+        return tr("The server sent the app in a circle.");
     case Status::cancelled:
-        return "The download was stopped.";
+        return tr("The download was stopped.");
     default:
-        std::snprintf(text, sizeof(text), "The server could not be reached (code %d).",
+        std::snprintf(text, sizeof(text), tr("The server could not be reached (code %d)."),
                       fetch.native_error);
         return text;
     }
@@ -311,8 +313,8 @@ bool Model::open()
     if (first)
     {
         if (!parental_.load(path("prosperotv-parental-v1.txt")))
-            notify(Level::error, "Parental settings could not be read",
-                   "Playback is locked until the profile settings are recovered.");
+            notify(Level::error, tr("Parental settings could not be read"),
+                   tr("Playback is locked until the profile settings are recovered."));
         health_.fill(SourceHealth::empty);
         std::string saved_url;
         if (iptv::LoadCustomSourceUrl(path("iptv-custom-source-v1.txt"), &saved_url) ==
@@ -360,16 +362,16 @@ bool Model::open()
     const bool fresh = !refresh_needed();
     if (catalog_loaded_)
     {
-        set_status("Saved copy", Level::ready);
-        set_source_text("Showing the copy saved on this console",
-                        fresh ? "It is up to date. Press Options to download it again."
-                              : "A newer copy is being downloaded in the background.");
+        set_status(tr("Saved copy"), Level::ready);
+        set_source_text(tr("Showing the copy saved on this console"),
+                        fresh ? tr("It is up to date. Press Options to download it again.")
+                              : tr("A newer copy is being downloaded in the background."));
     }
     else
     {
-        set_status("Loading", Level::busy);
-        set_source_text("Downloading the channel list",
-                        "Nothing is saved on this console yet. This happens once.");
+        set_status(tr("Loading"), Level::busy);
+        set_source_text(tr("Downloading the channel list"),
+                        tr("Nothing is saved on this console yet. This happens once."));
     }
     if (!fresh)
         refresh();
@@ -737,12 +739,12 @@ bool Model::ask_query()
 {
     if (!keyboard_ready_)
     {
-        notify(Level::warning, "The keyboard is not available",
-               "Close ProsperoTV and open it again.");
+        notify(Level::warning, tr("The keyboard is not available"),
+               tr("Close ProsperoTV and open it again."));
         return false;
     }
-    iptv_ime_request_prompt(query_.c_str(), "Search channels or programmes on now",
-                            "Channel or programme title", IPTV_IME_BUFFER_CHARACTERS,
+    iptv_ime_request_prompt(query_.c_str(), tr("Search channels or programmes on now"),
+                            tr("Channel or programme title"), IPTV_IME_BUFFER_CHARACTERS,
                             &Model::on_query, this);
     return true;
 }
@@ -902,7 +904,7 @@ bool Model::play(unsigned catalog_index)
         iptv::UserStateStatus::ok)
         user_.recent_channel_ids = previous;
     if (library_.ready() && !library_.remember_channel(selected_source_id_, channel.id))
-        notify(Level::warning, "The last channel could not be saved");
+        notify(Level::warning, tr("The last channel could not be saved"));
     mark_lists();
     return true;
 }
@@ -928,9 +930,9 @@ void Model::report_playback_failure(const char *channel_id, const char *channel_
     failure_ = {};
     failure_.channel_id = channel_id != nullptr ? channel_id : "";
     failure_.channel_name =
-        channel_name != nullptr && *channel_name != '\0' ? channel_name : "this channel";
+        channel_name != nullptr && *channel_name != '\0' ? channel_name : tr("this channel");
     failure_.reason =
-        detail != nullptr && *detail != '\0' ? detail : "The channel may be offline right now.";
+        detail != nullptr && *detail != '\0' ? detail : tr("The channel may be offline right now.");
     failure_.attempts = attempts;
     failure_.can_retry = catalog_.Find(failure_.channel_id) != iptv::Catalog::npos;
     has_failure_ = true;
@@ -978,8 +980,8 @@ void Model::use_source(iptv::SourceKind source)
                 is_set_up(source) ? 1 : 0, refresh_thread_ != nullptr ? 1 : 0);
     if (refresh_thread_ != nullptr)
     {
-        notify(Level::warning, "An update is running",
-               "Wait for it to finish, then choose the source again.");
+        notify(Level::warning, tr("An update is running"),
+               tr("Wait for it to finish, then choose the source again."));
         return;
     }
     if (!is_set_up(source))
@@ -995,13 +997,13 @@ void Model::use_source(iptv::SourceKind source)
     }
     if (iptv::SaveActiveSource(path("iptv-active-source-v1.txt"), source) !=
         iptv::SourceStateStatus::ok)
-        notify(Level::warning, "The choice could not be saved",
-               "It holds until ProsperoTV is closed.");
+        notify(Level::warning, tr("The choice could not be saved"),
+               tr("It holds until ProsperoTV is closed."));
     else if (changed)
-        notify(Level::ready, std::string("Now using ") + source_name(source));
-    set_source_text(std::string("Using ") + source_name(source),
-                    catalog_loaded_ ? "Showing the saved copy while a new one downloads."
-                                    : "Nothing is saved yet. Downloading it now.");
+        notify(Level::ready, std::string(tr("Now using ")) + source_name(source));
+    set_source_text(std::string(tr("Using ")) + source_name(source),
+                    catalog_loaded_ ? tr("Showing the saved copy while a new one downloads.")
+                                    : tr("Nothing is saved yet. Downloading it now."));
     refresh();
 }
 
@@ -1011,19 +1013,20 @@ void Model::edit_source(iptv::SourceKind source)
         return;
     if (source == iptv::SourceKind::BuiltIn)
     {
-        notify(Level::ready, "The iptv-org catalog is built in", "It has nothing to set up.");
+        notify(Level::ready, tr("The iptv-org catalog is built in"),
+               tr("It has nothing to set up."));
         return;
     }
     if (refresh_thread_ != nullptr)
     {
-        notify(Level::warning, "An update is running",
-               "Wait for it to finish, then edit the source.");
+        notify(Level::warning, tr("An update is running"),
+               tr("Wait for it to finish, then edit the source."));
         return;
     }
     if (!keyboard_ready_)
     {
-        notify(Level::warning, "The keyboard is not available",
-               "Close ProsperoTV and open it again.");
+        notify(Level::warning, tr("The keyboard is not available"),
+               tr("Close ProsperoTV and open it again."));
         return;
     }
     editing_source_id_ = static_cast<int>(source) + 1;
@@ -1044,7 +1047,7 @@ void Model::edit_source(iptv::SourceKind source)
     }
     if (source == iptv::SourceKind::Custom)
     {
-        iptv_ime_request_prompt(custom_url_.c_str(), "Playlist address",
+        iptv_ime_request_prompt(custom_url_.c_str(), tr("Playlist address"),
                                 "http(s)://host/playlist.m3u", IPTV_IME_BUFFER_CHARACTERS,
                                 &Model::on_custom_url, this);
         return;
@@ -1064,13 +1067,14 @@ void Model::apply_custom_url(const char *url)
 {
     if (refresh_thread_ != nullptr)
     {
-        notify(Level::warning, "The address was not changed", "An update was still running.");
+        notify(Level::warning, tr("The address was not changed"),
+               tr("An update was still running."));
         return;
     }
     if (!iptv::http::IsSupportedPlaylistUrl(url))
     {
-        notify(Level::error, "That address cannot be used",
-               "It must start with http:// or https:// and have no spaces.");
+        notify(Level::error, tr("That address cannot be used"),
+               tr("It must start with http:// or https:// and have no spaces."));
         return;
     }
     if (save_source_form(url, nullptr) && editing_source_id_ == 2)
@@ -1085,43 +1089,43 @@ void Model::continue_account_form()
     switch (account_step_)
     {
     case AccountStep::server:
-        iptv_ime_request_prompt(account_form_.server_url.c_str(), "Xtream server (1 of 3)",
+        iptv_ime_request_prompt(account_form_.server_url.c_str(), tr("Xtream server (1 of 3)"),
                                 "http(s)://provider.example:port", IPTV_IME_BUFFER_CHARACTERS,
                                 &Model::on_account_server, this);
         break;
     case AccountStep::username:
-        iptv_ime_request_prompt(account_form_.username.c_str(), "Xtream user name (2 of 3)",
-                                "User name", IPTV_IME_BUFFER_CHARACTERS,
+        iptv_ime_request_prompt(account_form_.username.c_str(), tr("Xtream user name (2 of 3)"),
+                                tr("User name"), IPTV_IME_BUFFER_CHARACTERS,
                                 &Model::on_account_username, this);
         break;
     case AccountStep::password:
-        iptv_ime_request_password("Xtream password (3 of 3)", "Password",
+        iptv_ime_request_password(tr("Xtream password (3 of 3)"), tr("Password"),
                                   IPTV_IME_BUFFER_CHARACTERS, &Model::on_account_password, this);
         break;
     case AccountStep::portal_address:
-        iptv_ime_request_prompt(portal_form_.url.c_str(), "Portal address (1 of 2)",
+        iptv_ime_request_prompt(portal_form_.url.c_str(), tr("Portal address (1 of 2)"),
                                 "http(s)://provider.example/stalker_portal/c/",
                                 IPTV_IME_BUFFER_CHARACTERS, &Model::on_portal_address, this);
         break;
     case AccountStep::portal_mac:
-        iptv_ime_request_prompt(portal_form_.mac.c_str(), "Portal MAC code (2 of 2)",
+        iptv_ime_request_prompt(portal_form_.mac.c_str(), tr("Portal MAC code (2 of 2)"),
                                 "00:1A:79:12:34:56", 17, &Model::on_portal_mac, this);
         break;
     case AccountStep::local_address:
-        iptv_ime_request_prompt(local_form_.url.c_str(),
-                                local_form_.kind == 4 ? "HDHomeRun address" : "Tvheadend address",
-                                local_form_.kind == 4 ? "http://192.168.1.10"
-                                                      : "http://192.168.1.10:9981",
-                                IPTV_IME_BUFFER_CHARACTERS, &Model::on_local_address, this);
+        iptv_ime_request_prompt(
+            local_form_.url.c_str(),
+            local_form_.kind == 4 ? tr("HDHomeRun address") : tr("Tvheadend address"),
+            local_form_.kind == 4 ? "http://192.168.1.10" : "http://192.168.1.10:9981",
+            IPTV_IME_BUFFER_CHARACTERS, &Model::on_local_address, this);
         break;
     case AccountStep::local_username:
-        iptv_ime_request_prompt(local_form_.username.c_str(), "Tvheadend user name",
-                                "Leave empty when this server needs no account",
+        iptv_ime_request_prompt(local_form_.username.c_str(), tr("Tvheadend user name"),
+                                tr("Leave empty when this server needs no account"),
                                 IPTV_IME_BUFFER_CHARACTERS, &Model::on_local_username, this);
         break;
     case AccountStep::local_password:
-        iptv_ime_request_password("Tvheadend password", "Password", IPTV_IME_BUFFER_CHARACTERS,
-                                  &Model::on_local_password, this);
+        iptv_ime_request_password(tr("Tvheadend password"), tr("Password"),
+                                  IPTV_IME_BUFFER_CHARACTERS, &Model::on_local_password, this);
         break;
     case AccountStep::none:
         break;
@@ -1152,8 +1156,8 @@ void Model::apply_account_server(const char *server)
     if (server == nullptr || !iptv::NormalizeXtreamServerUrl(server, &normalized))
     {
         account_step_ = AccountStep::none;
-        notify(Level::error, "That server address cannot be used",
-               "It must start with http:// or https://.");
+        notify(Level::error, tr("That server address cannot be used"),
+               tr("It must start with http:// or https://."));
         return;
     }
     account_form_.server_url = std::move(normalized);
@@ -1166,7 +1170,7 @@ void Model::apply_account_username(const char *username)
     if (!valid_credential(username))
     {
         account_step_ = AccountStep::none;
-        notify(Level::error, "The user name cannot be empty");
+        notify(Level::error, tr("The user name cannot be empty"));
         return;
     }
     account_form_.username = username;
@@ -1179,14 +1183,14 @@ void Model::apply_account_password(const char *password)
     account_step_ = AccountStep::none;
     if (!valid_credential(password))
     {
-        notify(Level::error, "The password cannot be empty");
+        notify(Level::error, tr("The password cannot be empty"));
         return;
     }
     account_form_.password = password;
     if (!iptv::ValidateXtreamCredentials(account_form_))
     {
-        notify(Level::error, "The account was not accepted",
-               "Check the server address, the user name and the password.");
+        notify(Level::error, tr("The account was not accepted"),
+               tr("Check the server address, the user name and the password."));
         return;
     }
     if (save_source_form(account_form_.server_url, &account_form_) && editing_source_id_ == 3)
@@ -1236,10 +1240,10 @@ void Model::refresh()
     pending_saved_ = false;
     pending_account_ = iptv::XtreamStatus::ok;
     pending_account_message_.clear();
-    set_status("Updating", Level::busy);
-    set_source_text(std::string("Downloading ") + source_name(active_source_),
-                    catalog_loaded_ ? "The saved channels stay available meanwhile."
-                                    : "This can take a minute the first time.");
+    set_status(tr("Updating"), Level::busy);
+    set_source_text(std::string(tr("Downloading ")) + source_name(active_source_),
+                    catalog_loaded_ ? tr("The saved channels stay available meanwhile.")
+                                    : tr("This can take a minute the first time."));
     catalog_failed_ = false;
     catalog_error_.clear();
 
@@ -1250,17 +1254,17 @@ void Model::refresh()
 
     health_[static_cast<unsigned>(active_source_)] =
         before == SourceHealth::refreshing ? SourceHealth::error : before;
-    set_status("Update failed", Level::error);
-    set_source_text("The update could not start", "Press Options to try again.");
+    set_status(tr("Update failed"), Level::error);
+    set_source_text(tr("The update could not start"), tr("Press Options to try again."));
     if (!catalog_loaded_)
     {
         health_[static_cast<unsigned>(active_source_)] = SourceHealth::error;
         catalog_failed_ = true;
-        catalog_error_ = "The update could not start. Try again.";
+        catalog_error_ = tr("The update could not start. Try again.");
     }
     else
     {
-        notify(Level::warning, "The update could not start", "Press Options to try again.");
+        notify(Level::warning, tr("The update could not start"), tr("Press Options to try again."));
     }
 }
 
@@ -1539,18 +1543,19 @@ void Model::consume_refresh()
         if (has_failure_)
             failure_.can_retry = catalog_.Find(failure_.channel_id) != iptv::Catalog::npos;
         health_[source] = pending_saved_ ? SourceHealth::ready : SourceHealth::stale;
-        const std::string count = group_digits(channel_count()) + " channels";
-        set_status(pending_saved_ ? "Up to date" : "Not saved",
+        const std::string count = group_digits(channel_count()) + tr(" channels");
+        set_status(pending_saved_ ? tr("Up to date") : tr("Not saved"),
                    pending_saved_ ? Level::ready : Level::warning);
-        set_source_text(pending_saved_ ? "Up to date" : "Downloaded, but not saved",
+        set_source_text(pending_saved_ ? tr("Up to date") : tr("Downloaded, but not saved"),
                         pending_saved_
-                            ? count + " from " + source_name(refresh_source_) + "."
-                            : count + ". The console's storage refused the copy, so it lasts until "
-                                      "ProsperoTV is closed.");
-        notify(pending_saved_ ? Level::ready : Level::warning, "Channel list updated", count);
+                            ? count + tr(" from ") + source_name(refresh_source_) + "."
+                            : count +
+                                  tr(". The console's storage refused the copy, so it lasts until "
+                                     "ProsperoTV is closed."));
+        notify(pending_saved_ ? Level::ready : Level::warning, tr("Channel list updated"), count);
         if (pending_report_.catalog_full)
-            notify(Level::warning, "This source has more channels than ProsperoTV holds",
-                   "Showing its first " + group_digits(channel_count()) + ".");
+            notify(Level::warning, tr("This source has more channels than ProsperoTV holds"),
+                   tr("Showing its first ") + group_digits(channel_count()) + ".");
     }
     else
     {
@@ -1562,17 +1567,17 @@ void Model::consume_refresh()
         if (catalog_loaded_)
         {
             health_[source] = SourceHealth::stale;
-            set_status("Saved copy", Level::warning);
-            set_source_text("The update failed", problem + " Showing the " +
-                                                     group_digits(channel_count()) +
-                                                     " channels saved on this console.");
-            notify(Level::warning, "The channel list could not be updated", problem);
+            set_status(tr("Saved copy"), Level::warning);
+            set_source_text(tr("The update failed"), problem + tr(" Showing the ") +
+                                                         group_digits(channel_count()) +
+                                                         tr(" channels saved on this console."));
+            notify(Level::warning, tr("The channel list could not be updated"), problem);
         }
         else
         {
             health_[source] = SourceHealth::error;
-            set_status("No channels", Level::error);
-            set_source_text("The channel list could not be downloaded", problem);
+            set_status(tr("No channels"), Level::error);
+            set_source_text(tr("The channel list could not be downloaded"), problem);
             catalog_failed_ = true;
             catalog_error_ = problem;
         }

@@ -2,6 +2,7 @@
 // Copyright (C) 2026 BlackBearReloaded
 // SPDX-License-Identifier: GPL-3.0-or-later
 
+#include "tv/i18n.hpp"
 #include "tv/browse_screen.hpp"
 #include "tv/platform.hpp"
 
@@ -109,7 +110,7 @@ BrowseScreen::BrowseScreen(Shared &shared) : shared_(shared)
     groups_.style.on_page = true;
     std::vector<ui::TabItem> chips;
     for (const Group group : kChips)
-        chips.push_back({Model::group_name(group)});
+        chips.push_back({tr(Model::group_name(group))});
     groups_.set_tabs(std::move(chips));
     groups_.set_bounds({kMargin, kListY - 24.0f, 1000.0f, 48.0f});
     groups_.set_focused(false);
@@ -406,17 +407,17 @@ BrowseScreen::Result BrowseScreen::handle(const InputFrame &input, ui::Feedback 
         {
         case Model::Starred::added:
             feedback.play(audio::Cue::favorite_on);
-            shared_.toasts.push(ui::StatusKind::success, "Added to Favorites", name);
+            shared_.toasts.push(ui::StatusKind::success, tr("Added to Favorites"), name);
             break;
         case Model::Starred::removed:
             feedback.play(audio::Cue::favorite_off);
-            shared_.toasts.push(ui::StatusKind::info, "Removed from Favorites", name);
+            shared_.toasts.push(ui::StatusKind::info, tr("Removed from Favorites"), name);
             break;
         case Model::Starred::failed:
             keep_place_ = false;
             feedback.play(audio::Cue::error);
-            shared_.toasts.push(ui::StatusKind::danger, "Favorites could not be saved",
-                                "The console's storage refused the change.");
+            shared_.toasts.push(ui::StatusKind::danger, tr("Favorites could not be saved"),
+                                tr("The console's storage refused the change."));
             break;
         }
         star_.trigger();
@@ -548,7 +549,7 @@ void BrowseScreen::update(float dt)
 
     // ---- the chips say how many each list holds ----
     for (int i = 0; i < kChipCount; ++i)
-        groups_.tab(i).label = std::string(Model::group_name(kChips[i])) + "  " +
+        groups_.tab(i).label = std::string(tr(Model::group_name(kChips[i]))) + "  " +
                                group_digits(model.group_size(kChips[i]));
 
     // One focus on screen: the part that is not in use shows no ring at all.
@@ -571,9 +572,9 @@ void BrowseScreen::update(float dt)
     empty_.action_button = ui::Button::cross;
     if (!model.has_catalog())
     {
-        empty_.title = "The channel list could not be loaded";
+        empty_.title = tr("The channel list could not be loaded");
         empty_.body = model.catalog_error();
-        empty_.action = model.refreshing() ? "" : "Try again";
+        empty_.action = model.refreshing() ? "" : tr("Try again");
         empty_.set_bounds({420.0f, 300.0f, 1080.0f, 480.0f});
     }
     else
@@ -581,23 +582,23 @@ void BrowseScreen::update(float dt)
         empty_.set_bounds({420.0f, 560.0f, 1080.0f, 380.0f});
         if (model.filtering())
         {
-            empty_.title = "No channels match";
-            empty_.body = "Try fewer filters, or check the spelling.";
-            empty_.action = "Clear the search";
+            empty_.title = tr("No channels match");
+            empty_.body = tr("Try fewer filters, or check the spelling.");
+            empty_.action = tr("Clear the search");
             empty_.action_button = ui::Button::circle;
         }
         else if (favorites_)
         {
-            empty_.title = "No favorites yet";
-            empty_.body = "Press Square on any channel to keep it here.";
-            empty_.action = "Browse Live TV";
+            empty_.title = tr("No favorites yet");
+            empty_.body = tr("Press Square on any channel to keep it here.");
+            empty_.action = tr("Browse Live TV");
         }
         else
         {
-            empty_.title = "Nothing here yet";
+            empty_.title = tr("Nothing here yet");
             empty_.body = model.group() == Group::recent
-                              ? "Channels you watch are listed here."
-                              : "This source has no channels of this kind.";
+                              ? tr("Channels you watch are listed here.")
+                              : tr("This source has no channels of this kind.");
             empty_.action.clear();
         }
     }
@@ -621,8 +622,8 @@ void BrowseScreen::draw_hero_text(ui::Canvas &canvas, const iptv::ChannelView &c
     // ---- which channel, and what kind ----
     list.push_opacity(appear(0));
     const std::string kicker =
-        (favorites_ ? std::string("FAVORITE")
-                    : "CHANNEL " + group_digits(shared_.model.number_of(index))) +
+        (favorites_ ? std::string(tr("FAVORITE"))
+                    : tr("CHANNEL ") + group_digits(shared_.model.number_of(index))) +
         "  \xC2\xB7  " +
         ui::upper(
             readable(face_for(fonts, fonts.semibold, category_of(channel)), category_of(channel)));
@@ -646,16 +647,17 @@ void BrowseScreen::draw_hero_text(ui::Canvas &canvas, const iptv::ChannelView &c
     const auto time = static_cast<std::int64_t>(platform::unix_time());
     const auto *now = shared_.model.guide().now(channel.id, time);
     const auto *next = shared_.model.guide().next(channel.id, time);
-    const std::string place = now    ? "Now: " + now->title
-                              : next ? "No programme on now"
+    const std::string place = now    ? tr("Now: ") + now->title
+                              : next ? tr("No programme on now")
                                      : place_line(channel);
     const ui::FontRef &place_face = face_for(fonts, fonts.regular, place);
     ui::text(list, place_face, place_face.font->fit(readable(place_face, place), 24.0f, kHeroText),
              x, 280.0f + rise(2), 24.0f, theme.text_muted);
     if (now || next)
     {
-        const std::string line = next ? "Next " + programme_time(next->start) + ": " + next->title
-                                      : "Next: No programme information";
+        const std::string line =
+            next ? tr("Next ") + programme_time(next->start) + ": " + next->title
+                 : tr("Next: No programme information");
         const auto &face = face_for(fonts, fonts.regular, line);
         ui::text(list, face, face.font->fit(line, 21, kHeroText), x, 309 + rise(2), 21,
                  theme.text_muted);
@@ -667,23 +669,25 @@ void BrowseScreen::draw_hero_text(ui::Canvas &canvas, const iptv::ChannelView &c
     const float chips_y = 346.0f + rise(3);
     float at = x;
     const std::string picture = resolution_label(channel);
-    at += draw_chip(paint, at, chips_y, picture.empty() ? "Auto quality" : picture) + 12.0f;
+    at += draw_chip(paint, at, chips_y, picture.empty() ? tr("Auto quality") : picture) + 12.0f;
     const char *codec = codec_label(channel);
     if (codec[0] != '\0')
         at += draw_chip(paint, at, chips_y, codec) + 12.0f;
     for (const std::string &note : notes)
         at += draw_chip(paint, at, chips_y, fonts.semibold.font->fit(note, 19.0f, 220.0f)) + 12.0f;
     if (channel.playback_status == iptv::PlaybackStatus::playable)
-        at += draw_status_chip(canvas, theme, at, chips_y, "Opened last time", tone::good) + 12.0f;
-    else if (channel.playback_status == iptv::PlaybackStatus::failed)
-        at += draw_status_chip(canvas, theme, at, chips_y, "Did not open last time", tone::bad) +
+        at += draw_status_chip(canvas, theme, at, chips_y, tr("Opened last time"), tone::good) +
               12.0f;
+    else if (channel.playback_status == iptv::PlaybackStatus::failed)
+        at +=
+            draw_status_chip(canvas, theme, at, chips_y, tr("Did not open last time"), tone::bad) +
+            12.0f;
     list.pop_opacity();
 
     // ---- what Cross and Square will do ----
     list.push_opacity(appear(4));
     const float cy = 402.0f + rise(4);
-    const char *action = selection_mode_ ? "Choose" : "Watch";
+    const char *action = selection_mode_ ? tr("Choose") : tr("Watch");
     const float width = 16.0f + 40.0f + 14.0f + fonts.semibold.measure(action, 27.0f) + 34.0f;
     const Rect pill{x, cy - 34.0f, width, 68.0f};
     list.shadow({pill.x, pill.y + 10.0f, pill.w, pill.h}, 34.0f, 24.0f, Color::rgb(0x000000, 0.4f));
@@ -699,7 +703,7 @@ void BrowseScreen::draw_hero_text(ui::Canvas &canvas, const iptv::ChannelView &c
               favorite ? 0.0f : 2.5f);
     ui::draw_button(list, fonts, ui::GlyphStyle::dark(), ui::Button::right_stick, star_x + 75, cy,
                     34);
-    ui::text(list, fonts.regular, "Guide", star_x + 120, baseline_for(cy, 23), 23,
+    ui::text(list, fonts.regular, tr("Guide"), star_x + 120, baseline_for(cy, 23), 23,
              theme.text_muted);
     list.pop_opacity();
 
@@ -746,7 +750,7 @@ void BrowseScreen::draw_list_header(ui::Canvas &canvas) const
     list.push_opacity(appear(5));
     if (favorites_)
     {
-        ui::text(list, fonts.semibold, "Your favorites", kMargin, baseline_for(kListY, 27.0f),
+        ui::text(list, fonts.semibold, tr("Your favorites"), kMargin, baseline_for(kListY, 27.0f),
                  27.0f, theme.text);
     }
     else
@@ -766,7 +770,7 @@ void BrowseScreen::draw_list_header(ui::Canvas &canvas) const
     if (grid_.count() > 0)
     {
         const std::string position = group_digits(static_cast<unsigned>(grid_.focus()) + 1u) +
-                                     " of " + group_digits(model.visible_count());
+                                     " / " + group_digits(model.visible_count());
         right -= ui::text(list, fonts.mono, position, right, baseline_for(kListY, 20.0f), 20.0f,
                           theme.text_muted, gfx::Align::right) +
                  26.0f;
@@ -795,8 +799,8 @@ void BrowseScreen::draw_list_header(ui::Canvas &canvas) const
         const float width = fonts.semibold.measure(shown, 20.0f);
         ui::text(list, fonts.semibold, shown, right, baseline_for(kListY, 20.0f), 20.0f, theme.text,
                  gfx::Align::right);
-        ui::text(list, fonts.semibold, "SEARCH", right - width - 16.0f, baseline_for(kListY, 16.0f),
-                 16.0f, tone::accent, gfx::Align::right, 3.0f);
+        ui::text(list, fonts.semibold, tr("SEARCH"), right - width - 16.0f,
+                 baseline_for(kListY, 16.0f), 16.0f, tone::accent, gfx::Align::right, 3.0f);
     }
     list.pop_opacity();
 }
@@ -814,15 +818,15 @@ void BrowseScreen::draw_waiting(ui::Canvas &canvas) const
     if (shared_.model.refreshing())
     {
         const ui::Theme &theme = shared_.theme;
-        ui::text(list, canvas.fonts.semibold, "Downloading the channel list", kMargin, 352.0f,
+        ui::text(list, canvas.fonts.semibold, tr("Downloading the channel list"), kMargin, 352.0f,
                  28.0f, theme.text);
         const unsigned so_far = shared_.model.refresh_progress() / 1000u * 1000u;
         ui::text(list, canvas.fonts.regular,
                  so_far != 0
                      ? group_digits(so_far) + " channels so far. Later launches open from the " +
                            "copy saved on this console."
-                     : std::string("This happens once. Later launches open from the copy saved "
-                                   "on this console."),
+                     : std::string(tr("This happens once. Later launches open from the copy saved "
+                                      "on this console.")),
                  kMargin, 392.0f, 23.0f, theme.text_muted);
     }
     const float w = (kGridWidth - (kColumns - 1) * kGapX) / kColumns;
@@ -877,10 +881,10 @@ void BrowseScreen::draw(ui::Canvas &canvas) const
         // No channel to speak of: the screen's own name holds the hero's place.
         ui::Painter paint(canvas.list, canvas.fonts, shared_.theme, canvas.glass);
         canvas.list.push_opacity(appear(0));
-        ui::text(canvas.list, canvas.fonts.semibold, favorites_ ? "FAVORITES" : "LIVE TV", kMargin,
-                 156.0f, 18.0f, tone::accent, gfx::Align::left, 4.0f);
-        paint.heading(favorites_ ? "Your favorite channels" : "Live TV", kMargin - 3.0f, 234.0f,
-                      76.0f);
+        ui::text(canvas.list, canvas.fonts.semibold, favorites_ ? tr("FAVORITES") : tr("LIVE TV"),
+                 kMargin, 156.0f, 18.0f, tone::accent, gfx::Align::left, 4.0f);
+        paint.heading(favorites_ ? tr("Your favorite channels") : tr("Live TV"), kMargin - 3.0f,
+                      234.0f, 76.0f);
         canvas.list.pop_opacity();
     }
 
@@ -946,31 +950,32 @@ int BrowseScreen::hints(ui::Hint *out, int capacity) const
     if (!model.has_catalog())
     {
         if (model.catalog_failed() && !model.refreshing())
-            add({ui::Button::cross, "Try again"});
+            add({ui::Button::cross, tr("Try again")});
         return count;
     }
     if (zone_ == Zone::groups)
     {
-        add({ui::Button::dpad, "Choose a list"});
+        add({ui::Button::dpad, tr("Choose a list")});
     }
     else if (zone_ == Zone::rail)
     {
-        add({ui::Button::dpad, "Jump to a letter"});
-        add({ui::Button::cross, "Channels"});
+        add({ui::Button::dpad, tr("Jump to a letter")});
+        add({ui::Button::cross, tr("Channels")});
     }
     else if (focused())
     {
-        add({ui::Button::cross, selection_mode_ ? "Choose" : "Watch"});
-        add({ui::Button::square, model.is_favorite(*focused()) ? "Unfavorite" : "Favorite"});
-        add({ui::Button::l2, "Page", ui::Button::r2});
+        add({ui::Button::cross, selection_mode_ ? tr("Choose") : tr("Watch")});
+        add({ui::Button::square,
+             model.is_favorite(*focused()) ? tr("Unfavorite") : tr("Favorite")});
+        add({ui::Button::l2, tr("Page"), ui::Button::r2});
     }
     else if (favorites_ && !model.filtering())
     {
-        add({ui::Button::cross, "Browse Live TV"});
+        add({ui::Button::cross, tr("Browse Live TV")});
     }
-    add({ui::Button::triangle, "Search"});
+    add({ui::Button::triangle, tr("Search")});
     if (model.filtering())
-        add({ui::Button::circle, "Clear the search"});
+        add({ui::Button::circle, tr("Clear the search")});
     return count;
 }
 

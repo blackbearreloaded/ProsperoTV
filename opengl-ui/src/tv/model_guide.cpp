@@ -1,6 +1,7 @@
 // ProsperoTV - Guide downloads share the catalog's network worker time.
 // Copyright (C) 2026 BlackBearReloaded
 // SPDX-License-Identifier: GPL-3.0-or-later
+#include "tv/i18n.hpp"
 #include "tv/model.hpp"
 #include "tv/platform.hpp"
 #include "tv/local_tv.hpp"
@@ -47,16 +48,17 @@ void Model::poll_guide()
         if (guide_ok_)
         {
             guide_ = std::move(pending_guide_);
-            guide_status_ = guide_.count() == 0 ? "No programmes matched this source's channels."
-                            : guide_.truncated
-                                ? "Guide loaded; this provider exceeded the programme limit."
-                            : guide_saved_ ? "Guide up to date"
-                                           : "Guide loaded, but could not be saved.";
+            guide_status_ =
+                guide_.count() == 0 ? tr("No programmes matched this source's channels.")
+                : guide_.truncated ? tr("Guide loaded; this provider exceeded the programme limit.")
+                : guide_saved_     ? tr("Guide up to date")
+                                   : tr("Guide loaded, but could not be saved.");
             rebuild_visible();
         }
         else
-            guide_status_ = guide_.count() ? "Guide update failed. Showing the saved programmes."
-                                           : "The programme guide could not be downloaded.";
+            guide_status_ = guide_.count()
+                                ? tr("Guide update failed. Showing the saved programmes.")
+                                : tr("The programme guide could not be downloaded.");
         pending_guide_ = {};
     }
     if (now / 60 != guide_minute_)
@@ -87,7 +89,7 @@ void Model::refresh_guide()
     next_guide_check_ = platform::unix_time() + 3600;
     if (guide_urls_.empty())
     {
-        guide_status_ = "This source has not supplied a programme guide.";
+        guide_status_ = tr("This source has not supplied a programme guide.");
         return;
     }
     guide_file_ = guide_path();
@@ -99,8 +101,8 @@ void Model::refresh_guide()
     guide_done_.store(false, std::memory_order_relaxed);
     guide_thread_ =
         platform::thread_start(&Model::guide_entry, this, 2u * 1024u * 1024u, "iptv-guide");
-    guide_status_ =
-        guide_thread_ ? "Downloading the programme guide" : "The guide download could not start.";
+    guide_status_ = guide_thread_ ? tr("Downloading the programme guide")
+                                  : tr("The guide download could not start.");
 }
 void *Model::guide_entry(void *self)
 {
@@ -165,8 +167,8 @@ bool Model::play_programme(unsigned index, const Programme &programme)
     if (url.empty())
     {
         notify(Level::warning, programme.start > now
-                                   ? "This programme has not started"
-                                   : "Catch-up is not available for this programme");
+                                   ? tr("This programme has not started")
+                                   : tr("Catch-up is not available for this programme"));
         return false;
     }
     play_request_ = {};

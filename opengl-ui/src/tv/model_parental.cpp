@@ -1,6 +1,7 @@
 // ProsperoTV - Parental controls shared by browsing and every playback path.
 // Copyright (C) 2026 BlackBearReloaded
 // SPDX-License-Identifier: GPL-3.0-or-later
+#include "tv/i18n.hpp"
 #include "tv/model.hpp"
 #include "tv/category_path.hpp"
 #include "tv/platform.hpp"
@@ -13,7 +14,8 @@ bool Model::require_parent()
 {
     if (parental_.unlocked())
         return true;
-    notify(Level::warning, "Parent PIN required", "Unlock parental controls in Settings first.");
+    notify(Level::warning, tr("Parent PIN required"),
+           tr("Unlock parental controls in Settings first."));
     return false;
 }
 int Model::category_rule(std::string_view category, bool inherited) const
@@ -98,8 +100,9 @@ void Model::parental_action(ParentalAction action)
     clear_pin();
     if (!parental_.valid())
     {
-        notify(Level::error, "Parental settings could not be read",
-               "Restore the profile's parental settings from a trusted backup outside the app.");
+        notify(
+            Level::error, tr("Parental settings could not be read"),
+            tr("Restore the profile's parental settings from a trusted backup outside the app."));
         return;
     }
     if (action == ParentalAction::unlock)
@@ -108,7 +111,8 @@ void Model::parental_action(ParentalAction action)
             return;
         if (platform::unix_time() < parental_.wait_until())
         {
-            notify(Level::warning, "Too many PIN attempts", "Wait 30 seconds before trying again.");
+            notify(Level::warning, tr("Too many PIN attempts"),
+                   tr("Wait 30 seconds before trying again."));
             return;
         }
         pin_step_ = PinStep::unlock;
@@ -117,7 +121,7 @@ void Model::parental_action(ParentalAction action)
     {
         parental_.lock();
         parental_changed();
-        notify(Level::ready, "Parental controls locked");
+        notify(Level::ready, tr("Parental controls locked"));
         return;
     }
     else
@@ -132,8 +136,8 @@ void Model::parental_action(ParentalAction action)
                                 ? parental_.set_kids(!parental_.kids_only())
                                 : parental_.remove();
             if (!ok)
-                notify(Level::error, "Parental settings could not be saved",
-                       "Set a PIN before enabling kids mode.");
+                notify(Level::error, tr("Parental settings could not be saved"),
+                       tr("Set a PIN before enabling kids mode."));
             else
                 parental_changed();
             return;
@@ -146,10 +150,10 @@ void Model::poll_pin()
     if (pin_pending_ && !iptv_ime_busy())
     {
         pin_pending_ = false;
-        iptv_ime_request_password(pin_step_ == PinStep::create    ? "New parent PIN"
-                                  : pin_step_ == PinStep::confirm ? "Confirm parent PIN"
-                                                                  : "Parent PIN",
-                                  "4 to 8 digits", 8, &Model::on_pin, this);
+        iptv_ime_request_password(pin_step_ == PinStep::create    ? tr("New parent PIN")
+                                  : pin_step_ == PinStep::confirm ? tr("Confirm parent PIN")
+                                                                  : tr("Parent PIN"),
+                                  tr("4 to 8 digits"), 8, &Model::on_pin, this);
     }
     else if (pin_step_ != PinStep::none && !iptv_ime_busy())
         clear_pin();
@@ -166,7 +170,7 @@ void Model::on_pin(const char *text, void *self)
     {
         if (!Parental::valid_pin(text))
         {
-            model.notify(Level::warning, "Use a PIN of 4 to 8 digits");
+            model.notify(Level::warning, tr("Use a PIN of 4 to 8 digits"));
             model.clear_pin();
             return;
         }
@@ -181,12 +185,12 @@ void Model::on_pin(const char *text, void *self)
                                     model.parental_.set_pin(text);
     model.clear_pin();
     model.parental_changed();
-    model.notify(
-        ok ? Level::ready : Level::warning,
-        ok ? (unlocking ? "Parental controls unlocked for this session"
-                        : "Parent PIN saved; controls locked")
-           : "PIN not accepted",
-        ok ? ""
-           : "Check the PIN and available storage. Five failed attempts require a 30-second wait.");
+    model.notify(ok ? Level::ready : Level::warning,
+                 ok ? (unlocking ? tr("Parental controls unlocked for this session")
+                                 : tr("Parent PIN saved; controls locked"))
+                    : tr("PIN not accepted"),
+                 ok ? ""
+                    : tr("Check the PIN and available storage. Five failed attempts require a "
+                         "30-second wait."));
 }
 } // namespace ptv

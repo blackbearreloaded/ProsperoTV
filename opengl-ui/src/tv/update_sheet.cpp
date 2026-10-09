@@ -2,6 +2,7 @@
 // Copyright (C) 2026 BlackBearReloaded
 // SPDX-License-Identifier: GPL-3.0-or-later
 
+#include "tv/i18n.hpp"
 #include "tv/update_sheet.hpp"
 
 #include "tv/draw.hpp"
@@ -70,8 +71,8 @@ Rect UpdateSheet::panel() const
 
 Rect UpdateSheet::notes_window() const
 {
-    const Rect full{(kWidth - kPanelWidth) * 0.5f, (kHeight - kNotesPanelHeight) * 0.5f, kPanelWidth,
-                    kNotesPanelHeight};
+    const Rect full{(kWidth - kPanelWidth) * 0.5f, (kHeight - kNotesPanelHeight) * 0.5f,
+                    kPanelWidth, kNotesPanelHeight};
     return {full.x + 64.0f, full.y + kNotesTop, full.w - 128.0f - 18.0f,
             full.h - kNotesTop - kNotesBottomRoom};
 }
@@ -156,7 +157,7 @@ void UpdateSheet::layout_notes()
     {
         y += 20.0f;
         NoteLine out;
-        out.text = "The rest is on the app's page on homebrew.page.";
+        out.text = tr("The rest is on the app's page on homebrew.page.");
         out.y = y;
         out.size = kNotesText;
         out.muted = true;
@@ -224,14 +225,14 @@ const char *UpdateSheet::button_label(int index) const
     {
     case Stage::offer:
         if (has_notes() && index == 1)
-            return "What's new";
-        return index == 0 ? "Update now" : "Later";
+            return tr("What's new");
+        return index == 0 ? tr("Update now") : tr("Later");
     case Stage::notes:
-        return index == 0 ? "Update now" : "Back";
+        return index == 0 ? tr("Update now") : tr("Back");
     case Stage::failed:
-        return index == 0 ? "Try again" : "Close";
+        return index == 0 ? tr("Try again") : tr("Close");
     case Stage::working:
-        return "Cancel";
+        return tr("Cancel");
     default:
         break;
     }
@@ -282,14 +283,14 @@ void UpdateSheet::begin(ui::Feedback &feedback)
     }
     else
     {
-        fail("The update could not start. Is the console online?", feedback);
+        fail(tr("The update could not start. Is the console online?"), feedback);
     }
 }
 
 void UpdateSheet::fail(std::string reason, ui::Feedback &feedback)
 {
     platform::update_finish();
-    failure_ = reason.empty() ? "The update did not finish." : std::move(reason);
+    failure_ = reason.empty() ? tr("The update did not finish.") : std::move(reason);
     stage_ = Stage::failed;
     focus_ = 0;
     focus_x_.snap(0.0f);
@@ -429,7 +430,7 @@ void UpdateSheet::update(float dt, ui::Feedback &feedback)
             }
             if (!platform::update_apply())
             {
-                fail("The new version was downloaded but could not be put in place.", feedback);
+                fail(tr("The new version was downloaded but could not be put in place."), feedback);
                 break;
             }
             [[fallthrough]];
@@ -455,8 +456,8 @@ void UpdateSheet::update(float dt, ui::Feedback &feedback)
         case UpdatePhase::cancelled:
             platform::update_finish();
             if (stage_ == Stage::cancelling)
-                shared_.toasts.push(ui::StatusKind::info, "Update cancelled",
-                                    "ProsperoTV is as it was.");
+                shared_.toasts.push(ui::StatusKind::info, tr("Update cancelled"),
+                                    tr("ProsperoTV is as it was."));
             close();
             break;
         default:
@@ -535,7 +536,8 @@ void UpdateSheet::draw_orb(ui::Canvas &canvas, float cx, float cy) const
         list.line(cx, cy - 40.0f + drop, cx, tip, 9.0f, tone::cream);
         list.line(cx - 26.0f, tip - 26.0f, cx, tip, 9.0f, tone::cream);
         list.line(cx + 26.0f, tip - 26.0f, cx, tip, 9.0f, tone::cream);
-        list.rounded_rect({cx - 36.0f, cy + 56.0f, 72.0f, 8.0f}, 4.0f, tone::cream.with_alpha(0.55f));
+        list.rounded_rect({cx - 36.0f, cy + 56.0f, 72.0f, 8.0f}, 4.0f,
+                          tone::cream.with_alpha(0.55f));
         break;
     }
     case Stage::working:
@@ -603,7 +605,8 @@ void UpdateSheet::draw_orb(ui::Canvas &canvas, float cx, float cy) const
         if (!still && wave < 1.0f)
             list.ring(cx, cy, kOrbRadius + 90.0f * wave, 4.0f,
                       tone::good.with_alpha(0.5f * (1.0f - wave)));
-        const float drawn = still ? 1.0f : tween::cubic_out(tween::clamp01((closing_ - 0.15f) / 0.5f));
+        const float drawn =
+            still ? 1.0f : tween::cubic_out(tween::clamp01((closing_ - 0.15f) / 0.5f));
         const float ax = cx - 38.0f, ay = cy + 2.0f;
         const float bx = cx - 10.0f, by = cy + 30.0f;
         const float ex = cx + 42.0f, ey = cy - 30.0f;
@@ -638,7 +641,7 @@ void UpdateSheet::draw_notes(ui::Canvas &canvas, const Rect &panel) const
     const float x = panel.x + 64.0f;
 
     list.push_opacity(mix);
-    ui::text(list, fonts.semibold, "WHAT'S NEW", x, panel.y + 70.0f, 17.0f, tone::accent,
+    ui::text(list, fonts.semibold, tr("WHAT'S NEW"), x, panel.y + 70.0f, 17.0f, tone::accent,
              gfx::Align::left, 4.0f);
     paint.heading("ProsperoTV " + spoken(offer_.version), x - 2.0f, panel.y + 122.0f, 44.0f);
 
@@ -666,8 +669,9 @@ void UpdateSheet::draw_notes(ui::Canvas &canvas, const Rect &panel) const
             list.circle(window.x + 11.0f, baseline - line.size * 0.32f, 4.0f, tone::accent);
         ui::text(list, line.heading ? fonts.semibold : fonts.regular, line.text,
                  window.x + line.indent, baseline, line.size,
-                 line.heading ? theme.text : line.muted ? theme.text_muted
-                                                        : theme.text.with_alpha(0.86f));
+                 line.heading ? theme.text
+                 : line.muted ? theme.text_muted
+                              : theme.text.with_alpha(0.86f));
     }
     list.pop_clip();
 
@@ -680,7 +684,8 @@ void UpdateSheet::draw_notes(ui::Canvas &canvas, const Rect &panel) const
         const float thumb = std::max(48.0f, window.h * window.h / notes_height_);
         const float at = (window.h - thumb) * tween::clamp01(notes_scroll_.value / most);
         list.rounded_rect({track_x, window.y + at, 4.0f, thumb}, 2.0f, tone::accent);
-        ui::Hint hints[] = {{ui::Button::dpad, "Scroll"}, {ui::Button::l2, "Page", ui::Button::r2}};
+        ui::Hint hints[] = {{ui::Button::dpad, tr("Scroll")},
+                            {ui::Button::l2, tr("Page"), ui::Button::r2}};
         ui::HintLayout layout;
         layout.size = 30.0f;
         layout.text_size = 20.0f;
@@ -697,7 +702,7 @@ void UpdateSheet::draw_steps(ui::Canvas &canvas, float x, float y, float width) 
     using platform::UpdatePhase;
     gfx::DrawList &list = canvas.list;
     const ui::Fonts &fonts = canvas.fonts;
-    static constexpr const char *kNames[] = {"Download", "Unpack", "Restart"};
+    const char *kNames[] = {tr("Download"), tr("Unpack"), tr("Restart")};
     int at = 0;
     if (stage_ == Stage::closing)
         at = 3;
@@ -710,8 +715,7 @@ void UpdateSheet::draw_steps(ui::Canvas &canvas, float x, float y, float width) 
         const float left = x + step * static_cast<float>(i);
         const bool done = i < at;
         const bool current = i == at && stage_ == Stage::working;
-        const Color color =
-            done ? tone::good : current ? tone::accent : kWhite.with_alpha(0.26f);
+        const Color color = done ? tone::good : current ? tone::accent : kWhite.with_alpha(0.26f);
         const float beat = current && !still ? 0.5f + 0.5f * std::sin(clock_ * 4.0f) : 0.0f;
         list.rounded_rect({left, y, step - 12.0f, 5.0f}, 2.5f, kWhite.with_alpha(0.10f));
         float filled = done ? 1.0f : 0.0f;
@@ -719,9 +723,11 @@ void UpdateSheet::draw_steps(ui::Canvas &canvas, float x, float y, float width) 
             filled = tween::clamp01(static_cast<float>(static_cast<double>(progress_.done) /
                                                        static_cast<double>(progress_.total)));
         if (filled > 0.0f)
-            list.rounded_rect({left, y, std::max(5.0f, (step - 12.0f) * filled), 5.0f}, 2.5f, color);
+            list.rounded_rect({left, y, std::max(5.0f, (step - 12.0f) * filled), 5.0f}, 2.5f,
+                              color);
         if (current)
-            list.glow({left, y, 10.0f, 5.0f}, 2.5f, 8.0f + 6.0f * beat, tone::accent.with_alpha(0.5f));
+            list.glow({left, y, 10.0f, 5.0f}, 2.5f, 8.0f + 6.0f * beat,
+                      tone::accent.with_alpha(0.5f));
         ui::text(list, fonts.semibold, kNames[i], left, y + 34.0f, 18.0f,
                  done || current ? shared_.theme.text : shared_.theme.text_muted, gfx::Align::left,
                  1.5f);
@@ -760,123 +766,130 @@ void UpdateSheet::draw(ui::Canvas &canvas) const
     }
     else
     {
-    // ---- left: the orb ----
-    const float orb_x = kPanel.x + 76.0f + kOrbRadius;
-    const float orb_y = kPanel.y + 66.0f + kOrbRadius + 20.0f;
-    const float grow = still ? 1.0f : tween::lerp(0.6f, 1.0f, pop);
-    list.push_transform(grow, orb_x, orb_y, 0.0f, 0.0f);
-    draw_orb(canvas, orb_x, orb_y);
-    list.pop_transform();
+        // ---- left: the orb ----
+        const float orb_x = kPanel.x + 76.0f + kOrbRadius;
+        const float orb_y = kPanel.y + 66.0f + kOrbRadius + 20.0f;
+        const float grow = still ? 1.0f : tween::lerp(0.6f, 1.0f, pop);
+        list.push_transform(grow, orb_x, orb_y, 0.0f, 0.0f);
+        draw_orb(canvas, orb_x, orb_y);
+        list.pop_transform();
 
-    // ---- right: what is happening ----
-    const float mix = tween::clamp01(stage_mix_.value);
-    const float slide = still ? 0.0f : 16.0f * (1.0f - mix);
-    list.push_opacity(mix);
-    list.push_transform(1.0f, 0.0f, 0.0f, slide, 0.0f);
+        // ---- right: what is happening ----
+        const float mix = tween::clamp01(stage_mix_.value);
+        const float slide = still ? 0.0f : 16.0f * (1.0f - mix);
+        list.push_opacity(mix);
+        list.push_transform(1.0f, 0.0f, 0.0f, slide, 0.0f);
 
-    const char *kicker = "UPDATE AVAILABLE";
-    std::string title = "ProsperoTV " + spoken(offer_.version);
-    std::string body;
-    std::string detail;
-    switch (stage_)
-    {
-    case Stage::offer:
-        body = "A newer version is on homebrew.page. It downloads and installs here; your "
-               "sources, favorites and settings stay as they are.";
-        if (offer_.size > 0)
-            detail = megabytes(offer_.size) + " download";
-        break;
-    case Stage::working:
-        kicker = "UPDATING";
-        if (progress_.phase == UpdatePhase::unpacking || progress_.phase == UpdatePhase::ready)
+        const char *kicker = tr("UPDATE AVAILABLE");
+        std::string title = "ProsperoTV " + spoken(offer_.version);
+        std::string body;
+        std::string detail;
+        switch (stage_)
         {
-            title = "Unpacking";
-            body = "The new version is being put together beside the one you are using.";
+        case Stage::offer:
+            body = tr("A newer version is on homebrew.page. It downloads and installs here; your "
+                      "sources, favorites and settings stay as they are.");
+            if (offer_.size > 0)
+                detail = megabytes(offer_.size) + tr(" download");
+            break;
+        case Stage::working:
+            kicker = tr("UPDATING");
+            if (progress_.phase == UpdatePhase::unpacking || progress_.phase == UpdatePhase::ready)
+            {
+                title = tr("Unpacking");
+                body = tr("The new version is being put together beside the one you are using.");
+            }
+            else if (progress_.phase == UpdatePhase::downloading)
+            {
+                title = tr("Downloading");
+                body =
+                    tr("Version ") + spoken(offer_.version) + tr(" is on its way to this console.");
+            }
+            else
+            {
+                title = tr("Getting ready");
+                body = tr("Asking the console to make room for the new version.");
+            }
+            if (progress_.total > 0 && progress_.phase == UpdatePhase::downloading)
+                detail = megabytes(progress_.done) + " / " + megabytes(progress_.total);
+            if (!progress_.time_left.empty())
+                detail += (detail.empty() ? "" : "  \xC2\xB7  ") + progress_.time_left;
+            break;
+        case Stage::cancelling:
+            kicker = tr("UPDATING");
+            title = tr("Stopping");
+            body = tr("Nothing was changed. ProsperoTV stays as it is.");
+            break;
+        case Stage::closing:
+            kicker = tr("READY");
+            title = tr("Version ") + spoken(offer_.version) + tr(" is ready");
+            body =
+                tr("ProsperoTV closes now and the new version takes its place. Open it again from "
+                   "the home screen.");
+            break;
+        case Stage::failed:
+            kicker = tr("UPDATE");
+            title = tr("It didn't work this time");
+            body = failure_ + tr(" Nothing was changed.");
+            break;
+        default:
+            break;
         }
-        else if (progress_.phase == UpdatePhase::downloading)
-        {
-            title = "Downloading";
-            body = "Version " + spoken(offer_.version) + " is on its way to this console.";
-        }
-        else
-        {
-            title = "Getting ready";
-            body = "Asking the console to make room for the new version.";
-        }
-        if (progress_.total > 0 && progress_.phase == UpdatePhase::downloading)
-            detail = megabytes(progress_.done) + " of " + megabytes(progress_.total);
-        if (!progress_.time_left.empty())
-            detail += (detail.empty() ? "" : "  \xC2\xB7  ") + progress_.time_left;
-        break;
-    case Stage::cancelling:
-        kicker = "UPDATING";
-        title = "Stopping";
-        body = "Nothing was changed. ProsperoTV stays as it is.";
-        break;
-    case Stage::closing:
-        kicker = "READY";
-        title = "Version " + spoken(offer_.version) + " is ready";
-        body = "ProsperoTV closes now and the new version takes its place. Open it again from "
-               "the home screen.";
-        break;
-    case Stage::failed:
-        kicker = "UPDATE";
-        title = "It didn't work this time";
-        body = failure_ + " Nothing was changed.";
-        break;
-    default:
-        break;
-    }
 
-    float y = kPanel.y + 96.0f;
-    ui::text(list, fonts.semibold, kicker, x, y, 17.0f,
-             stage_ == Stage::failed ? tone::bad
-                                     : stage_ == Stage::closing ? tone::good : tone::accent,
-             gfx::Align::left, 4.0f);
-    y += 62.0f;
-    const float title_size = paint.heading_width(title, 50.0f) <= width ? 50.0f : 40.0f;
-    paint.heading(title, x - 2.0f, y, title_size);
-    y += 30.0f;
+        float y = kPanel.y + 96.0f;
+        ui::text(list, fonts.semibold, kicker, x, y, 17.0f,
+                 stage_ == Stage::failed    ? tone::bad
+                 : stage_ == Stage::closing ? tone::good
+                                            : tone::accent,
+                 gfx::Align::left, 4.0f);
+        y += 62.0f;
+        const float title_size = paint.heading_width(title, 50.0f) <= width ? 50.0f : 40.0f;
+        paint.heading(title, x - 2.0f, y, title_size);
+        y += 30.0f;
 
-    if (stage_ == Stage::offer || stage_ == Stage::closing)
-    {
-        // From this version to that one.
-        const std::string from = spoken(offer_.installed.empty() ? "?" : offer_.installed);
-        const std::string to = spoken(offer_.available.empty() ? offer_.version : offer_.available);
-        const float from_width = fonts.mono.measure(from, 21.0f) + 32.0f;
-        const float to_width = fonts.mono.measure(to, 21.0f) + 32.0f;
-        const Rect old_pill{x, y, from_width, 38.0f};
-        list.rounded_rect(old_pill, 19.0f, kWhite.with_alpha(0.08f));
-        ui::text(list, fonts.mono, from, old_pill.cx(), baseline_for(old_pill.cy(), 21.0f), 21.0f,
-                 theme.text_muted, gfx::Align::center);
-        // Chevrons run from the old to the new.
-        const float lane = x + from_width + 14.0f;
-        for (int i = 0; i < 3; ++i)
+        if (stage_ == Stage::offer || stage_ == Stage::closing)
         {
-            const float phase =
-                still ? 0.5f : std::fmod(clock_ * 1.3f - static_cast<float>(i) * 0.22f + 4.0f, 1.0f);
-            const float cx = lane + 10.0f + static_cast<float>(i) * 16.0f;
-            const Color color = tone::accent.with_alpha(0.25f + 0.75f * std::sin(phase * 3.14159f));
-            list.line(cx - 4.0f, y + 11.0f, cx + 4.0f, y + 19.0f, 3.0f, color);
-            list.line(cx + 4.0f, y + 19.0f, cx - 4.0f, y + 27.0f, 3.0f, color);
+            // From this version to that one.
+            const std::string from = spoken(offer_.installed.empty() ? "?" : offer_.installed);
+            const std::string to =
+                spoken(offer_.available.empty() ? offer_.version : offer_.available);
+            const float from_width = fonts.mono.measure(from, 21.0f) + 32.0f;
+            const float to_width = fonts.mono.measure(to, 21.0f) + 32.0f;
+            const Rect old_pill{x, y, from_width, 38.0f};
+            list.rounded_rect(old_pill, 19.0f, kWhite.with_alpha(0.08f));
+            ui::text(list, fonts.mono, from, old_pill.cx(), baseline_for(old_pill.cy(), 21.0f),
+                     21.0f, theme.text_muted, gfx::Align::center);
+            // Chevrons run from the old to the new.
+            const float lane = x + from_width + 14.0f;
+            for (int i = 0; i < 3; ++i)
+            {
+                const float phase =
+                    still ? 0.5f
+                          : std::fmod(clock_ * 1.3f - static_cast<float>(i) * 0.22f + 4.0f, 1.0f);
+                const float cx = lane + 10.0f + static_cast<float>(i) * 16.0f;
+                const Color color =
+                    tone::accent.with_alpha(0.25f + 0.75f * std::sin(phase * 3.14159f));
+                list.line(cx - 4.0f, y + 11.0f, cx + 4.0f, y + 19.0f, 3.0f, color);
+                list.line(cx + 4.0f, y + 19.0f, cx - 4.0f, y + 27.0f, 3.0f, color);
+            }
+            const Rect new_pill{lane + 62.0f, y, to_width, 38.0f};
+            list.glow(new_pill, 19.0f, 16.0f, tone::accent.with_alpha(0.3f));
+            list.rounded_rect(new_pill, 19.0f, tone::accent);
+            ui::text(list, fonts.mono, to, new_pill.cx(), baseline_for(new_pill.cy(), 21.0f), 21.0f,
+                     tone::ink, gfx::Align::center);
+            y += 38.0f;
         }
-        const Rect new_pill{lane + 62.0f, y, to_width, 38.0f};
-        list.glow(new_pill, 19.0f, 16.0f, tone::accent.with_alpha(0.3f));
-        list.rounded_rect(new_pill, 19.0f, tone::accent);
-        ui::text(list, fonts.mono, to, new_pill.cx(), baseline_for(new_pill.cy(), 21.0f), 21.0f,
-                 tone::ink, gfx::Align::center);
-        y += 38.0f;
-    }
-    y += 44.0f;
-    y = ui::paragraph(list, fonts.regular, body, x, y, 24.0f, width, 35.0f, theme.text_muted, 3);
-    if (!detail.empty())
-        ui::text(list, fonts.semibold, fonts.semibold.font->fit(detail, 22.0f, width), x, y + 14.0f,
-                 22.0f, theme.text);
-    list.pop_transform();
-    list.pop_opacity();
+        y += 44.0f;
+        y = ui::paragraph(list, fonts.regular, body, x, y, 24.0f, width, 35.0f, theme.text_muted,
+                          3);
+        if (!detail.empty())
+            ui::text(list, fonts.semibold, fonts.semibold.font->fit(detail, 22.0f, width), x,
+                     y + 14.0f, 22.0f, theme.text);
+        list.pop_transform();
+        list.pop_opacity();
 
-    if (stage_ == Stage::working || stage_ == Stage::closing)
-        draw_steps(canvas, x, kPanel.y + kPanel.h - 196.0f, width);
+        if (stage_ == Stage::working || stage_ == Stage::closing)
+            draw_steps(canvas, x, kPanel.y + kPanel.h - 196.0f, width);
     } // not the notes
 
     // ---- the answers ----
@@ -908,8 +921,8 @@ void UpdateSheet::draw(ui::Canvas &canvas) const
         const float left = 1.0f - tween::clamp01(closing_ / kClosingSeconds);
         list.rounded_rect({x, row_y + kButtonHeight - 6.0f, width, 4.0f}, 2.0f,
                           kWhite.with_alpha(0.10f));
-        list.rounded_rect({x, row_y + kButtonHeight - 6.0f, std::max(4.0f, width * left), 4.0f}, 2.0f,
-                          tone::good);
+        list.rounded_rect({x, row_y + kButtonHeight - 6.0f, std::max(4.0f, width * left), 4.0f},
+                          2.0f, tone::good);
     }
 
     list.pop_transform();

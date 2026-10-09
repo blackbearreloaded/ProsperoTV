@@ -16,6 +16,7 @@
 #include "host_platform.hpp"
 #include "host_preview.hpp"
 #include "tv/app.hpp"
+#include "tv/i18n.hpp"
 
 #include <EGL/egl.h>
 #include <EGL/eglext.h>
@@ -317,6 +318,8 @@ const Step kWalk[] = {
 
 int main(int argc, char **argv)
 {
+    if (const auto value = std::getenv("TV_SYSTEM_LANGUAGE"))
+        ptv::set_console_language(std::atoi(value));
     if (argc < 4)
     {
         std::fprintf(stderr, "usage: %s <fonts dir> <playlist.m3u> <output dir> [width height]\n",

@@ -2,6 +2,7 @@
 // Copyright (C) 2026 BlackBearReloaded
 // SPDX-License-Identifier: GPL-3.0-or-later
 
+#include "tv/i18n.hpp"
 #include "tv/search_sheet.hpp"
 
 #include "tv/draw.hpp"
@@ -28,8 +29,9 @@ std::vector<ui::SelectOption> options_of(const char *any, std::span<const Facet>
     options.reserve(facets.size() + 1);
     options.emplace_back(any);
     for (const Facet &facet : facets)
-        options.emplace_back(facet.value, group_digits(facet.count) +
-                                              (facet.count == 1 ? " channel" : " channels"));
+        options.emplace_back(facet.value,
+                             group_digits(facet.count) +
+                                 (facet.count == 1 ? tr(" channel") : tr(" channels")));
     return options;
 }
 
@@ -68,7 +70,7 @@ SearchSheet::SearchSheet(Shared &shared) : shared_(shared)
     sheet_.style.title_size = 40.0f;
     sheet_.style.scrim = 0.55f;
     sheet_.style.scrim_color = tone::night;
-    sheet_.set_title("Search and filter");
+    sheet_.set_title(tr("Search and filter"));
     sheet_.content = [this](ui::Canvas &canvas, const Rect &, float opacity)
     { draw_content(canvas, opacity); };
 
@@ -81,13 +83,13 @@ SearchSheet::SearchSheet(Shared &shared) : shared_(shared)
     field_.style.remember = false;
     field_.style.max_rows = 0;
     field_.style.exits.down = true;
-    field_.set_placeholder("A name, a country, a category");
+    field_.set_placeholder(tr("A name, a country, a category"));
     field_.set_bounds({area.x, y, area.w, kFieldHeight});
     y += kFieldHeight + 46.0f;
 
-    style_select(country_, theme, "Country");
-    style_select(category_, theme, "Category");
-    style_select(language_, theme, "Language");
+    style_select(country_, theme, tr("Country"));
+    style_select(category_, theme, tr("Category"));
+    style_select(language_, theme, tr("Language"));
     country_.set_bounds({area.x, y, area.w, kRowHeight});
     y += kRowHeight + kRowGap;
     category_.set_bounds({area.x, y, area.w, kRowHeight});
@@ -102,7 +104,7 @@ SearchSheet::SearchSheet(Shared &shared) : shared_(shared)
     quality_.style.text_size = 22.0f;
     quality_.style.padding = 10.0f;
     std::vector<ui::TabItem> sizes;
-    sizes.push_back({"Any"});
+    sizes.push_back({tr("Any")});
     for (unsigned quality = 1; quality < kQualityCount; ++quality)
         sizes.push_back({quality_filter_name(quality)});
     quality_.set_tabs(std::move(sizes));
@@ -147,9 +149,9 @@ void SearchSheet::sync()
 {
     const Model &model = shared_.model;
     seen_revision_ = model.revision();
-    country_.set_options(options_of("All countries", model.countries()));
-    category_.set_options(options_of("All categories", model.categories()));
-    language_.set_options(options_of("All languages", model.languages()));
+    country_.set_options(options_of(tr("All countries"), model.countries()));
+    category_.set_options(options_of(tr("All categories"), model.categories()));
+    language_.set_options(options_of(tr("All languages"), model.languages()));
     country_.set_index(index_of(model.countries(), model.country()));
     category_.set_index(index_of(model.categories(), model.category()));
     language_.set_index(index_of(model.languages(), model.language()));
@@ -236,8 +238,7 @@ void SearchSheet::handle(const InputFrame &input, ui::Feedback &feedback)
         if (select.handle(input, feedback) == ui::Event::changed)
         {
             const int index = select.index();
-            const auto pick = [&](std::span<const Facet> facets)
-            {
+            const auto pick = [&](std::span<const Facet> facets) {
                 return index > 0 ? facets[static_cast<std::size_t>(index - 1)].value
                                  : std::string();
             };
@@ -392,7 +393,7 @@ void SearchSheet::draw_unlisted(ui::Canvas &canvas, const Rect &row, const char 
     list.bordered_rect(row, 16.0f, kWhite.with_alpha(0.03f), 1.5f, kWhite.with_alpha(0.08f));
     ui::text(list, canvas.fonts.regular, label, row.x + 20.0f, baseline_for(row.cy(), 24.0f), 24.0f,
              theme.text_muted.with_alpha(0.6f));
-    ui::text(list, canvas.fonts.regular, "Not listed by this source", row.x + row.w - 20.0f,
+    ui::text(list, canvas.fonts.regular, tr("Not listed by this source"), row.x + row.w - 20.0f,
              baseline_for(row.cy(), 22.0f), 22.0f, theme.text_muted.with_alpha(0.6f),
              gfx::Align::right);
 }
@@ -408,22 +409,22 @@ void SearchSheet::draw_content(ui::Canvas &canvas, float) const
 
     field_.draw(canvas);
 
-    ui::text(list, fonts.semibold, "NARROW IT DOWN", area.x, country_.bounds().y - 16.0f, 16.0f,
+    ui::text(list, fonts.semibold, tr("NARROW IT DOWN"), area.x, country_.bounds().y - 16.0f, 16.0f,
              theme.text_muted, gfx::Align::left, 3.0f);
     if (usable(Zone::country))
         country_.draw(canvas);
     else
-        draw_unlisted(canvas, country_.bounds(), "Country");
+        draw_unlisted(canvas, country_.bounds(), tr("Country"));
     if (usable(Zone::category))
         category_.draw(canvas);
     else
-        draw_unlisted(canvas, category_.bounds(), "Category");
+        draw_unlisted(canvas, category_.bounds(), tr("Category"));
     if (usable(Zone::language))
         language_.draw(canvas);
     else
-        draw_unlisted(canvas, language_.bounds(), "Language");
+        draw_unlisted(canvas, language_.bounds(), tr("Language"));
 
-    ui::text(list, fonts.semibold, "PICTURE SIZE", area.x, quality_.bounds().y - 16.0f, 16.0f,
+    ui::text(list, fonts.semibold, tr("PICTURE SIZE"), area.x, quality_.bounds().y - 16.0f, 16.0f,
              theme.text_muted, gfx::Align::left, 3.0f);
     quality_.draw(canvas);
 
@@ -432,7 +433,8 @@ void SearchSheet::draw_content(ui::Canvas &canvas, float) const
     const unsigned shown = static_cast<unsigned>(std::lround(std::max(count_.value, 0.0f)));
     const float number =
         ui::text(list, fonts.mono, group_digits(shown), area.x, answer, 56.0f, theme.text);
-    ui::text(list, fonts.regular, model.visible_count() == 1 ? "channel matches" : "channels match",
+    ui::text(list, fonts.regular,
+             model.visible_count() == 1 ? tr("channel matches") : tr("channels match"),
              area.x + number + 18.0f, answer - 4.0f, 26.0f, theme.text_muted);
 
     // ---- what to do with it ----
@@ -441,10 +443,10 @@ void SearchSheet::draw_content(ui::Canvas &canvas, float) const
     const float show_width = (area.w - gap) * 0.62f;
     const Rect show{area.x, buttons, show_width, 68.0f};
     const Rect reset{area.x + show_width + gap, buttons, area.w - show_width - gap, 68.0f};
-    paint.button(show, "Show the channels", ui::ButtonKind::primary,
+    paint.button(show, tr("Show the channels"), ui::ButtonKind::primary,
                  {show_focus_.value, zone_ == Zone::show ? press_.value : 0.0f, false});
     paint.button(
-        reset, "Reset", ui::ButtonKind::secondary,
+        reset, tr("Reset"), ui::ButtonKind::secondary,
         {reset_focus_.value, zone_ == Zone::reset ? press_.value : 0.0f, !model.filtering()});
     paint.focus_ring(show, paint.control_radius(show), show_focus_.value);
     paint.focus_ring(reset, paint.control_radius(reset), reset_focus_.value);
@@ -455,32 +457,32 @@ void SearchSheet::draw_content(ui::Canvas &canvas, float) const
     const bool listing = country_.is_open() || category_.is_open() || language_.is_open();
     if (listing)
     {
-        hints[count++] = {ui::Button::cross, "Choose"};
-        hints[count++] = {ui::Button::circle, "Close the list"};
+        hints[count++] = {ui::Button::cross, tr("Choose")};
+        hints[count++] = {ui::Button::circle, tr("Close the list")};
     }
     else
     {
         switch (zone_)
         {
         case Zone::field:
-            hints[count++] = {ui::Button::cross, "Type"};
+            hints[count++] = {ui::Button::cross, tr("Type")};
             break;
         case Zone::country:
         case Zone::category:
         case Zone::language:
-            hints[count++] = {ui::Button::cross, "Open the list"};
+            hints[count++] = {ui::Button::cross, tr("Open the list")};
             break;
         case Zone::quality:
-            hints[count++] = {ui::Button::dpad, "Change"};
+            hints[count++] = {ui::Button::dpad, tr("Change")};
             break;
         case Zone::show:
         case Zone::reset:
-            hints[count++] = {ui::Button::cross, "Choose"};
+            hints[count++] = {ui::Button::cross, tr("Choose")};
             break;
         }
         if (model.filtering())
-            hints[count++] = {ui::Button::square, "Reset"};
-        hints[count++] = {ui::Button::circle, "Close"};
+            hints[count++] = {ui::Button::square, tr("Reset")};
+        hints[count++] = {ui::Button::circle, tr("Close")};
     }
     ui::HintLayout layout;
     layout.size = 36.0f;
