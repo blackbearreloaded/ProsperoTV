@@ -86,6 +86,8 @@ void Model::select_source_record(const SavedSource &source)
         view.vod_series.clear();
         view.vod_series_name.clear();
         view.vod_series_cover.clear();
+        view.vod_series_group.clear();
+        view.vod_series_adult = false;
         view.vod_query.clear();
         view.vod_all = false;
     }
@@ -138,6 +140,8 @@ void Model::use_saved_source(std::int64_t id)
 
 void Model::add_source(iptv::SourceKind kind)
 {
+    if (!require_parent() || iptv_ime_busy())
+        return;
     if (kind == iptv::SourceKind::BuiltIn || refreshing() || !keyboard_ready_)
         return;
     if (kind == iptv::SourceKind::Custom)
@@ -159,6 +163,8 @@ void Model::add_source(iptv::SourceKind kind)
 
 void Model::edit_saved_source(std::int64_t id)
 {
+    if (!require_parent() || iptv_ime_busy())
+        return;
     const auto *source = saved_source(id);
     if (source == nullptr || source->kind == 0 || source->kind > 5 || refreshing() ||
         !keyboard_ready_)
@@ -265,6 +271,8 @@ bool Model::save_source_form(std::string_view url, const iptv::XtreamCredentials
 
 bool Model::commit_source(SavedSource source)
 {
+    if (!require_parent())
+        return false;
     if (!library_.save_source(&source))
     {
         notify(Level::error, "The source could not be saved");
@@ -324,6 +332,8 @@ void Model::on_portal_mac(const char *text, void *self)
 
 bool Model::remove_source(std::int64_t id)
 {
+    if (!require_parent())
+        return false;
     if (id <= 4 || refreshing() || !library_.remove_source(id))
         return false;
     sources_ = library_.sources();
@@ -334,6 +344,8 @@ bool Model::remove_source(std::int64_t id)
 
 bool Model::set_schedule(std::int64_t id, RefreshSchedule schedule)
 {
+    if (!require_parent())
+        return false;
     const auto *source = saved_source(id);
     if (source == nullptr)
         return false;
@@ -355,9 +367,10 @@ bool Model::set_schedule(std::int64_t id, RefreshSchedule schedule)
 
 bool Model::play_vod(unsigned index)
 {
-    if (vod_.kind() == VodKind::series || index >= vod_.catalog().size())
+    if (vod_.kind() == VodKind::series || pin_prompt() || !vod_allowed(index))
         return false;
     const auto item = vod_.catalog()[index];
+    sleep_timer.wake();
     play_request_ = {};
     play_request_.channel_id = item.id;
     play_request_.channel_name = item.name;
@@ -396,8 +409,20 @@ void Model::set_hide_failed(bool hide)
     rebuild_visible();
 }
 
+bool Model::check_sleep_timer()
+{
+    if (!sleep_timer.expire(platform::monotonic_us()))
+        return false;
+    play_requested_ = false;
+    play_request_ = {};
+    notify(Level::ready, "Sleep timer finished", "Choose a channel to watch again.");
+    return true;
+}
+
 void Model::resume_last(bool enabled)
 {
+    if (sleep_timer.sleeping())
+        return;
     if (resume_attempted_)
         return;
     if (!enabled)
@@ -421,13 +446,25 @@ void Model::resume_last(bool enabled)
 
 void Model::mark_visibility()
 {
+    protected_categories_.clear();
     if (marks_.size() != catalog_.size())
         return;
+    std::map<std::string, unsigned> categories;
     for (std::size_t i = 0; i < catalog_.size(); ++i)
     {
         marks_[i] &= static_cast<std::uint8_t>(~4u);
         const auto channel = catalog_[i];
-        bool hidden = hide_failed_ && channel.playback_status == iptv::PlaybackStatus::failed;
+        const bool allowed = content_allowed(channel);
+        if (allowed && !parental_.unlocked())
+        {
+            if (!channel.group_title.empty())
+                ++categories[std::string(channel.group_title)];
+            for (const auto group : channel.alternate_group_titles)
+                if (!group.empty() && group != channel.group_title)
+                    ++categories[std::string(group)];
+        }
+        bool hidden =
+            !allowed || (hide_failed_ && channel.playback_status == iptv::PlaybackStatus::failed);
         if (!hidden_categories_.empty())
         {
             hidden = hidden || category_hidden(channel.group_title);
@@ -437,6 +474,8 @@ void Model::mark_visibility()
         if (hidden)
             marks_[i] |= 4u;
     }
+    for (auto &[category, count] : categories)
+        protected_categories_.push_back({std::move(category), count});
 }
 
 void Model::set_provider_category(std::string_view category)

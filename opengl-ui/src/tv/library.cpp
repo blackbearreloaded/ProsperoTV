@@ -157,6 +157,8 @@ bool Library::open(const std::string &path)
         "source INTEGER REFERENCES sources(id) ON DELETE SET NULL,channel TEXT NOT NULL);"
         "CREATE TABLE IF NOT EXISTS hidden_categories (source TEXT NOT NULL,category TEXT NOT NULL,"
         "PRIMARY KEY(source,category));"
+        "CREATE TABLE IF NOT EXISTS category_rules (source TEXT NOT NULL,category TEXT NOT NULL,"
+        "rule INTEGER NOT NULL CHECK(rule IN(1,2)),PRIMARY KEY(source,category));"
         "CREATE TABLE IF NOT EXISTS folders (name TEXT PRIMARY KEY);"
         "CREATE TABLE IF NOT EXISTS folder_channels (folder TEXT NOT NULL REFERENCES folders(name)"
         " ON DELETE CASCADE ON UPDATE CASCADE,channel TEXT NOT NULL,PRIMARY KEY(folder,channel));"
@@ -275,6 +277,26 @@ std::vector<std::string> Library::folders() const
     while (query.row())
         result.push_back(query.string(0));
     return result;
+}
+
+std::map<std::string, int> Library::category_rules(std::uint64_t source) const
+{
+    std::map<std::string, int> result;
+    Statement query(db_, "SELECT category,rule FROM category_rules WHERE source=?1");
+    if (query.text(1, std::to_string(source)))
+        while (query.row())
+            result.emplace(query.string(0), sqlite3_column_int(query.stmt, 1));
+    return result;
+}
+
+bool Library::set_category_rule(std::uint64_t source, std::string_view category, int rule)
+{
+    if (!valid_text(category, iptv::kDefaultMaxFieldBytes) || rule < 0 || rule > 2)
+        return false;
+    Statement query(db_, rule == 0 ? "DELETE FROM category_rules WHERE source=?1 AND category=?2"
+                                   : "INSERT OR REPLACE INTO category_rules VALUES(?1,?2,?3)");
+    return query.text(1, std::to_string(source)) && query.text(2, category) &&
+           (rule == 0 || query.integer(3, rule)) && query.done();
 }
 
 bool Library::add_folder(std::string_view name)

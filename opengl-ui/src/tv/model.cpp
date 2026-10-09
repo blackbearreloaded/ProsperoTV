@@ -310,6 +310,9 @@ bool Model::open()
 
     if (first)
     {
+        if (!parental_.load(path("prosperotv-parental-v1.txt")))
+            notify(Level::error, "Parental settings could not be read",
+                   "Playback is locked until the profile settings are recovered.");
         health_.fill(SourceHealth::empty);
         std::string saved_url;
         if (iptv::LoadCustomSourceUrl(path("iptv-custom-source-v1.txt"), &saved_url) ==
@@ -375,6 +378,7 @@ bool Model::open()
 
 void Model::close()
 {
+    clear_pin();
     vod_.stop();
     stop_guide();
     stop_requested_.store(true, std::memory_order_release);
@@ -411,8 +415,10 @@ bool Model::close_for_storage()
 
 void Model::poll()
 {
+    check_sleep_timer();
     if (keyboard_ready_)
         iptv_ime_poll();
+    poll_pin();
     continue_account_form();
     consume_refresh();
     if (vod_.requested() && !refreshing())
@@ -442,8 +448,8 @@ void Model::load_cache()
     iptv::StoreReport report;
     const iptv::StoreStatus status =
         iptv::LoadCatalog(cache_path(active_source_), &cached, {}, &report);
-    catalog_loaded_ =
-        status == iptv::StoreStatus::ok && cached.source_id == wanted && !cached.empty();
+    catalog_loaded_ = status == iptv::StoreStatus::ok && report.catalog_version >= 5 &&
+                      cached.source_id == wanted && !cached.empty();
     catalog_ = catalog_loaded_ ? std::move(cached) : iptv::Catalog{};
     saved_unix_ = catalog_loaded_ ? report.saved_unix : 0;
     if (catalog_loaded_)
@@ -463,6 +469,7 @@ void Model::load_cache()
 void Model::adopt_catalog()
 {
     hidden_categories_ = library_.hidden_categories(source_id(active_source_));
+    category_rules_ = library_.category_rules(source_id(active_source_));
     folder_channels_ = library_.folder_channels(folder_);
     if (!provider_category_.empty() &&
         std::none_of(index_.provider_categories.begin(), index_.provider_categories.end(),
@@ -793,8 +800,10 @@ Model::Starred Model::toggle_favorite(unsigned catalog_index)
 
 std::optional<PlayRequest> Model::preview_request(std::string_view channel_id) const
 {
+    if (sleep_timer.sleeping())
+        return {};
     const auto index = catalog_.Find(channel_id);
-    if (index >= catalog_.size())
+    if (index >= catalog_.size() || pin_prompt() || !content_allowed(catalog_[index]))
         return {};
     const auto channel = catalog_[index];
     PlayRequest request;
@@ -825,9 +834,11 @@ std::optional<PlayRequest> Model::preview_request(std::string_view channel_id) c
 
 bool Model::play(unsigned catalog_index)
 {
-    if (catalog_index >= channel_count())
+    if (catalog_index >= channel_count() || pin_prompt() ||
+        !content_allowed(catalog_[catalog_index]))
         return false;
     const iptv::ChannelView channel = catalog_[catalog_index];
+    sleep_timer.wake();
     play_request_ = {};
     play_request_.channel_id = channel.id;
     play_request_.channel_name = channel.name;
@@ -975,6 +986,8 @@ void Model::use_source(iptv::SourceKind source)
 
 void Model::edit_source(iptv::SourceKind source)
 {
+    if (!require_parent() || iptv_ime_busy())
+        return;
     if (source == iptv::SourceKind::BuiltIn)
     {
         notify(Level::ready, "The iptv-org catalog is built in", "It has nothing to set up.");

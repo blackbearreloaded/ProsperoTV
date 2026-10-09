@@ -73,9 +73,11 @@ void LibrarySheet::sync()
             branches_.push_back(info.second);
             ui::ListItem row;
             row.title = category_leaf(child);
-            row.value = model.category_hidden(child) ? "Hidden"
-                        : info.second                ? ""
-                                                     : group_digits(info.first);
+            row.value = model.category_rule(child) == 1   ? "PIN required"
+                        : model.category_rule(child) == 2 ? "Approved for kids"
+                        : model.category_hidden(child)    ? "Hidden"
+                        : info.second                     ? ""
+                                                          : group_digits(info.first);
             row.badge = info.second                          ? "Subcategories"
                         : model.provider_category() == child ? "In use"
                                                              : "";
@@ -149,6 +151,15 @@ void LibrarySheet::handle(const InputFrame &input, ui::Feedback &feedback)
     const std::string value = at > 0 && static_cast<std::size_t>(at) <= values_.size()
                                   ? values_[static_cast<std::size_t>(at - 1)]
                                   : (folders_ ? std::string() : category_path_);
+    if (!folders_ && input.is_pressed(Action::north) && !value.empty())
+    {
+        if (!model.parental().enabled())
+            model.announce(Level::warning, "Set a parent PIN in Settings first", "", 3);
+        else if (!model.set_category_rule(value, (model.category_rule(value, false) + 1) % 3))
+            feedback.play(audio::Cue::error);
+        sync();
+        return;
+    }
     if (input.is_pressed(Action::west) && !value.empty())
     {
         bool saved = false;
@@ -216,10 +227,11 @@ void LibrarySheet::draw(ui::Canvas &canvas) const
     ui::text(draw, fonts.display, folders_ ? "Favorite folders" : "Provider categories", 400, 190,
              42, shared_.theme.text);
     list_.draw(canvas);
-    ui::text(draw, fonts.regular,
-             folders_
-                 ? "Cross: Open   Square: Add/remove channel   Triangle: New folder   Circle: Back"
-                 : "Cross: Browse   Square: Show/hide category   Circle: Back",
-             400, 915, 22, shared_.theme.text_muted);
+    ui::text(
+        draw, fonts.regular,
+        folders_
+            ? "Cross: Open   Square: Add/remove channel   Triangle: New folder   Circle: Back"
+            : "Cross: Browse   Square: Show/hide   Triangle: Normal / PIN / Kids   Circle: Back",
+        400, 915, 21, shared_.theme.text_muted);
 }
 } // namespace ptv

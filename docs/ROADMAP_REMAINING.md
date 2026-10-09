@@ -14,16 +14,16 @@ and relevant checks work.
 | Playback channel list | Select a channel from a list over the playing video | Pending |
 | Channel banner | Brief channel/guide banner on tune and on request | Pending |
 | Audio/subtitles | Select available language tracks and render subtitles | Pending |
-| Sleep timer | Stop playback at a selected deadline | Pending |
+| Sleep timer | Stop playback at a selected deadline | Implemented; 134 UI sanitizer tests and PS5 build pass; console case pending |
 | Live pause/rewind | Pause and replay several minutes of the current live channel | Pending |
 | Deinterlacing | Preserve field-rate motion on interlaced broadcast video | Pending |
 | HDR | Preserve HDR metadata and output HDR on compatible displays | Pending |
 | Multiview | Two or four simultaneous channels, within measured decoder limits | Pending |
-| Parental controls | PIN-protected adult categories and kids-only mode | Pending |
-| Profiles | Separate sources, favorites and history by signed-in console user | Implemented; isolation/migration sanitizer tests and PS5 build pass, console case pending |
+| Parental controls | PIN-protected adult categories and kids-only mode | Implemented; 132 UI sanitizer tests, 73 core tests and PS5 build pass; console case pending |
+| Profiles | Separate sources, favorites and history by signed-in console user | Implemented; isolation/migration sanitizer tests, PS5 build and console startup pass |
 | Interface languages | Follow the console language for menus | Pending |
-| Backup/restore | Export sources/favorites/settings to USB and restore them safely | Implemented; sanitizer checks and PS5 build pass, console case pending |
-| Failure reports | Export a useful redacted diagnostic report to USB in a normal build | Implemented; sanitizer checks and PS5 build pass, console case pending |
+| Backup/restore | Export sources/favorites/settings to USB and restore them safely | Implemented; sanitizer/build checks and console sandbox-drive workflow pass; physical USB untested |
+| Failure reports | Export a useful redacted diagnostic report to USB in a normal build | Implemented; sanitizer/build checks and console sandbox-drive workflow pass; physical USB untested |
 
 Completion also requires host checks, a PS5 build, bounded testing on an idle
 192.168.4.30 or 192.168.4.40, an updated deliverable, and a pull request. Console
@@ -124,3 +124,65 @@ the recovery journal survives a failed rollback, recovery succeeds after the
 obstruction is removed, and the backup can then be restored successfully.
 CI also passed for the rebased application at `60832ed`. Physical USB media and
 switching actual console users remain unverified.
+- 2026-10-08 | Household | 7d7d225 | PPSA88261 / .30 | pass: profile startup, sandbox-drive backup/restore/report, clean teardown | results/roadmap/console-06/validation.json | remaining roadmap
+
+The console case restored volume from 95 to the backed-up 100 and exported a
+numeric report for an intentional HTTP 404. The generic runner returned 1 for
+nine expected diagnostics/labels containing `failed`; the explicit case validator
+checks those exact flags, the installed executable hash and healthy teardown.
+
+## Parental controls
+
+Each console profile can set a masked four-to-eight-digit parent PIN. Adult
+provider flags, adult category paths and manually protected categories apply to
+live lists, favorites, search, guide/catch-up, resume, previews and on-demand
+playback. Episodes inherit their show's restrictions. Protection locks on launch;
+unlock lasts for the current app session, with an explicit lock action.
+
+Kids-only mode permits Kids/Children categories and categories explicitly approved
+by a parent, with adult restrictions taking precedence. Provider labels are not
+content ratings: the Settings description asks parents to review them. Triangle
+in the live category sheet, or Touchpad on an on-demand category, cycles its rule
+between normal, PIN required and approved for kids. Rules include subcategories.
+Only an unlocked parent can change those rules, edit sources on the TV or phone,
+export a credentials backup, restore settings, change the PIN or leave kids mode.
+
+The PIN file stores a random salt and PBKDF2-HMAC-SHA256 result, using the existing
+OpenSSL dependency ([derivation](https://docs.openssl.org/3.0/man3/PKCS5_PBKDF2_HMAC/),
+[random bytes](https://docs.openssl.org/3.0/man3/RAND_bytes/)). Five wrong attempts
+cause a 30-second delay, retained across restart. A damaged file or failed retry
+counter write leaves protection locked. PIN input is excluded from diagnostic
+input logging. Backups include protection settings and category rules.
+
+Catalog schema 5 preserves provider adult flags. The application downloads old
+catalog caches again once, since earlier cache schemas discarded those flags.
+Core readers retain backward compatibility. Host validation covers persistent
+retry delay, corrupt files, cancelled/mismatched PIN prompts, locked storage and
+phone management, provider inheritance and playback policy; native menu/IME and
+filesystem validation remains part of the remaining console regression.
+
+## Sleep timer
+
+Settings offers Off, 15, 30, 60, 90 and 120 minutes, with a remaining-time display.
+The monotonic deadline belongs to this app session. It survives menu reopening,
+stream URL retries and settings restore, and is passed unchanged to the foreground
+player. It is not included in saved settings or rearmed on app launch.
+
+Expiry stops foreground playback and muted previews, cancels queued playback and
+prevents automatic last-channel resume. Choosing a channel explicitly wakes
+playback without rearming the timer. Host checks exercise the exact deadline,
+cancellation, menu reconstruction, invalid clocks and the preview/resume behavior;
+the real fifteen-minute deadline is also verified on the console.
+
+- 2026-10-08 | PR12 | dbfec0d | .30/PPSA88264 | inconclusive: 45-second fixture ended before sleep deadline | results/roadmap/console-11 | use longer stream
+- 2026-10-08 | PR12 | dbfec0d | .30/PPSA88264 | pass: real sleep deadline, menu return and clean teardown | results/roadmap/console-12 | parental IME acceptance
+
+The corrected case used a verified twenty-minute stream and disabled the test
+driver's playback timeout. The fifteen-minute timer was armed before playback;
+playback stopped after 837 seconds with 20,882 presented frames and 39,254 decoded
+audio frames. The final captures show the timer Off and an idle preview after
+returning to Live TV. Installed hashes matched, cleanup succeeded, the title
+closed, and all development services remained healthy. The generic runner's two
+flags were `hide_failed` setting labels; the case validator checks the receipt
+and teardown separately. All 135 UI sanitizer tests also pass. Native parental
+PIN/IME and filesystem acceptance remain pending.

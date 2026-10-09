@@ -31,7 +31,7 @@ includes="-I$root/src -I$root/ps5/src -I$root/host -I$kit/src -I$kit/third_party
     echo "  deps = gcc"
     echo "  description = CXX \$in"
     echo "rule link"
-    echo "  command = $cxx $sanitize \$in $expat/lib/libexpat.a -lpng -ljpeg -lz -lsqlite3 -lpthread -lm -o \$out"
+    echo "  command = $cxx $sanitize \$in $expat/lib/libexpat.a -lpng -ljpeg -lz -lsqlite3 -lcrypto -lpthread -lm -o \$out"
     echo "  description = LINK \$out"
     objects=()
     edge() {

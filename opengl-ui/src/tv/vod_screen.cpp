@@ -41,6 +41,8 @@ void VodScreen::sync()
         for (unsigned i = 0; i < catalog.size(); ++i)
         {
             const auto item = catalog[i];
+            if (!model.vod_allowed(i))
+                continue;
             if (!view.vod_category.empty() &&
                 !category_belongs(item.group_title, view.vod_category))
                 continue;
@@ -133,6 +135,17 @@ void VodScreen::handle(const InputFrame &input, ui::Feedback &feedback)
 {
     auto &model = shared_.model;
     auto &view = model.view;
+    if (input.is_pressed(Action::touch) && focused() && focused()->kind == Kind::category &&
+        view.vod_kind != static_cast<int>(VodKind::episodes))
+    {
+        const auto category = focused()->category;
+        if (!model.parental().enabled())
+            model.announce(Level::warning, "Set a parent PIN in Settings first", "", 3);
+        else if (!model.set_category_rule(category, (model.category_rule(category, false) + 1) % 3))
+            feedback.play(audio::Cue::error);
+        sync();
+        return;
+    }
     if (input.is_pressed(Action::west) && focused() && focused()->kind == Kind::category &&
         view.vod_kind != static_cast<int>(VodKind::episodes))
     {
@@ -178,10 +191,14 @@ void VodScreen::handle(const InputFrame &input, ui::Feedback &feedback)
         view.vod_all = true;
     else if (view.vod_kind == static_cast<int>(VodKind::series))
     {
+        if (!model.vod_allowed(row.item))
+            return;
         const auto show = model.vod().catalog()[row.item];
         view.vod_series = show.tvg_id;
         view.vod_series_name = show.name;
         view.vod_series_cover = show.tvg_logo;
+        view.vod_series_group = show.group_title;
+        view.vod_series_adult = show.adult;
         view.vod_kind = static_cast<int>(VodKind::episodes);
         view.vod_category.clear();
         view.vod_query.clear();
@@ -237,9 +254,17 @@ void VodScreen::draw(ui::Canvas &canvas) const
         const bool selected = i == view.vod_focus;
         draw.bordered_rect({kMargin, y, 1060, 76}, 14, kWhite.with_alpha(selected ? 0.16f : 0.04f),
                            selected ? 2 : 0, tone::cream);
-        const auto label =
+        auto label =
             row.text +
             (row.kind == Kind::category && model.category_hidden(row.category) ? " (Hidden)" : "");
+        if (row.kind == Kind::category)
+        {
+            const int rule = model.category_rule(row.category);
+            if (rule == 1)
+                label += " (PIN required)";
+            if (rule == 2)
+                label += " (Approved for kids)";
+        }
         const auto &font = face_for(fonts, fonts.semibold, label);
         ui::text(draw, font, font.font->fit(label, 27, 960), kMargin + 24, y + 47, 27, theme.text);
         if (row.kind != Kind::item || view.vod_kind == 1)
@@ -295,7 +320,11 @@ int VodScreen::hints(ui::Hint *out, int capacity) const
     std::copy_n(hints, count, out);
     if (count < capacity && focused() && focused()->kind == Kind::category &&
         shared_.model.view.vod_kind != static_cast<int>(VodKind::episodes))
+    {
         out[count++] = {ui::Button::square, "Show / Hide"};
+        if (count < capacity)
+            out[count++] = {ui::Button::touchpad, "Normal / PIN / Kids"};
+    }
     return count;
 }
 } // namespace ptv

@@ -42,6 +42,7 @@ std::size_t delivered_bytes();
 
 // The clock the logic sees (seconds since 1970); 0 is the PC's own clock.
 void set_unix_time(std::uint64_t seconds);
+void set_monotonic_us(std::uint64_t microseconds);
 
 // The stand-in update. offer_update: what the next update_take() answers,
 // once. set_update_progress: what update_poll() answers from now on.

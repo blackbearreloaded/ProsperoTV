@@ -535,6 +535,47 @@ TEST_F(AppTest, PairingIsASettingsModalWithAnExplicitRequest)
     EXPECT_TRUE(app_->take_forget_phones_requested());
 }
 
+TEST_F(AppTest, ParentPinMasksInputLocksRestoreAndRequiresUnlockToLeaveKidsMode)
+{
+    fs::create_directory(dir_ + "/usb0");
+    app_->set_usb_root(dir_);
+    for (int i = 0; i < 4; ++i)
+        press(Action::page_next);
+    settings_row("Set or change parent PIN");
+    press(Action::confirm);
+    ASSERT_TRUE(model_->pin_prompt());
+    press(Action::page_next); // IME must own input while the PIN is being entered.
+    EXPECT_EQ(app_->tab(), 4);
+    host::set_keyboard_text("483920");
+    idle();
+    EXPECT_EQ(host::keyboard_title(), "Confirm parent PIN");
+    host::set_keyboard_text("483920");
+    idle();
+    ASSERT_TRUE(model_->parental().enabled());
+    EXPECT_FALSE(model_->parental().unlocked());
+    settings_row("Restore from USB");
+    press(Action::confirm);
+    EXPECT_FALSE(app_->storage_open());
+    EXPECT_EQ(app_->take_storage_request().action, ptv::StorageAction::none);
+    settings_row("Unlock parental controls");
+    press(Action::confirm);
+    host::set_keyboard_text("483920");
+    idle();
+    ASSERT_TRUE(model_->parental().unlocked());
+    settings_row("Toggle kids-only mode");
+    press(Action::confirm);
+    EXPECT_TRUE(model_->parental().kids_only());
+    EXPECT_FALSE(model_->parental().unlocked());
+    press(Action::confirm);
+    EXPECT_TRUE(model_->parental().kids_only());
+    settings_row("Unlock parental controls");
+    press(Action::confirm);
+    host::cancel_keyboard();
+    idle();
+    EXPECT_FALSE(model_->pin_prompt());
+    EXPECT_FALSE(model_->parental().unlocked());
+}
+
 TEST_F(AppTest, UsbRestoreRequiresConfirmationAndCanChooseAnotherDrive)
 {
     fs::create_directory(dir_ + "/usb0");
@@ -565,6 +606,63 @@ TEST_F(AppTest, UsbRestoreRequiresConfirmationAndCanChooseAnotherDrive)
     EXPECT_EQ(app_->tab(), 4);
     EXPECT_EQ(app_->take_storage_request().action, ptv::StorageAction::none);
     EXPECT_FALSE(frame_.overlay.empty());
+}
+
+TEST_F(AppTest, SleepTimerSurvivesMenuReopenExpiresOnceAndKeepsPreviewAsleep)
+{
+    host::set_monotonic_us(1000000);
+    for (int i = 0; i < 4; ++i)
+        press(Action::page_next);
+    settings_row("Sleep timer");
+    move(Direction::right);
+    EXPECT_EQ(model_->sleep_timer.choice(), 1u);
+    const auto deadline = model_->sleep_timer.deadline();
+    ASSERT_GT(deadline, 0u);
+    app_.reset();
+    model_->close();
+    ASSERT_TRUE(model_->open());
+    make_app();
+    EXPECT_EQ(model_->sleep_timer.deadline(), deadline);
+    // Advance the controlled clock to the exact deadline, independently of host uptime.
+    host::set_monotonic_us(deadline);
+    idle();
+    EXPECT_TRUE(model_->sleep_timer.sleeping());
+    EXPECT_EQ(model_->sleep_timer.choice(), 0u);
+    EXPECT_EQ(model_->sleep_timer.deadline(), 0u);
+    EXPECT_FALSE(model_->check_sleep_timer());
+    EXPECT_FALSE(model_->preview_request(model_->channel(0).id));
+    model_->resume_last(true);
+    ptv::PlayRequest request;
+    EXPECT_FALSE(model_->take_play_request(&request));
+    ASSERT_TRUE(model_->play(0));
+    EXPECT_FALSE(model_->sleep_timer.sleeping());
+    EXPECT_TRUE(model_->preview_request(model_->channel(0).id));
+    EXPECT_EQ(ptv::load_settings(dir_).volume, app_->settings().volume);
+}
+
+TEST(SleepTimer, BoundaryCancellationAndInvalidClockDoNotRearm)
+{
+    ptv::SleepTimer timer;
+    timer.arm(2, 1000000);
+    EXPECT_EQ(timer.remaining_minutes(1000000), 30u);
+    EXPECT_EQ(timer.remaining_minutes(61000000), 29u);
+    const auto deadline = timer.deadline();
+    EXPECT_FALSE(timer.expire(deadline - 1));
+    EXPECT_TRUE(timer.expire(deadline));
+    EXPECT_TRUE(timer.sleeping());
+    EXPECT_FALSE(timer.expire(deadline));
+    timer.wake();
+    EXPECT_EQ(timer.deadline(), 0u);
+    timer.arm(3, 1000000);
+    timer.arm(0, 2000000);
+    EXPECT_EQ(timer.deadline(), 0u);
+    EXPECT_FALSE(timer.sleeping());
+    timer.arm(3, 0);
+    EXPECT_EQ(timer.choice(), 0u);
+    timer.arm(99, 1000000);
+    EXPECT_EQ(timer.deadline(), 0u);
+    timer.arm(5, UINT64_MAX - 1);
+    EXPECT_EQ(timer.deadline(), 0u);
 }
 
 TEST_F(AppTest, UsbActionsLeaveSettingsUsableWhenNoDriveIsAttached)

@@ -10,6 +10,7 @@
 #include <unordered_set>
 #include <vector>
 #include <utility>
+#include <map>
 
 struct sqlite3;
 
@@ -64,6 +65,9 @@ class Library
     std::pair<std::int64_t, std::string> last_channel() const;
     std::unordered_set<std::string> hidden_categories(std::uint64_t source) const;
     bool hide_category(std::uint64_t source, std::string_view category, bool hidden);
+    // 1: PIN required, 2: approved for kids. Rules include subcategories.
+    std::map<std::string, int> category_rules(std::uint64_t source) const;
+    bool set_category_rule(std::uint64_t source, std::string_view category, int rule);
     std::vector<std::string> folders() const;
     bool add_folder(std::string_view name);
     bool rename_folder(std::string_view name, std::string_view replacement);

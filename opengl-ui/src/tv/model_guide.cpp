@@ -155,7 +155,7 @@ void Model::run_guide()
 
 bool Model::play_programme(unsigned index, const Programme &programme)
 {
-    if (index >= channel_count())
+    if (index >= channel_count() || pin_prompt() || !content_allowed(catalog_[index]))
         return false;
     const auto now = static_cast<std::int64_t>(platform::unix_time());
     if (programme.start <= now && programme.end > now)
@@ -170,6 +170,7 @@ bool Model::play_programme(unsigned index, const Programme &programme)
         return false;
     }
     play_request_ = {};
+    sleep_timer.wake();
     play_request_.channel_id = channel.id;
     play_request_.channel_name = std::string(channel.name) + " - " + programme.title;
     play_request_.source_id = channel.source_id;

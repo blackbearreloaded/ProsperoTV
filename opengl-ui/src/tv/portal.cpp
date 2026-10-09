@@ -66,9 +66,10 @@ bool stream_address(std::string_view command, std::string *url)
 struct Category
 {
     std::string title, parent;
+    bool adult = false;
 };
 using Categories = std::unordered_map<std::string, Category>;
-std::string category_path(const Categories &categories, const std::string &id)
+std::string category_path(const Categories &categories, const std::string &id, bool *adult)
 {
     auto current = id;
     std::string result;
@@ -81,6 +82,7 @@ std::string category_path(const Categories &categories, const std::string &id)
         const auto at = categories.find(current);
         if (at == categories.end())
             break;
+        *adult = *adult || at->second.adult;
         if (!at->second.title.empty())
             result = at->second.title + (result.empty() ? "" : " / " + result);
         current = at->second.parent;
@@ -254,11 +256,13 @@ bool PortalClient::load(iptv::Catalog *catalog, iptv::ParseReport *report,
                            value,
                            [&](JsonReader *item)
                            {
-                               std::string id;
+                               std::string id, adult;
                                Category category;
                                if (!ReadObject(item,
                                                [&](const std::string &field, JsonReader *data)
                                                {
+                                                   if (field == "censored" || field == "is_adult")
+                                                       return data->StringOrScalar(&adult, 8);
                                                    if (field == "id")
                                                        return data->StringOrScalar(&id, 128);
                                                    if (field == "title" || field == "name")
@@ -270,6 +274,7 @@ bool PortalClient::load(iptv::Catalog *catalog, iptv::ParseReport *report,
                                                }) ||
                                    categories.size() >= 16384)
                                    return false;
+                               category.adult = adult == "1" || adult == "true";
                                if (!id.empty() && id != "*")
                                    categories[id] = std::move(category);
                                return true;
@@ -295,11 +300,13 @@ bool PortalClient::load(iptv::Catalog *catalog, iptv::ParseReport *report,
             return false;
         }
         iptv::Channel channel;
-        std::string id, genre;
+        std::string id, genre, adult;
         JsonReader item(text);
         if (!ReadObject(&item,
                         [&](const std::string &key, JsonReader *value)
                         {
+                            if (key == "censored" || key == "is_adult")
+                                return value->StringOrScalar(&adult, 8);
                             if (key == "id")
                                 return value->StringOrScalar(&id, 128);
                             if (key == "name")
@@ -326,7 +333,8 @@ bool PortalClient::load(iptv::Catalog *catalog, iptv::ParseReport *report,
         channel.id = portal_channel_id(catalog->source_id, id);
         channel.source_id = catalog->source_id;
         channel.source_line = static_cast<std::uint32_t>(catalog->size() + 1);
-        channel.group_title = category_path(categories, genre);
+        channel.adult = adult == "1" || adult == "true";
+        channel.group_title = category_path(categories, genre, &channel.adult);
         if (channel.tvg_id.empty() || channel.tvg_id == "null")
             channel.tvg_id = id;
         if (!stream_address(channel.portal_command, &channel.url))

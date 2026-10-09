@@ -56,6 +56,14 @@ enum FormRow : int
     kRowRestore,
     kRowReport,
     kRowProfile,
+    kRowParentPin,
+    kRowParentUnlock,
+    kRowParentLock,
+    kRowKids,
+    kRowRemovePin,
+    kRowParentState,
+    kRowSleep,
+    kRowSleepRemaining,
 };
 
 constexpr const char *kTabNames[] = {"Live TV",   "Favorites", "Sources",
@@ -172,6 +180,13 @@ App::App(Model &model, const ui::Fonts &fonts, std::uint32_t glass_texture,
     form_.add_toggle(kRowPreview, "Live previews", settings.live_preview).description =
         "Play the focused channel in the large television, muted, after a moment.";
     model.set_hide_failed(settings.hide_failed);
+    form_
+        .add_choice(kRowSleep, "Sleep timer",
+                    {"Off", "15 minutes", "30 minutes", "60 minutes", "90 minutes", "120 minutes"},
+                    static_cast<int>(model.sleep_timer.choice()))
+        .description =
+        "Stops video after this time, including channel changes. Resets when the app closes.";
+    form_.add_value(kRowSleepRemaining, "Time remaining", "Off");
     form_.add_header("Troubleshooting");
     form_.add_toggle(kRowDiagnostics, "Diagnostic log", settings.diagnostics).description =
         "Records what the app does in logs/debug-trace.txt, to send with a report.";
@@ -181,6 +196,14 @@ App::App(Model &model, const ui::Fonts &fonts, std::uint32_t glass_texture,
     form_.add_value(kRowProfile, "Console profile", "Current console user").description =
         "Sources, favorites, history and paired phones belong to the console user who opened the "
         "app.";
+    form_.add_header("Parental controls");
+    form_.add_value(kRowParentState, "Protection", "");
+    form_.add_action(kRowParentPin, "Set or change parent PIN");
+    form_.add_action(kRowParentUnlock, "Unlock parental controls");
+    form_.add_action(kRowParentLock, "Lock parental controls now");
+    form_.add_action(kRowKids, "Toggle kids-only mode").description =
+        "Only Kids categories and categories you approve. Provider labels should be reviewed.";
+    form_.add_action(kRowRemovePin, "Remove parent PIN");
     form_.add_header("Backup and restore");
     form_.add_action(kRowBackup, "Back up to USB");
     form_.add_action(kRowRestore, "Restore from USB");
@@ -232,6 +255,8 @@ void App::phone_connected()
 
 void App::open_storage(StorageAction action, ui::Feedback &feedback)
 {
+    if (action != StorageAction::report && !shared_.model.require_parent())
+        return;
     usb_drives_ = usb_drives(usb_root_);
     if (usb_drives_.empty())
     {
@@ -525,7 +550,10 @@ void App::handle_screen(const InputFrame &input, ui::Feedback &feedback)
     case kSettings:
     {
         const ui::Event event = form_.handle(input, feedback);
-        if (event == ui::Event::changed)
+        if (event == ui::Event::changed && form_.changed_id() == kRowSleep)
+            shared_.model.sleep_timer.arm(static_cast<unsigned>(form_.choice_index(kRowSleep)),
+                                          platform::monotonic_us());
+        else if (event == ui::Event::changed)
             apply_settings();
         else if (event == ui::Event::activated && form_.changed_id() == kRowUpdate)
             refresh(feedback);
@@ -536,6 +564,15 @@ void App::handle_screen(const InputFrame &input, ui::Feedback &feedback)
         }
         else if (event == ui::Event::activated && form_.changed_id() == kRowForgetPhones)
             forget_requested_ = true;
+        else if (event == ui::Event::activated && form_.changed_id() >= kRowParentPin &&
+                 form_.changed_id() <= kRowRemovePin)
+        {
+            const Model::ParentalAction actions[] = {
+                Model::ParentalAction::set_pin, Model::ParentalAction::unlock,
+                Model::ParentalAction::lock, Model::ParentalAction::kids,
+                Model::ParentalAction::remove_pin};
+            shared_.model.parental_action(actions[form_.changed_id() - kRowParentPin]);
+        }
         else if (event == ui::Event::activated && form_.changed_id() == kRowBackup)
             open_storage(StorageAction::backup, feedback);
         else if (event == ui::Event::activated && form_.changed_id() == kRowRestore)
@@ -573,8 +610,9 @@ void App::play_intro()
 
 bool App::accepts_remote_search() const
 {
-    return !storage_busy_ && !storage_dialog_.is_open() && browsing() && !update_.is_open() &&
-           !failure_.is_open() && !library_sheet_.is_open() && !guide_sheet_.is_open();
+    return !shared_.model.pin_prompt() && !storage_busy_ && !storage_dialog_.is_open() &&
+           browsing() && !update_.is_open() && !failure_.is_open() && !library_sheet_.is_open() &&
+           !guide_sheet_.is_open();
 }
 
 bool App::remote_search(const char *query)
@@ -614,7 +652,7 @@ void App::step(const InputFrame &input, float dt, ui::Feedback &feedback)
         return;
     }
     Model &model = shared_.model;
-    if (diag::enabled() &&
+    if (!model.pin_prompt() && diag::enabled() &&
         (input.pressed != 0 || (input.nav != Direction::none && !input.nav_repeat)))
     {
         // What the viewer did, and where the interface was when they did it.
@@ -640,6 +678,7 @@ void App::step(const InputFrame &input, float dt, ui::Feedback &feedback)
 
     if (search_.is_open() && (input.is_pressed(Action::back) || input.is_pressed(Action::north)))
         iptv_ime_cancel();
+    const bool was_pin_prompt = model.pin_prompt();
     model.poll();
     for (Notice &notice : model.take_notices())
     {
@@ -686,7 +725,11 @@ void App::step(const InputFrame &input, float dt, ui::Feedback &feedback)
     // ---- input goes to whatever is on top ----
     if (input.pressed != 0 || input.nav != Direction::none)
         model.resume_last(false);
-    if (storage_dialog_.is_open())
+    if (was_pin_prompt || model.pin_prompt())
+    {
+        // Native IME owns the input; suppress underlying navigation and diagnostic input logs.
+    }
+    else if (storage_dialog_.is_open())
     {
         const auto event = storage_dialog_.handle(input, feedback);
         if (event == ui::Event::activated && storage_dialog_.choice() > 0)
@@ -698,6 +741,8 @@ void App::step(const InputFrame &input, float dt, ui::Feedback &feedback)
             }
             else
             {
+                if (storage_action_ != StorageAction::report && !model.require_parent())
+                    return;
                 storage_request_ = {storage_action_, usb_drives_[usb_choice_]};
                 storage_busy_ = true;
                 stop_preview();
@@ -750,7 +795,7 @@ void App::step(const InputFrame &input, float dt, ui::Feedback &feedback)
     }
     if (intro_ < 0 && !update_.is_open() && !failure_.is_open() && !library_sheet_.is_open() &&
         !guide_sheet_.is_open() && !search_.is_open() && !pairing_open_ &&
-        !storage_dialog_.is_open())
+        !storage_dialog_.is_open() && !was_pin_prompt && !model.pin_prompt())
         model.resume_last(shared_.settings.resume_last && input.pressed == 0 &&
                           input.nav == Direction::none);
 
@@ -761,6 +806,20 @@ void App::step(const InputFrame &input, float dt, ui::Feedback &feedback)
     shared_.toasts.style.reduced_motion = reduced;
     announcements_.style.reduced_motion = reduced;
 
+    const auto &parental = model.parental();
+    form_.set_choice(kRowSleep, static_cast<int>(model.sleep_timer.choice()));
+    const auto remaining = model.sleep_timer.remaining_minutes(platform::monotonic_us());
+    form_.set_value_text(kRowSleepRemaining,
+                         remaining ? std::to_string(remaining) + " min" : "Off");
+    form_.set_value_text(kRowParentState, !parental.valid()      ? "Settings unreadable - locked"
+                                          : !parental.enabled()  ? "No PIN"
+                                          : parental.kids_only() ? "Kids only"
+                                          : parental.unlocked()  ? "Unlocked this session"
+                                                                 : "Adult content locked");
+    form_.set_disabled(kRowRemovePin, !parental.enabled() || !parental.unlocked());
+    form_.set_disabled(kRowKids, !parental.enabled());
+    form_.set_disabled(kRowParentUnlock, !parental.enabled() || parental.unlocked());
+    form_.set_disabled(kRowParentLock, !parental.enabled() || !parental.unlocked());
     form_.set_value_text(kRowChannels,
                          model.has_catalog() ? group_digits(model.channel_count()) : "None yet");
     follow_channel(dt);

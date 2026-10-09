@@ -102,6 +102,7 @@ struct Channel
     std::string catchup_days;
     // Opaque portal command sent only to the provider's create_link API.
     std::string portal_command;
+    bool adult = false;
     std::uint32_t source_line = 0;
     PlaybackStatus playback_status = PlaybackStatus::unknown;
     int playback_result = 0;
@@ -192,6 +193,7 @@ struct ChannelView
     std::string_view catchup_source;
     std::string_view catchup_days;
     std::string_view portal_command;
+    bool adult = false;
     std::uint32_t source_line = 0;
     PlaybackStatus playback_status = PlaybackStatus::unknown;
     int playback_result = 0;
@@ -305,6 +307,7 @@ class Catalog
     bool AddAlternateGroup(std::size_t index, std::string_view group);
     // Replaces one text of a channel (an id cannot be replaced).
     bool Set(std::size_t index, Field field, std::string_view value);
+    void SetAdult(std::size_t index, bool adult);
     void SetPlayback(std::size_t index, PlaybackStatus status, int result,
                      std::uint64_t checked_unix);
 

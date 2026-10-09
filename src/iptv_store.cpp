@@ -21,7 +21,7 @@ namespace
 {
 
 // The version written, and the oldest one still read.
-constexpr int kSchemaVersion = 4;
+constexpr int kSchemaVersion = 5;
 constexpr int kOldestSchemaVersion = 1;
 constexpr int kPlaybackSchemaVersion = 1;
 
@@ -161,13 +161,13 @@ bool CreateSchema(sqlite3 *database)
         "tvg_name TEXT NOT NULL,tvg_logo TEXT NOT NULL,group_title TEXT NOT NULL,"
         "tvg_country TEXT NOT NULL,tvg_language TEXT NOT NULL,user_agent TEXT NOT NULL,"
         "referrer TEXT NOT NULL,catchup TEXT NOT NULL,catchup_source TEXT NOT NULL,catchup_days "
-        "TEXT NOT NULL,portal_command TEXT NOT NULL);"
+        "TEXT NOT NULL,portal_command TEXT NOT NULL,adult INTEGER NOT NULL CHECK(adult IN(0,1)));"
         "CREATE TABLE guide_urls(url TEXT NOT NULL);"
         "CREATE TABLE alternate_urls(channel INTEGER NOT NULL,position INTEGER NOT NULL,"
         "url TEXT NOT NULL,PRIMARY KEY(channel,position)) WITHOUT ROWID;"
         "CREATE TABLE alternate_groups(channel INTEGER NOT NULL,position INTEGER NOT NULL,"
         "value TEXT NOT NULL,PRIMARY KEY(channel,position)) WITHOUT ROWID;"
-        "PRAGMA user_version=4;");
+        "PRAGMA user_version=5;");
 }
 
 bool CreatePlaybackSchema(sqlite3 *database)
@@ -212,8 +212,8 @@ bool InsertCatalog(sqlite3 *database, const Catalog &catalog, const StoreLimits 
         Prepare(database,
                 "INSERT INTO channels(position,id,source_line,name,url,tvg_id,tvg_name,"
                 "tvg_logo,group_title,tvg_country,tvg_language,user_agent,referrer,catchup,catchup_"
-                "source,catchup_days,portal_command)"
-                "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                "source,catchup_days,portal_command,adult)"
+                "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 &channel_statement) &&
         Prepare(database, "INSERT INTO alternate_urls(channel,position,url) VALUES(?,?,?)",
                 &url_statement) &&
@@ -272,6 +272,7 @@ bool InsertCatalog(sqlite3 *database, const Catalog &catalog, const StoreLimits 
              BindCatalogText(channel_statement, 15, channel.catchup_source) &&
              BindCatalogText(channel_statement, 16, channel.catchup_days) &&
              BindCatalogText(channel_statement, 17, channel.portal_command) &&
+             sqlite3_bind_int(channel_statement, 18, channel.adult ? 1 : 0) == SQLITE_OK &&
              sqlite3_step(channel_statement) == SQLITE_DONE &&
              InsertAlternates(url_statement, index, channel.alternate_urls,
                               limits.max_alternate_urls, limits.max_url_bytes) &&
@@ -317,6 +318,7 @@ void SetReport(StoreReport *report, StoreStatus status, std::size_t records, std
     report->records = records;
     report->bytes = bytes;
     report->saved_unix = saved_unix;
+    report->catalog_version = 0;
 }
 
 // What a failed step says: SQLite's own reason, or that the catalog itself
@@ -535,7 +537,8 @@ static StoreStatus LoadCatalogFile(const std::string &path, Catalog *catalog,
         "SELECT id,source_line,name,url,tvg_id,tvg_name,tvg_logo,group_title,"
         "tvg_country,tvg_language,user_agent,referrer" +
         std::string(version >= 3 ? ",catchup,catchup_source,catchup_days" : "") +
-        std::string(version >= 4 ? ",portal_command" : "") + " FROM channels ORDER BY position";
+        std::string(version >= 4 ? ",portal_command" : "") +
+        std::string(version >= 5 ? ",adult" : "") + " FROM channels ORDER BY position";
     ok = ok && Prepare(database, query.c_str(), &statement);
     while (ok && sqlite3_step(statement) == SQLITE_ROW)
     {
@@ -561,7 +564,13 @@ static StoreStatus LoadCatalogFile(const std::string &path, Catalog *catalog,
         }
         if (version >= 4)
             channel.portal_command = ColumnText(statement, 15);
-        ok = loaded.size() < count && ValidChannel(channel, limits) && loaded.Add(channel);
+        if (version >= 5)
+        {
+            const int adult = sqlite3_column_int(statement, 16);
+            ok = sqlite3_column_type(statement, 16) == SQLITE_INTEGER && (adult == 0 || adult == 1);
+            channel.adult = adult != 0;
+        }
+        ok = ok && loaded.size() < count && ValidChannel(channel, limits) && loaded.Add(channel);
     }
     sqlite3_finalize(statement);
     ok = ok && loaded.size() == count;
@@ -595,6 +604,8 @@ static StoreStatus LoadCatalogFile(const std::string &path, Catalog *catalog,
     }
     *catalog = std::move(loaded);
     SetReport(report, StoreStatus::ok, catalog->size(), bytes, saved_unix);
+    if (report)
+        report->catalog_version = static_cast<unsigned>(version);
     return StoreStatus::ok;
 }
 
