@@ -48,6 +48,8 @@ class Timeshift
     Range range() const;
     std::optional<Position> seek(std::uint64_t pts_us) const;
     void set_video_pid(std::uint32_t pid);
+    // A provider reconnect/discontinuity starts a new retained timeline.
+    void discontinuity();
 
   private:
     struct Mark

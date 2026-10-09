@@ -16,7 +16,7 @@ inline hui::InputFrame remote_input(iptv_input_action_t key)
                                   Action::page_next, Action::touch, Action::up,
                                   Action::down,      Action::left,  Action::right};
     hui::InputFrame input;
-    if (key < 0 || key >= IPTV_INPUT_COUNT)
+    if (key < 0 || key > IPTV_INPUT_RIGHT)
         return input;
     input.connected = true;
     input.pressed = input.held = hui::action_bit(actions[key]);

@@ -45,6 +45,16 @@ extern "C"
      * between chunks. Selection never accesses its session concurrently. */
     void iptv_player_audio_state(iptv_player_audio_state_t *state);
     int iptv_player_select_audio(uint32_t pid);
+    typedef struct iptv_player_live_state
+    {
+        uint64_t first_us, last_us, position_us;
+        uint32_t available, paused, expired;
+    } iptv_player_live_state_t;
+    /* Thread-safe requests, applied by the foreground control thread. */
+    void iptv_player_live_state(iptv_player_live_state_t *state);
+    int iptv_player_pause_live(int paused);
+    int iptv_player_seek_live(int seconds);
+    int iptv_player_go_live(void);
     /* Runs the same foreground path with a bounded automatic stop. A zero timeout
  * disables the
      * deadline. This is used by controlled hardware acceptance. */

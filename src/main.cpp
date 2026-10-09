@@ -851,6 +851,8 @@ bool ConvertInput(const iptv_input_event_t &source, IptvInputEvent *target)
         target->key = IptvInputKey::Right;
         break;
     case IPTV_INPUT_TOUCHPAD:
+    case IPTV_INPUT_PLAY_PAUSE:
+    case IPTV_INPUT_GO_LIVE:
     case IPTV_INPUT_COUNT:
         return false;
     }

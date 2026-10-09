@@ -1331,6 +1331,9 @@ int main()
                     iptv_player_audio_state(&audio);
                     osd.set_audio_state(audio);
                     osd.set_subtitle_state(iptv::player_subtitles().state());
+                    iptv_player_live_state_t live{};
+                    iptv_player_live_state(&live);
+                    osd.set_live_state(live);
                     const int handled = osd.input(action, ptv::platform::monotonic_us());
                     if (const auto selected = osd.take_audio_selection())
                         (void)iptv_player_select_audio(*selected);

@@ -98,6 +98,26 @@ TEST(Timeshift, EnforcesBothByteAndTimeLimitsAndReportsOverwrittenPlayback)
                                input.begin() + earliest->offset));
     }
 }
+TEST(Timeshift, ExplicitProviderBoundaryExpiresOldBytesEvenWithTheSameClock)
+{
+    iptv::Timeshift buffer(188 * 64);
+    const auto bytes = broadcast(20);
+    ASSERT_TRUE(buffer.append(bytes.data(), bytes.size()));
+    const auto old = buffer.range();
+    buffer.discontinuity();
+    EXPECT_FALSE(buffer.range().timed);
+    EXPECT_EQ(buffer.range().generation, old.generation + 1);
+    EXPECT_EQ(buffer.range().begin, old.end);
+    ASSERT_TRUE(buffer.append(bytes.data(), bytes.size()));
+    std::array<std::uint8_t, 188> copied{};
+    EXPECT_EQ(buffer.read(0, copied.data(), copied.size()).status,
+              iptv::Timeshift::ReadStatus::expired);
+    const auto first = buffer.seek(0);
+    ASSERT_TRUE(first);
+    EXPECT_EQ(first->offset, old.end);
+    EXPECT_EQ(first->pts_us, old.first_pts_us);
+}
+
 TEST(Timeshift, HandlesClockWrapReorderingAndProviderTimelineChanges)
 {
     iptv::Timeshift buffer(188 * 64);

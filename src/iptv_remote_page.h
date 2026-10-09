@@ -38,6 +38,8 @@ input[type=range]{padding:0;min-height:44px;accent-color:#ff9445;cursor:pointer}
 <button id="down" data-key="down" aria-label="Down">↓</button></div>
 <div class="row"><button data-key="back">← Back</button><button data-key="favorite">☆ Favorite</button></div>
 <div class="row"><button data-key="previous">‹ Section</button><button data-key="next">Section ›</button></div>
+<div class="row"><button data-key="pause">Pause / resume live TV</button><button data-key="live">Back to live</button></div>
+<p class="muted">During live playback, Left and Right move through the retained programme in 30-second steps.</p>
 <div class="card"><label for="volume">VOLUME <output id="volume-value" for="volume">100%</output></label><input id="volume" type="range" min="0" max="100" step="1" value="100" aria-valuetext="100 percent"><p class="muted">Controls ProsperoTV sound. Set to 0 to mute.</p></div>
 <form id="search" class="card"><label for="query">FIND A CHANNEL</label>
 <input id="query" type="search" maxlength="78" enterkeyhint="search" autocomplete="off" placeholder="Type with your phone keyboard">

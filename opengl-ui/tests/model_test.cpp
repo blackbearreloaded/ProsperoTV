@@ -6,6 +6,7 @@
 #include "large_list.hpp"
 #include "tv/model.hpp"
 #include "tv/playback_osd.hpp"
+#include "tv/remote_input.hpp"
 #include "iptv_input.h"
 
 #include <gtest/gtest.h>
@@ -838,6 +839,54 @@ TEST_F(ModelTest, PlaybackListBrowsesWithoutTuningAndBackClosesItFirst)
     EXPECT_EQ(vod.input(IPTV_INPUT_SQUARE, 1), 0);
     EXPECT_EQ(vod.input(IPTV_INPUT_CROSS, 1), 0);
     EXPECT_FALSE(vod.selected_channel());
+    model.close();
+}
+
+TEST_F(ModelTest, LiveReplayKeepsPausedBannerAndPreservesMenuNavigation)
+{
+    ptv::Model model(dir_);
+    load(model);
+    ptv::PlayRequest request;
+    ASSERT_TRUE(model.play(model.visible(0)));
+    ASSERT_TRUE(model.take_play_request(&request));
+    ptv::PlaybackOsd controls(model, request);
+    ASSERT_NE(std::getenv("KIT_FONTS"), nullptr);
+    ASSERT_TRUE(controls.load_fonts(std::getenv("KIT_FONTS")));
+    iptv_player_live_state_t state{1000000, 61000000, 31000000, 1, 0, 0};
+    controls.set_live_state(state);
+    std::vector<std::uint8_t> surface(1920 * 1088 * 3 / 2, 100);
+    const auto draw = [&](std::uint64_t now)
+    {
+        return controls.draw(surface.data(), surface.size(), 1920, 1088, 1920, 1080, 8, now);
+    };
+    EXPECT_TRUE(draw(1));
+    EXPECT_FALSE(draw(6000001));
+    state.paused = 1;
+    controls.set_live_state(state);
+    EXPECT_TRUE(draw(12000001)); // A paused picture must keep its playback controls visible.
+    state.expired = 1;
+    controls.set_live_state(state);
+    EXPECT_TRUE(draw(18000001));
+    for (const auto key : {IPTV_INPUT_PLAY_PAUSE, IPTV_INPUT_GO_LIVE, IPTV_INPUT_LEFT,
+                           IPTV_INPUT_RIGHT})
+        EXPECT_EQ(controls.input(key, 18000001), 0); // Player owns replay outside menus.
+    EXPECT_FALSE(controls.selected_channel());
+    EXPECT_EQ(controls.input(IPTV_INPUT_CROSS, 18000002), 1);
+    EXPECT_EQ(controls.input(IPTV_INPUT_RIGHT, 18000003), 1); // Page the channel list.
+    EXPECT_EQ(controls.input(IPTV_INPUT_CIRCLE, 18000004), 1);
+    EXPECT_EQ(controls.input(IPTV_INPUT_OPTIONS, 18000005), 1);
+    EXPECT_EQ(controls.input(IPTV_INPUT_LEFT, 18000006), 1); // Browse tracks, never seek.
+    EXPECT_EQ(controls.input(IPTV_INPUT_CIRCLE, 18000007), 1);
+    state.paused = 0;
+    controls.set_live_state(state);
+    EXPECT_FALSE(draw(30000001));
+    for (const auto key : {IPTV_INPUT_PLAY_PAUSE, IPTV_INPUT_GO_LIVE})
+    {
+        const auto menu = ptv::remote_input(key);
+        EXPECT_EQ(menu.pressed, 0u);
+        EXPECT_EQ(menu.held, 0u);
+        EXPECT_EQ(menu.nav, hui::Direction::none);
+    }
     model.close();
 }
 

@@ -12,6 +12,7 @@
 #include <sys/socket.h>
 #include <time.h>
 #include <atomic>
+#include <algorithm>
 #include <dlfcn.h>
 #include <setjmp.h>
 // The console has no POSIX account/home database. Curl must use only the
@@ -94,6 +95,7 @@ __asm__(".weak ZSTD_trace_decompress_begin\n"
 #include "iptv_native_agc_present.h"
 #include "iptv_native_backend.h"
 #include "iptv_stream.h"
+#include "iptv_timeshift.h"
 #include "iptv_webm.h"
 #include "iptv_media.h"
 #include <mutex>
@@ -125,6 +127,10 @@ constexpr std::size_t kNetworkReadBytes = 256u * 1024u;
 constexpr std::size_t kReadAheadBytes = 16u * 1024u * 1024u;
 constexpr std::size_t kPlaylistBytes = IPTV_HLS_DEFAULT_MAX_INPUT_BYTES;
 constexpr std::uint64_t kVideoProgressTimeoutUsec = UINT64_C(15000000);
+std::mutex gLiveMutex;
+iptv_player_live_state_t gLiveState{};
+int gLivePauseRequest = -1;
+std::optional<std::uint64_t> gLiveSeekRequest;
 constexpr char kReceiptPath[] = "/download0/iptv-last-receipt.txt";
 #if IPTV_PROBE
 constexpr char kProbePath[] = "/download0/iptv-playback-probe.txt";
@@ -788,6 +794,14 @@ enum class RunnerMode
 class StreamRunner
 {
   public:
+    void SetLive(bool enabled)
+    {
+        live_ = enabled;
+    }
+    bool Paused() const
+    {
+        return paused_.load(std::memory_order_acquire);
+    }
     void SetStopAfter(unsigned milliseconds)
     {
         stop_deadline_usec_ = 0;
@@ -897,6 +911,19 @@ class StreamRunner
             !read_ahead_buffer_ || !read_ahead_thread_)
             return IPTV_STREAM_INVALID_STATE;
 
+        if (history_)
+        {
+            const int result = read_ahead_result_.load(std::memory_order_acquire);
+            if (result != IPTV_STREAM_OK)
+                return result;
+            // Live input keeps arriving while the viewer is paused. The history
+            // owns a copy; the demuxer never reads overwritten producer memory.
+            if (!history_->append(static_cast<const std::uint8_t *>(data), bytes))
+                return IPTV_STREAM_BUFFER_LIMIT;
+            read_ahead_write_.store(history_->range().end, std::memory_order_release);
+            return IPTV_STREAM_OK;
+        }
+
         const auto *source = static_cast<const std::uint8_t *>(data);
         while (bytes)
         {
@@ -946,7 +973,16 @@ class StreamRunner
 
     bool Discontinuity()
     {
+        if (history_)
+        {
+            history_->discontinuity();
+            return true;
+        }
         return FlushInput() && iptv_stream_discontinuity(&session_) == IPTV_STREAM_OK;
+    }
+    bool NextTimeline()
+    {
+        return history_ ? Discontinuity() : (FlushInput() && Start());
     }
 
     int PushWebm(const iptv_webm_video_info_t &video, const iptv_webm_block_t &block)
@@ -1004,8 +1040,12 @@ class StreamRunner
 
     bool StopRequested()
     {
+        // Native startup can poll controls from the demux worker while the
+        // foreground thread downloads. Controller and UI callbacks have one owner.
+        std::lock_guard control_lock(control_mutex_);
         if (playback_stop_requested_)
             return true;
+        UpdateLiveControls();
         const auto sleep_deadline = gSleepDeadlineUsec.load(std::memory_order_relaxed);
         if (stop_deadline_usec_ || sleep_deadline)
         {
@@ -1038,6 +1078,21 @@ class StreamRunner
             const int handled = gControls ? gControls(gControlsContext, event.action) : 0;
             if (handled == 1)
                 continue;
+            if (event.action == IPTV_INPUT_PLAY_PAUSE)
+            {
+                (void)iptv_player_pause_live(Paused() ? 0 : 1);
+                continue;
+            }
+            if (event.action == IPTV_INPUT_GO_LIVE)
+            {
+                (void)iptv_player_go_live();
+                continue;
+            }
+            if (event.action == IPTV_INPUT_LEFT || event.action == IPTV_INPUT_RIGHT)
+            {
+                (void)iptv_player_seek_live(event.action == IPTV_INPUT_LEFT ? -30 : 30);
+                continue;
+            }
             if (handled == 2 || event.action == IPTV_INPUT_CIRCLE ||
                 event.action == IPTV_INPUT_OPTIONS)
             {
@@ -1168,6 +1223,12 @@ class StreamRunner
             RecordCleanupResult(native.cleanup_result);
         gSubtitles.clear();
         {
+            std::lock_guard lock(gLiveMutex);
+            gLiveState = {};
+            gLivePauseRequest = -1;
+            gLiveSeekRequest.reset();
+        }
+        {
             std::lock_guard lock(gAudioMutex);
             gAudioState = {};
             gAudioMetadata.clear();
@@ -1196,6 +1257,91 @@ class StreamRunner
     }
 
   private:
+    void UpdateLiveControls()
+    {
+        if (!history_)
+            return;
+        int pause = -1;
+        std::optional<std::uint64_t> seek;
+        {
+            std::lock_guard lock(gLiveMutex);
+            pause = gLivePauseRequest;
+            gLivePauseRequest = -1;
+            seek = gLiveSeekRequest;
+            gLiveSeekRequest.reset();
+        }
+        const auto range = history_->range();
+        if (seek)
+        {
+            if (const auto position = history_->seek(*seek))
+            {
+                std::lock_guard lock(history_request_mutex_);
+                history_request_ = *position;
+                history_expired_.store(false, std::memory_order_release);
+                paused_.store(false, std::memory_order_release);
+                iptv_native_backend_request_reposition(&adapter_.backend);
+            }
+        }
+        else if (pause >= 0)
+        {
+            paused_.store(pause != 0, std::memory_order_release);
+            iptv_native_backend_set_paused(&adapter_.backend, pause);
+            if (!pause && (read_ahead_read_.load(std::memory_order_acquire) < range.begin ||
+                           history_generation_.load(std::memory_order_acquire) != range.generation))
+                iptv_native_backend_request_reposition(&adapter_.backend);
+        }
+        const auto presented = iptv_native_backend_presented_pts(&adapter_.backend);
+        std::lock_guard lock(gLiveMutex);
+        gLiveState = {range.first_pts_us, range.last_pts_us,
+                      presented == UINT64_MAX ? range.last_pts_us : presented,
+                      range.timed && HasPresentedVideo() ? 1u : 0u, Paused() ? 1u : 0u,
+                      history_expired_.load(std::memory_order_acquire) ? 1u : 0u};
+    }
+
+    bool ReadHistory(std::uint64_t &read, std::size_t &chunk)
+    {
+        const auto range = history_->range();
+        std::optional<iptv::Timeshift::Position> position;
+        {
+            std::lock_guard lock(history_request_mutex_);
+            position.swap(history_request_);
+        }
+        if (Paused() && !position)
+        {
+            if (read < range.begin || history_generation_ != range.generation)
+                history_expired_.store(true, std::memory_order_release);
+            chunk = 0;
+            return true;
+        }
+        if (read < range.begin || history_generation_ != range.generation)
+        {
+            if (!position)
+                position = history_->seek(range.first_pts_us);
+            if (!position && range.begin != range.end)
+                position = iptv::Timeshift::Position{range.begin, 0, range.generation};
+            history_expired_.store(true, std::memory_order_release);
+        }
+        if (position)
+        {
+            paused_.store(false, std::memory_order_release);
+            iptv_native_backend_request_reposition(&adapter_.backend);
+            const int result = iptv_stream_reposition(&session_, position->pts_us);
+            if (result != IPTV_STREAM_OK)
+            {
+                read_ahead_result_.store(result, std::memory_order_release);
+                return false;
+            }
+            read = position->offset;
+            history_generation_ = position->generation;
+            read_ahead_read_.store(read, std::memory_order_release);
+        }
+        const auto copied = history_->read(read, read_ahead_buffer_, kReadBytes);
+        chunk = copied.bytes;
+        // A producer may have advanced the retention boundary since the range
+        // snapshot. Retry from a new indexed position on the next iteration.
+        return true;
+    }
+
     static void *ReadAheadEntry(void *context)
     {
         static_cast<StreamRunner *>(context)->ReadAheadLoop();
@@ -1204,9 +1350,18 @@ class StreamRunner
 
     bool StartReadAhead()
     {
-        read_ahead_buffer_ = new (std::nothrow) std::uint8_t[kReadAheadBytes];
+        if (live_)
+        {
+            history_.reset(new (std::nothrow) iptv::Timeshift());
+            if (history_ && !history_->available())
+                history_.reset();
+        }
+        read_ahead_buffer_ = new (std::nothrow) std::uint8_t[history_ ? kReadBytes : kReadAheadBytes];
         if (!read_ahead_buffer_)
+        {
+            history_.reset();
             return false;
+        }
         read_ahead_read_.store(0, std::memory_order_relaxed);
         read_ahead_write_.store(0, std::memory_order_relaxed);
         read_ahead_result_.store(IPTV_STREAM_OK, std::memory_order_relaxed);
@@ -1219,6 +1374,7 @@ class StreamRunner
             delete[] read_ahead_buffer_;
             read_ahead_buffer_ = nullptr;
             read_ahead_thread_ = nullptr;
+            history_.reset();
             return false;
         }
         return true;
@@ -1246,13 +1402,15 @@ class StreamRunner
                 gAudioState.pending = gAudioRequest.load(std::memory_order_acquire) != UINT32_MAX;
                 gAudioState.result = audio_result;
             }
-            const std::uint64_t read = read_ahead_read_.load(std::memory_order_relaxed);
+            std::uint64_t read = read_ahead_read_.load(std::memory_order_relaxed);
             const std::uint64_t write = read_ahead_write_.load(std::memory_order_acquire);
-            const std::size_t available = static_cast<std::size_t>(write - read);
+            std::size_t available = static_cast<std::size_t>(write - read);
             const bool finished = read_ahead_finished_.load(std::memory_order_acquire);
+            if (history_ && !ReadHistory(read, available))
+                break;
             if (available == 0)
             {
-                if (finished)
+                if (finished && !Paused() && read == write)
                     break;
                 // The demuxer can drain input faster than playback consumes its queues.
                 // Keep feeding new bytes immediately; an empty input ring is not an
@@ -1261,7 +1419,7 @@ class StreamRunner
                 continue;
             }
 
-            const std::size_t offset = static_cast<std::size_t>(read % kReadAheadBytes);
+            const std::size_t offset = history_ ? 0 : static_cast<std::size_t>(read % kReadAheadBytes);
             std::size_t chunk = available;
             if (chunk > kReadBytes)
                 chunk = kReadBytes;
@@ -1274,6 +1432,8 @@ class StreamRunner
                 break;
             }
             read_ahead_read_.store(read + chunk, std::memory_order_release);
+            if (history_ && session_.telemetry.format.video_pid)
+                history_->set_video_pid(session_.telemetry.format.video_pid);
         }
         {
             std::lock_guard lock(gAudioMutex);
@@ -1311,6 +1471,11 @@ class StreamRunner
         read_ahead_thread_ = nullptr;
         delete[] read_ahead_buffer_;
         read_ahead_buffer_ = nullptr;
+        history_.reset();
+        history_request_.reset();
+        history_generation_ = 0;
+        paused_.store(false, std::memory_order_release);
+        history_expired_.store(false, std::memory_order_release);
         if (join_result != 0)
             return IPTV_STREAM_NATIVE_ERROR;
         return read_ahead_result_.load(std::memory_order_acquire);
@@ -1342,8 +1507,15 @@ class StreamRunner
     std::uint64_t stop_deadline_usec_ = 0;
     std::uint64_t player_cleanup_count_ = 0;
     int player_cleanup_result_ = 0;
-    bool playback_stop_requested_ = false;
+    std::atomic<bool> playback_stop_requested_{false};
     bool overlay_chord_down_ = false;
+    std::mutex control_mutex_;
+    bool live_ = false;
+    std::unique_ptr<iptv::Timeshift> history_;
+    std::atomic<bool> paused_{false}, history_expired_{false};
+    std::mutex history_request_mutex_;
+    std::optional<iptv::Timeshift::Position> history_request_;
+    std::atomic<std::uint64_t> history_generation_{0};
     std::uint8_t *read_ahead_buffer_ = nullptr;
     void *read_ahead_thread_ = nullptr;
     std::atomic<std::uint64_t> read_ahead_read_{0};
@@ -1550,7 +1722,7 @@ FeedResult FeedRequest(iptv::http::StreamRequest *request, StreamRunner *runner,
         }
         const std::uint64_t presented = runner->PresentedFrames();
         const std::uint64_t now = MonotonicUsec();
-        if (presented > last_presented)
+        if (presented > last_presented || runner->Paused())
         {
             last_presented = presented;
             last_progress = now;
@@ -1615,7 +1787,7 @@ int RunWebm(iptv::http::StreamRequest *request, StreamRunner *runner,
         result = iptv_webm_push(&parser, read_buffer, static_cast<std::size_t>(read));
         const std::uint64_t presented = runner->PresentedFrames();
         const std::uint64_t now = MonotonicUsec();
-        if (presented > last_presented)
+        if (presented > last_presented || runner->Paused())
         {
             last_presented = presented;
             last_progress = now;
@@ -1752,7 +1924,7 @@ int RunHlsMedia(const char *source_url, StreamRunner *runner, std::uint8_t *read
             const std::uint64_t last = playlist->segments[playlist->segment_count - 1u].sequence;
             if (first > next_sequence || last + 1u < next_sequence)
             {
-                if (!runner->Start())
+                if (!runner->NextTimeline())
                 {
                     return -1;
                 }
@@ -1778,7 +1950,7 @@ int RunHlsMedia(const char *source_url, StreamRunner *runner, std::uint8_t *read
                 segment.discontinuity_sequence != last_discontinuity_sequence;
             if ((segment.discontinuity || changed_timeline) && session_has_data)
             {
-                if (!runner->FlushInput() || !runner->Start())
+                if (!runner->NextTimeline())
                 {
                     return -1;
                 }
@@ -1793,7 +1965,7 @@ int RunHlsMedia(const char *source_url, StreamRunner *runner, std::uint8_t *read
                 // Public live playlists frequently retain a segment for a moment
                 // after its CDN object expires. Skip that object and reopen the
                 // decoder at the next segment instead of abandoning the channel.
-                if (!runner->Start())
+                if (!runner->NextTimeline())
                     return -1;
                 have_sequence = true;
                 next_sequence = segment.sequence + 1u;
@@ -1818,7 +1990,7 @@ int RunHlsMedia(const char *source_url, StreamRunner *runner, std::uint8_t *read
             return finished == IPTV_STREAM_OK && runner->HasPresentedVideo() ? 0 : -1;
         }
         const std::uint64_t presented = runner->PresentedFrames();
-        if (presented > last_presented)
+        if (presented > last_presented || runner->Paused())
         {
             stale_refreshes = 0;
             last_presented = presented;
@@ -2302,6 +2474,7 @@ static int RunPlayer(const char *url, const char *channel_name, const char *user
     else
     {
         runner->SetStopAfter(stop_after_ms);
+        runner->SetLive(reconnect_live);
 #if IPTV_PROBE
         if (!UrlLooksLikeHls(url) && !UrlLooksLikeWebm(url))
             RunCurlDownloadProbe(url, headers, runner);
@@ -2429,6 +2602,46 @@ void iptv_player_set_controls(iptv_player_controls_t controls, void *context)
 {
     gControls = controls;
     gControlsContext = context;
+}
+
+void iptv_player_live_state(iptv_player_live_state_t *state)
+{
+    if (state)
+    {
+        std::lock_guard lock(gLiveMutex);
+        *state = gLiveState;
+    }
+}
+int iptv_player_pause_live(int paused)
+{
+    std::lock_guard lock(gLiveMutex);
+    if (!gLiveState.available)
+        return IPTV_STREAM_INVALID_STATE;
+    gLivePauseRequest = paused != 0;
+    return IPTV_STREAM_OK;
+}
+int iptv_player_seek_live(int seconds)
+{
+    std::lock_guard lock(gLiveMutex);
+    if (!gLiveState.available)
+        return IPTV_STREAM_INVALID_STATE;
+    const auto position = std::clamp(gLiveSeekRequest.value_or(gLiveState.position_us),
+                                     gLiveState.first_us, gLiveState.last_us);
+    const auto delta = static_cast<std::int64_t>(seconds) * 1000000;
+    gLiveSeekRequest = delta < 0
+                           ? position - std::min(position - gLiveState.first_us,
+                                                   static_cast<std::uint64_t>(-delta))
+                           : position + std::min(gLiveState.last_us - position,
+                                                   static_cast<std::uint64_t>(delta));
+    return IPTV_STREAM_OK;
+}
+int iptv_player_go_live()
+{
+    std::lock_guard lock(gLiveMutex);
+    if (!gLiveState.available)
+        return IPTV_STREAM_INVALID_STATE;
+    gLiveSeekRequest = gLiveState.last_us;
+    return IPTV_STREAM_OK;
 }
 
 void iptv_player_audio_state(iptv_player_audio_state_t *state)

@@ -131,6 +131,15 @@ void Timeshift::set_video_pid(std::uint32_t pid)
     index();
     trim();
 }
+void Timeshift::discontinuity()
+{
+    std::lock_guard lock(mutex_);
+    begin_ = scan_ = end_;
+    marks_.clear();
+    synchronized_ = have_ticks_ = false;
+    latest_us_ = 0;
+    ++generation_;
+}
 void Timeshift::trim()
 {
     const auto first_time = latest_us_ > duration_ ? latest_us_ - duration_ : 0;
