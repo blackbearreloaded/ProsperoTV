@@ -63,7 +63,7 @@
 | Shell title | `ProsperoTV` |
 | Title ID | `PPSA99003` |
 | Shell category | Media |
-| Current version | `01.000.040` |
+| Current version | `01.000.050` |
 | Release-version source | [`sce_sys/param.json`](sce_sys/param.json) |
 | Built-in catalog | `https://iptv-org.github.io/iptv/index.m3u` |
 | Writable data | `/data/prosperotv`; the title's own `/download0` when filesystem access is not available |
@@ -419,12 +419,12 @@ PS5 `NN.NNN.NNN` format without a `v` prefix.
 
 ```bash
 # After updating param.json and passing the release gates:
-git tag 01.000.040
-git push origin main 01.000.040
+git tag 01.000.050
+git push origin main 01.000.050
 ```
 
 The workflow rejects a mismatched tag, builds the app, and publishes the
-release with the notes in `docs/releases/01.000.040.md`. See
+release with the notes in `docs/releases/01.000.050.md`. See
 [Configuration](docs/CONFIGURATION.md) for the coordinated metadata fields.
 
 A release is made by pushing the version tag and in no other way: the
