@@ -208,6 +208,7 @@ int main() {
             subprocess.run(["clang", "-std=gnu11", "-O2", "-ffunction-sections",
                             "-fdata-sections", "-DIPTV_NATIVE_BACKEND_STATE_TEST",
                             "-Iinclude", "-Isrc", "src/iptv_native_backend.c",
+                            "src/iptv_audio_normalize.c", "-lm",
                             "-Xlinker", "--gc-sections", "-o", executable], cwd=ROOT, check=True)
             subprocess.run([executable], check=True, timeout=10)
 

@@ -678,8 +678,7 @@ TEST_F(AppTest, PairingIsASettingsModalWithAnExplicitRequest)
     press(Action::page_next);
     press(Action::page_next);
     press(Action::page_next);
-    for (int i = 0; i < 4; ++i)
-        move(Direction::down);
+    settings_row("Pair a phone");
     EXPECT_FALSE(app_->take_pair_phone_requested());
     press(Action::confirm);
     EXPECT_TRUE(app_->pairing_open());
@@ -1716,3 +1715,26 @@ TEST_F(AppTest, RandomInputNeverBreaksIt)
 }
 
 } // namespace
+
+TEST_F(AppTest, AudioNormalizationIsOptionalAndPersists)
+{
+    EXPECT_FALSE(app_->settings().audio_normalization);
+    EXPECT_FALSE(ptv::load_settings(dir_).audio_normalization);
+    for (int i = 0; i < 4; ++i)
+        press(Action::page_next);
+    settings_row("Normalize channel volume");
+    press(Action::confirm);
+    EXPECT_TRUE(app_->settings().audio_normalization);
+    EXPECT_TRUE(app_->take_settings_changed());
+    ASSERT_TRUE(ptv::save_settings(dir_, app_->settings()));
+    EXPECT_TRUE(ptv::load_settings(dir_).audio_normalization);
+    app_->set_volume(35);
+    EXPECT_TRUE(app_->settings().audio_normalization);
+    app_->set_audio_normalization(false);
+    EXPECT_FALSE(app_->settings().audio_normalization);
+    press(Action::confirm);
+    EXPECT_TRUE(app_->settings().audio_normalization);
+    EXPECT_TRUE(app_->take_settings_changed());
+    std::ofstream(dir_ + "/prosperotv-interface-v1.txt") << "volume=60\n";
+    EXPECT_FALSE(ptv::load_settings(dir_).audio_normalization);
+}

@@ -73,7 +73,7 @@ doctor:
 	@printf '%s\n' '==> [doctor] Checking the Linux/WSL host without changing it'
 	@bash tools/doctor.sh
 
-test: test-unit test-integration test-media
+test: test-unit test-integration test-media test-audio-normalize
 
 .PHONY: test-media
 test-media:
@@ -83,7 +83,7 @@ test-deps:
 	@printf '%s\n' '==> [test-deps] Fetching the pinned host-only GoogleTest source'
 	@bash tools/setup-test-dependencies.sh >/dev/null
 
-test-unit: $(HOST_UNIT_TEST) $(HOST_ELEVATION_TEST)
+test-unit: $(HOST_UNIT_TEST) $(HOST_ELEVATION_TEST) test-audio-normalize-ffmpeg
 	@printf '%s\n' '==> [test-unit] Running host-native GoogleTest application tests'
 	@$(HOST_UNIT_TEST) $(GTEST_ARGS)
 	@printf '%s\n' '==> [test-unit] Running optional-Lapy elevation regression'
@@ -226,3 +226,20 @@ help:
 	  'Local defaults:      Copy .env.example to the ignored .env file' \
 	  'make clean           Remove build/, dist/, and generated libc.prx' \
 	  'make distclean       Also remove the ignored .deps/ cache'
+
+.PHONY: test-audio-normalize
+test-audio-normalize:
+	@mkdir -p build/tests
+	@$(HOST_CC) -std=c11 -O1 -g -Wall -Wextra -Wpedantic -Werror \
+		-fsanitize=address,undefined -fno-omit-frame-pointer -Iinclude \
+		tests/test_audio_normalize.c src/iptv_audio_normalize.c -lm \
+		-o build/tests/audio_normalize_test
+	@build/tests/audio_normalize_test
+
+# Optional independent metering check; needs a host FFmpeg executable.
+.PHONY: test-audio-normalize-ffmpeg
+test-audio-normalize-ffmpeg: test-audio-normalize
+	@$(HOST_CC) -std=c11 -O2 -Wall -Wextra -Wpedantic -Werror -Iinclude \
+		tests/audio_normalize_probe.c src/iptv_audio_normalize.c -lm \
+		-o build/tests/audio_normalize_probe
+	@python3 tests/test_audio_normalize_ffmpeg.py
