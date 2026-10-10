@@ -70,63 +70,114 @@
 
 ## Features
 
-- Save multiple M3U playlists, Xtream accounts and MAC-code portals, each with
-  its own cache, category visibility and daily, weekly or manual refresh schedule.
-- Browse provider categories and subcategories; hiding a parent hides all of
-  its children. Keep up to 65,536 favorites and organize them in named folders.
-- Show channel logos, now/next programmes, a two-hour programme grid and
-  programme-title search. Play archived programmes when the source advertises
-  a supported catch-up service.
-- Browse Xtream movies, shows, seasons and episodes in **On demand**. Play
-  H.264/HEVC in MP4 or Matroska, as well as the existing live-stream formats.
-- Preview the focused live channel in the large television, muted after
-  1.2 seconds. Settings also offers hiding failed channels and starting on the
-  last channel. See [the roadmap implementation guide](docs/ROADMAP_IMPLEMENTATION.md)
-  for controls, provider requirements and validation status.
-- Watch two or four live TS/HLS channels in Multiview, with audio following
-  focus. Four simultaneous 720p H.264 feeds are validated on hardware; higher
-  resolutions and other codec combinations depend on available decoder resources.
-- Open the last verified channel catalog immediately from a local SQLite cache
-  while a refresh runs in the background.
-- Browse Live TV, Favorites, Recent, News, Sports, Kids, and other channel
-  groups in alphabetical order, with pages that keep turning while L2 or R2 is
-  held and a column of letters to jump by.
-- Search case-insensitively by channel name and filter by country, language,
-  category, and advertised quality using the native PS5 keyboard.
-- Keep favorites, recent channels, source selection, and catalog data under
-  `/data/prosperotv`; failed refreshes leave the last good database untouched.
-- Load large providers: up to 250,000 channels from one source. The list is
-  read as it downloads, however large its file is.
-- Add a custom HTTP(S) M3U or M3U8 playlist alongside the built-in iptv-org
-  source.
-- Add a user-supplied Xtream server, username, and password through masked
-  native password entry; authenticate with the Player API and cache its live
-  categories and channels locally.
+### Sources
+
+- Use the built-in iptv-org catalog, or add your own: HTTP(S) M3U/M3U8
+  playlists, Xtream Codes accounts (masked password entry), MAC-code portals
+  (Stalker/Ministra style), and tuners or servers on the home network such as
+  HDHomeRun and Tvheadend.
+- Keep several sources, each with its own cache, visible categories, and
+  refresh schedule: daily, weekly, or only when asked.
+- Load large providers: up to 250,000 channels from one source, read as the
+  list downloads.
+- Choose which of a provider's categories appear. Hiding a parent hides all of
+  its subcategories.
+- Add and edit playlists and accounts from a phone or a computer with the
+  [phone remote](#phone-remote), instead of the on-screen keyboard.
+
+### Browsing
+
+- Open the last verified catalog at once from a local cache while a refresh
+  runs in the background.
+- Browse Live TV by the provider's own categories and subcategories, shown as
+  the row of filters above the channels, beside Favorites and Recent.
+- Search by channel name, and filter by country, language, category, and
+  advertised quality, with the native PS5 keyboard.
+- See channel logos on the tiles and on the large television.
+- Preview the focused live channel, with sound, on the large television after
+  a moment on it.
+- Turn pages by holding L2 or R2, faster the longer they are held, in Live TV,
+  Movies, and Series; jump by letter with the column beside every list.
+- Keep up to 65,536 favorites, organized in named folders.
+- Hide the channels that did not open the last time, and start on the channel
+  watched last, from Settings.
 - Return to the same screen, group, page, and channel after playback closes.
-- Show a tuning screen from Cross until the channel's first picture.
-- Keep a diagnostic log on request: a switch in Settings, off by default,
-  that records what the app does and how each channel decodes in
-  `/data/prosperotv/logs/debug-trace.txt`, without account details, for
-  sending with a problem report.
-- Offer a newer version at launch with **Update now**, **What's new** (the
-  release notes), and **Later**; the update downloads, replaces the app's
-  files after it closes, and keeps everything you saved.
-- Play HLS and direct MPEG-TS streams with H.264 or HEVC video and supported
-  Native AAC-LC mono/stereo audio, plus software-decoded MP2, AAC Main,
-  multichannel AAC, AAC-LATM, AC-3 and E-AC-3 through the same audio output
-  pipeline. Surround audio is downmixed to stereo, including the dialogue channel.
-- Play direct WebM streams containing VP9 Profile 0 video.
-- Adapt read-ahead buffering to live HLS timing and recover from stale live
-  segments without discarding the channel immediately.
-- Display codec, resolution, frame rate, and bitrate during playback; toggle
-  the statistics overlay with Touchpad + R1.
-- Report actionable failures for HTTP status, GeoIP restrictions, unavailable
-  streams, unsupported encryption or codecs, malformed playlists, MPEG-TS
-  synchronization, and native decoder errors.
-- Render the interface with OpenGL through the
+
+### Programme guide
+
+- See what each channel is showing now and next, from the guide a playlist or
+  an account points to.
+- Open the full grid of channels and hours, and start a channel from it.
+- Search programmes by title, not only channels by name.
+- Play a programme that has already been shown, on channels whose provider
+  keeps a catch-up archive.
+
+### Movies and series
+
+- Browse an Xtream account's movies, shows, seasons, and episodes in
+  **On demand**.
+- Play H.264 and HEVC in MP4 or Matroska, up to 4K.
+
+### While watching
+
+- Zap with up and down, go back to the channel watched before with one
+  button, or pick another channel from a list over the picture.
+- See a banner with the channel's name and its programme when a channel opens
+  or when asked for.
+- Choose among the audio tracks a channel carries, and show its subtitles.
+- Pause live TV and go back a few minutes.
+- Set a sleep timer.
+- Watch two or four live channels side by side in Multiview, with sound
+  following the focused one. Four 720p H.264 feeds are validated on hardware;
+  higher resolutions depend on the decoder resources available.
+- Show codec, resolution, frame rate, and bitrate with Touchpad + R1.
+
+### Picture and sound
+
+- Play HLS and direct MPEG-TS streams with H.264 or HEVC video, and direct
+  WebM streams with VP9 Profile 0, through the PS5's hardware decoders.
+- Show HDR10 and HLG channels as HDR, with SDR tone mapping when HDR output is
+  not available.
+- Present each field of an interlaced broadcast separately to keep its motion.
+- Play AAC, MP2, AC-3, and E-AC-3 sound; surround is downmixed to stereo,
+  including the dialogue channel.
+- Keep the picture in step with the sound: frames are timed against the sound
+  being played.
+- Adapt buffering to live HLS timing, and recover from stale segments and
+  alternate addresses without giving up on the channel.
+- Show a tuning screen until the channel's first picture, and say why a
+  channel did not open: HTTP status, regional restriction, unsupported
+  encryption or codec, malformed playlist, or decoder error.
+
+### Household
+
+- Lock adult categories behind a parental PIN, and switch to a mode that shows
+  only the channels for children.
+- Keep favorites, recent channels, and sources separate for each person signed
+  in on the console.
+- Use the interface in English, Spanish, French, German, Italian, Portuguese,
+  or Dutch, following the console's language. Provider content keeps its own
+  text.
+- Back up sources, favorites, and settings to a USB drive, and restore them on
+  this console or another.
+
+### The app
+
+- Control the app from a phone's browser with the
+  [phone remote](#phone-remote).
+- Update in place: a newer version is offered at launch with **Update now**,
+  **What's new**, and **Later**, and everything saved is kept.
+- Keep all data under `/data/prosperotv`, where an update never touches it; a
+  failed refresh leaves the last good catalog untouched.
+- Send a useful problem report: a diagnostic log switch in Settings (off by
+  default, no account details), and a failure report saved to a USB drive.
+- Use a full-screen OpenGL interface at up to 4K, built with the
   [ps5-homebrew-ui](https://github.com/blackbearreloaded/ps5-homebrew-ui) kit,
-  with fonts covering Latin, Greek, Cyrillic, Chinese, Japanese, and Korean
-  channel names, interface sounds, and a Reduce motion setting.
+  with fonts for Latin, Greek, Cyrillic, Chinese, Japanese, and Korean channel
+  names, interface sounds, and a Reduce motion setting.
+
+Provider requirements and validation for these features are in
+[the implementation guide](docs/ROADMAP_IMPLEMENTATION.md).
 
 ## Video support
 
@@ -413,99 +464,6 @@ warning.
 ProsperoTV displays the most specific detected cause when a channel cannot be
 played. A channel failure does not imply that the app, iptv-org, or the
 console is unavailable.
-
-## Roadmap
-
-Ideas asked for by the community, and some of our own. Checked items are
-implemented in this branch; their provider requirements and validation are
-documented in [the implementation guide](docs/ROADMAP_IMPLEMENTATION.md).
-The remaining ideas are not scheduled or promised.
-
-### Sources
-
-- [x] **The provider's own categories.** Browsing a source by the groups it
-  defines ("US / Movies", "US / Sports", ...), beside the app's own lists.
-- [x] **Subcategories.** Opening a parent such as "US" to browse its "Sports"
-  and "Movies" groups, including deeper groups such as "Sports / Football".
-  Browse or hide a whole parent, or choose its children individually.
-- [x] **Showing and hiding categories.** Choosing which of a provider's categories
-  appear at all, so an account with tens of thousands of channels shows only
-  the ones wanted.
-- [x] **Several sources at once.** More than one playlist and more than one
-  account, shown together or switched between, instead of one source in use
-  at a time.
-- [x] **Local TV sources.** Tuners and servers on the home network, such as
-  HDHomeRun and Tvheadend, as channel sources beside the playlists.
-- [x] **MAC-code portals.** Signing in to a provider with a portal address and a
-  MAC code (Stalker/Ministra style), offered in Sources just below the Xtream
-  Codes account.
-- [x] **Video on demand.** The movies and TV shows an IPTV service offers beside
-  its live channels, browsable and playable from the app.
-- [x] **Managing lists from a phone.** Adding and editing playlists and accounts
-  from the phone remote's page, in a phone's or a computer's browser, instead
-  of the on-screen keyboard.
-- [x] **A refresh schedule.** Choosing how often a source is downloaded again
-  (daily, weekly, or only when asked) instead of every twelve hours: a very
-  large list is a long download.
-
-### Browsing
-
-- [x] **Channel logos.** The picture a playlist gives for each channel, on its
-  tile and on the large television, in place of the two letters.
-- [x] **More favorites, in folders.** Room for more than 256 favorites, and named
-  folders to keep them in ("Football", "Kids").
-- [x] **Hiding channels that did not open.** The app already remembers whether a
-  channel opened the last time; a switch would leave the dead ones out of the
-  lists.
-- [x] **Starting on the last channel.** A setting that opens the channel watched
-  last as soon as the app starts.
-- [x] **A live preview.** After a moment on a channel, the large television
-  plays it, muted, before anything is pressed.
-
-### Programme guide
-
-- [x] **Now and next.** What each channel is showing and what follows, beside its
-  name, from the guide an Xtream account or a playlist points to.
-- [x] **The full guide.** The grid of channels and hours, to see the evening at a
-  glance and open a channel from it.
-- [x] **Catch-up.** Playing a programme that has already been shown, on the
-  channels whose provider keeps an archive.
-- [x] **Searching what is on.** Finding a programme by its title ("football"
-  finds the matches being shown now), not only a channel by its name.
-
-### While watching
-
-- [x] **Zapping.** Up and down for the next and the previous channel without
-  going back to the menu, and one button for the channel watched before.
-- [x] **The channel list over the picture.** A list at the side of the video to
-  pick another channel from.
-- [x] **A channel banner.** The channel's name and, with a guide, its programme,
-  shown for a moment when a channel opens or when asked for.
-- [x] **Audio tracks and subtitles.** Choosing among the languages a channel
-  carries, and showing its subtitles.
-- [x] **A sleep timer.** Closing the channel after a chosen time.
-- [x] **Pausing live TV.** Stopping the picture and going back a few minutes in
-  a channel that is being watched.
-- [x] **Smoother interlaced pictures.** Presenting each broadcast field separately
-  to preserve its full motion.
-- [x] **HDR.** Showing HDR10 and HLG channels as HDR, with SDR tone mapping when
-  HDR output is unavailable.
-- [x] **Several channels at once.** Two or four pictures side by side, for
-  sport, if the console's decoder allows it.
-
-### Household
-
-- [x] **A parental PIN.** Locking the categories a provider marks as adult
-  behind a code, and a mode that shows only the channels for children.
-- [x] **Profiles.** Favorites, recent channels and sources for each person
-  signed in on the console.
-- [x] **The interface in other languages.** Menus follow the console's
-  English, Spanish, French, German, Italian, Portuguese or Dutch setting.
-  Other languages fall back to English; provider content keeps its own text.
-- [x] **Backup and restore.** Copying sources, favorites and settings to a USB
-  drive, and bringing them back on this console or another.
-- [x] **Reporting a channel that fails.** Saving what the app knows about a
-  failure to a USB drive, to send with a report, without a special build.
 
 <!-- bbr-footer:start -->
 <!-- Generated by ps5-homebrew-dev-protocol/scripts/readme-footer. Edit the template there, not here. -->
