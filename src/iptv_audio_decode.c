@@ -8,6 +8,7 @@
 #include <libswresample/swresample.h>
 #include <errno.h>
 #include <limits.h>
+#include <math.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -19,7 +20,31 @@ struct iptv_audio_decoder
     SwrContext *mix;
     AVChannelLayout layout;
     int rate, format;
+    float *mixed; /* The downmix before the limiter. */
+    unsigned mixed_bytes;
+    float limiter_gain;
 };
+
+void iptv_audio_limit_to_s16(float *gain, uint32_t sample_rate, const float *stereo, size_t frames,
+                             int16_t *pcm)
+{
+    static const float ceiling = 0.8912509f; /* -1 dBFS */
+    const float release = 4.0f / (float)(sample_rate ? sample_rate : 48000u);
+    float g = *gain > 0.0f && *gain <= 1.0f ? *gain : 1.0f;
+    for (size_t i = 0; i < frames; ++i)
+    {
+        float left = stereo[2 * i], right = stereo[2 * i + 1];
+        if (!isfinite(left) || !isfinite(right))
+            left = right = 0.0f;
+        const float peak = fmaxf(fabsf(left), fabsf(right));
+        g = fminf(1.0f, g + release);
+        if (peak * g > ceiling)
+            g = ceiling / peak;
+        pcm[2 * i] = (int16_t)lrintf(left * g * 32767.0f);
+        pcm[2 * i + 1] = (int16_t)lrintf(right * g * 32767.0f);
+    }
+    *gain = g;
+}
 
 void iptv_audio_decoder_free(iptv_audio_decoder_t **decoder)
 {
@@ -27,6 +52,7 @@ void iptv_audio_decoder_free(iptv_audio_decoder_t **decoder)
         return;
     iptv_audio_decoder_t *d = *decoder;
     swr_free(&d->mix);
+    av_freep(&d->mixed);
     av_channel_layout_uninit(&d->layout);
     av_packet_free(&d->packet);
     av_frame_free(&d->frame);
@@ -50,6 +76,7 @@ iptv_audio_decoder_t *iptv_audio_decoder_create(uint32_t type)
     d->packet = av_packet_alloc();
     if (!codec || !d->codec || !d->frame || !d->packet)
         goto failed;
+    d->limiter_gain = 1.0f;
     d->codec->thread_count = 1; // Existing audio worker owns decoding; no extra codec threads.
     if (avcodec_open2(d->codec, codec, NULL) < 0)
         goto failed;
@@ -64,6 +91,7 @@ void iptv_audio_decoder_reset(iptv_audio_decoder_t *d)
     if (!d)
         return;
     avcodec_flush_buffers(d->codec);
+    d->limiter_gain = 1.0f;
     swr_free(&d->mix);
     av_channel_layout_uninit(&d->layout);
 }
@@ -96,13 +124,15 @@ int iptv_audio_decode(iptv_audio_decoder_t *d, const uint8_t *data, size_t bytes
             const AVChannelLayout stereo = AV_CHANNEL_LAYOUT_STEREO;
             swr_free(&d->mix);
             av_channel_layout_uninit(&d->layout);
-            result = swr_alloc_set_opts2(&d->mix, &stereo, AV_SAMPLE_FMT_S16, f->sample_rate,
+            // The mix keeps the source's level (front + 0.707 centre + 0.707 surround) in float;
+            // the limiter below holds the peaks that would not fit in 16 bits. Scaling the
+            // whole mix down so that it can never clip made 5.1 sound 7.65 dB quieter than
+            // stereo.
+            result = swr_alloc_set_opts2(&d->mix, &stereo, AV_SAMPLE_FMT_FLT, f->sample_rate,
                                          &f->ch_layout, (enum AVSampleFormat)f->format,
                                          f->sample_rate, 0, NULL);
             if (result < 0)
                 return result;
-            // Normalize surround downmix to avoid clipping; include dialogue/center channels.
-            av_opt_set_double(d->mix, "rematrix_maxval", 1.0, 0);
             if ((result = swr_init(d->mix)) < 0)
                 return result;
             if ((result = av_channel_layout_copy(&d->layout, &f->ch_layout)) < 0)
@@ -113,10 +143,15 @@ int iptv_audio_decode(iptv_audio_decoder_t *d, const uint8_t *data, size_t bytes
         const int room = ((int)capacity - written) / (2 * (int)sizeof(int16_t));
         if (swr_get_out_samples(d->mix, f->nb_samples) > room)
             return AVERROR(ENOSPC);
-        uint8_t *out = (uint8_t *)pcm + written;
+        av_fast_malloc(&d->mixed, &d->mixed_bytes, (size_t)room * 2u * sizeof(float));
+        if (!d->mixed)
+            return AVERROR(ENOMEM);
+        uint8_t *out = (uint8_t *)d->mixed;
         result = swr_convert(d->mix, &out, room, (const uint8_t **)f->extended_data, f->nb_samples);
         if (result < 0)
             return result;
+        iptv_audio_limit_to_s16(&d->limiter_gain, (uint32_t)f->sample_rate, d->mixed,
+                                (size_t)result, (int16_t *)((uint8_t *)pcm + written));
         written += result * 2 * (int)sizeof(int16_t);
         *sample_rate = (uint32_t)f->sample_rate;
         av_frame_unref(f);

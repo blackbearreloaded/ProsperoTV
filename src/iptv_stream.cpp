@@ -1779,6 +1779,8 @@ static int process_audio(iptv_stream_session_t *session, impl_t *impl)
                 marker_erase(&impl->audio_markers, 1u, IPTV_STREAM_PTS_UNKNOWN);
                 continue;
             }
+            channels = iptv_audio_frame_channels(impl->format.audio_stream_type,
+                                                 impl->audio_es.data, impl->audio_es.size);
         }
         else if (mp2)
         {
@@ -1833,8 +1835,13 @@ static int process_audio(iptv_stream_session_t *session, impl_t *impl)
         if (frame_bytes > impl->audio_es.size)
             return IPTV_STREAM_OK;
 
+        /* A software-decoded stream may go from 5.1 to stereo and back between programmes:
+         * its decoder follows, so only its rate has to stay. */
+        const bool channels_may_change =
+            iptv_audio_software_type(impl->format.audio_stream_type) != 0;
         if (rate && impl->format.audio_sample_rate &&
-            (impl->format.audio_sample_rate != rate || impl->format.audio_channels != channels))
+            (impl->format.audio_sample_rate != rate ||
+             (!channels_may_change && impl->format.audio_channels != channels)))
             return disable_audio(session, impl,
                                  "audio format changed; continuing with silent video");
         impl->format.audio_sample_rate = rate;

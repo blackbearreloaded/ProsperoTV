@@ -12,4 +12,9 @@ void iptv_audio_decoder_reset(iptv_audio_decoder_t *decoder);
 /* Returns PCM bytes (possibly zero while buffering), or a negative codec error. */
 int iptv_audio_decode(iptv_audio_decoder_t *decoder, const uint8_t *data, size_t bytes,
                       int16_t *pcm, size_t capacity_bytes, uint32_t *sample_rate);
+/* Interleaved stereo float to 16-bit, holding peaks at -1 dBFS: the gain drops at once for a
+ * peak, the same for both channels, and comes back over a quarter of a second. `gain` is the
+ * limiter's state between calls; start it at 1. */
+void iptv_audio_limit_to_s16(float *gain, uint32_t sample_rate, const float *stereo,
+                             size_t frames, int16_t *pcm);
 #endif

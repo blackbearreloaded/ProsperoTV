@@ -73,11 +73,15 @@ int main() {
         with tempfile.TemporaryDirectory() as directory:
             executable = str(Path(directory) / "audio")
             subprocess.run(["clang", "-std=c11", "-O1", "-fsanitize=address,undefined", "-Iinclude",
-                "src/iptv_audio_decode.c", "tests/test_audio_decode.c", *flags, "-o", executable], cwd=ROOT, check=True)
-            for kind, fixture in ((15, "aac-stereo.aac"), (15, "aac-surround.bin"),
-                                  (129, "ac3-surround.bin"), (135, "eac3-surround.bin"), (17, "aac-latm.bin")):
+                "src/iptv_audio_decode.c", "tests/test_audio_decode.c", *flags, "-lm", "-o", executable], cwd=ROOT, check=True)
+            # The surround fixtures' tone must come out at the source's level: 22000 is out of
+            # reach of a mix scaled down so that it cannot clip (it peaked near 9650).
+            for kind, fixture, least_peak in ((15, "aac-stereo.aac", 0), (15, "aac-surround.bin", 22000),
+                                              (129, "ac3-surround.bin", 22000), (135, "eac3-surround.bin", 22000),
+                                              (17, "aac-latm.bin", 0)):
                 with self.subTest(fixture=fixture):
-                    subprocess.run([executable, str(kind), str(ROOT / "tests/fixtures" / fixture)], check=True, timeout=10)
+                    subprocess.run([executable, str(kind), str(ROOT / "tests/fixtures" / fixture), str(least_peak)],
+                                   check=True, timeout=10)
 
     def test_mp2_decodes_mpeg1_stereo_and_mpeg2_mono(self):
         with tempfile.TemporaryDirectory() as directory:

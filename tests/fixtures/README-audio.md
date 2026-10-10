@@ -10,6 +10,7 @@ the synthetic signals are dedicated to the public domain under CC0-1.0.
   This verifies that stereo downmix retains dialogue rather than merely taking
   the first two source channels.
 
-The decoder check verifies nonzero left/right output and decoding after reset.
+The decoder check verifies nonzero left/right output, decoding after reset, and that the
+surround fixtures' tone comes out at the source's level rather than scaled down.
 AAC Main framing is also covered by the transport tests; actual AAC Main
 playback was checked with a private source sample, not distributed here.
