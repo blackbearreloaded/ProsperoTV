@@ -7,6 +7,7 @@
 # contentVersion, also publishes: job "release" attaches the ZIP job "app"
 # built, with its checksum, to a GitHub Release. Nothing built anywhere else is
 # ever attached, and a release that already has a ZIP is never changed.
+# Both builds keep their compiler cache between runs, each its own.
 # Copyright (C) 2026 BlackBearReloaded
 # SPDX-License-Identifier: GPL-3.0-or-later
 
@@ -19,6 +20,11 @@ on:
       - "[0-9][0-9].[0-9][0-9][0-9].[0-9][0-9][0-9]"
   pull_request:
   workflow_dispatch:
+    inputs:
+      snapshot:
+        description: "Also hand over this run's compiler caches as the build-cache snapshots (run it on main)"
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -32,6 +38,9 @@ jobs:
     name: Lint, test, and build
     runs-on: ubuntu-24.04
     timeout-minutes: 45
+    env:
+      CCACHE_DIR: ${{ github.workspace }}/.deps/ccache
+      CCACHE_MAXSIZE: 500M
 
     steps:
       - name: Check out source
@@ -45,7 +54,35 @@ jobs:
       - name: Install native toolchain
         run: |
           sudo apt-get update
-          sudo apt-get install --yes clang-18 clang-format-18 lld-18 libsqlite3-dev libavcodec-dev libswresample-dev ffmpeg make pkg-config tar unzip wget
+          sudo apt-get install --yes clang-18 clang-format-18 lld-18 libsqlite3-dev libavcodec-dev libswresample-dev ffmpeg make ccache pkg-config tar unzip wget
+
+      - name: Restore compiler cache
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: .deps/ccache
+          key: ccache-build-${{ runner.os }}-${{ runner.arch }}-clang18-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: |
+            ccache-build-${{ runner.os }}-${{ runner.arch }}-clang18-
+
+      # GitHub drops a cache nobody used for a week, and a pull request only sees main's. When
+      # nothing was restored, start from the snapshot kept as a file of the build-cache release;
+      # a manual run with "snapshot" ticked hands over a new one.
+      - name: Fetch the compiler cache snapshot
+        run: |
+          if [ -z "$(ls -A "$CCACHE_DIR" 2>/dev/null)" ]; then
+            url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/releases/download/build-cache/ccache-clang18-build.tar"
+            if curl -fsSL --retry 3 -o "$RUNNER_TEMP/ccache-clang18-build.tar" "$url"; then
+              mkdir -p "$CCACHE_DIR"
+              tar -xf "$RUNNER_TEMP/ccache-clang18-build.tar" -C "$CCACHE_DIR"
+              rm "$RUNNER_TEMP/ccache-clang18-build.tar"
+              echo "::notice title=Compiler cache::Started from the build-cache snapshot."
+            fi
+          fi
+
+      - name: Send the compilers through the cache
+        run: |
+          echo "USE_CCACHE=1" >> "$GITHUB_ENV"
+          ccache --zero-stats
 
       - name: Read app identity and version
         shell: bash
@@ -83,7 +120,7 @@ jobs:
         run: LINT_SKIP_TIDY=1 make lint
 
       - name: Run host GoogleTest suite
-        run: make test-unit
+        run: make test-unit HOST_CXX="ccache clang++" HOST_CC="ccache clang"
 
       - name: Run host integration tests
         run: make test-integration
@@ -100,6 +137,24 @@ jobs:
       # The ZIP is the one format builds and releases carry; no image is built here.
       - name: Build the app folder
         run: make app
+
+      - name: Report compiler cache statistics
+        if: always()
+        run: ccache --show-stats
+
+      # ccache compresses what it stores, so the snapshot is a plain tar.
+      - name: Pack the compiler cache snapshot
+        if: github.event_name == 'workflow_dispatch' && inputs.snapshot
+        run: tar -cf "$RUNNER_TEMP/ccache-clang18-build.tar" -C "$CCACHE_DIR" .
+
+      - name: Upload the compiler cache snapshot
+        if: github.event_name == 'workflow_dispatch' && inputs.snapshot
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ccache-snapshot-build
+          path: ${{ runner.temp }}/ccache-clang18-build.tar
+          if-no-files-found: error
+          retention-days: 1
 
       - name: Package folder release
         run: |
@@ -147,6 +202,9 @@ jobs:
       id-token: write
       attestations: write
     timeout-minutes: 45
+    env:
+      CCACHE_DIR: ${{ github.workspace }}/.deps/ccache
+      CCACHE_MAXSIZE: 500M
     outputs:
       artifact: ${{ steps.label.outputs.artifact }}
       title_id: ${{ steps.identity.outputs.title_id }}
@@ -164,6 +222,32 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install --yes clang-18 lld-18 llvm-18 ninja-build ccache cmake libsqlite3-dev libpng-dev libjpeg-dev zlib1g-dev make pkg-config curl tar unzip wget xz-utils
+
+      - name: Restore compiler cache
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: .deps/ccache
+          key: ccache-app-${{ runner.os }}-${{ runner.arch }}-clang18-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: |
+            ccache-app-${{ runner.os }}-${{ runner.arch }}-clang18-
+
+      # GitHub drops a cache nobody used for a week, and a pull request only sees main's. When
+      # nothing was restored, start from the snapshot kept as a file of the build-cache release;
+      # a manual run with "snapshot" ticked hands over a new one.
+      - name: Fetch the compiler cache snapshot
+        run: |
+          if [ -z "$(ls -A "$CCACHE_DIR" 2>/dev/null)" ]; then
+            url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/releases/download/build-cache/ccache-clang18-app.tar"
+            if curl -fsSL --retry 3 -o "$RUNNER_TEMP/ccache-clang18-app.tar" "$url"; then
+              mkdir -p "$CCACHE_DIR"
+              tar -xf "$RUNNER_TEMP/ccache-clang18-app.tar" -C "$CCACHE_DIR"
+              rm "$RUNNER_TEMP/ccache-clang18-app.tar"
+              echo "::notice title=Compiler cache::Started from the build-cache snapshot."
+            fi
+          fi
+
+      - name: Reset compiler cache statistics
+        run: ccache --zero-stats
 
       - name: Read app identity and version
         id: identity
@@ -205,6 +289,24 @@ jobs:
 
       - name: Build the app
         run: make -C "$RUNNER_TEMP/app-build" app
+
+      - name: Report compiler cache statistics
+        if: always()
+        run: ccache --show-stats
+
+      # ccache compresses what it stores, so the snapshot is a plain tar.
+      - name: Pack the compiler cache snapshot
+        if: github.event_name == 'workflow_dispatch' && inputs.snapshot
+        run: tar -cf "$RUNNER_TEMP/ccache-clang18-app.tar" -C "$CCACHE_DIR" .
+
+      - name: Upload the compiler cache snapshot
+        if: github.event_name == 'workflow_dispatch' && inputs.snapshot
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ccache-snapshot-app
+          path: ${{ runner.temp }}/ccache-clang18-app.tar
+          if-no-files-found: error
+          retention-days: 1
 
       - name: Package the release ZIP
         shell: bash
