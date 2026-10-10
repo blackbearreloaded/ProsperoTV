@@ -592,6 +592,7 @@ bool run_menu(ptv::Model &model, ptv::Settings *settings, const LastPlayback &la
                 {
                     say("[TV] settings could not be saved");
                     app.set_volume(settings->volume);
+                    app.set_audio_normalization(settings->audio_normalization);
                     app.remote_notice("Could not save settings. Try again.");
                 }
                 else
@@ -600,6 +601,7 @@ bool run_menu(ptv::Model &model, ptv::Settings *settings, const LastPlayback &la
                         trace_header();
                     *settings = app.settings();
                     iptv_native_set_volume(static_cast<unsigned>(settings->volume));
+                    iptv_native_set_audio_normalization(settings->audio_normalization);
                     iptv_remote_set_volume(static_cast<unsigned>(settings->volume));
                 }
             }
@@ -1226,6 +1228,7 @@ int main()
     if (ptv::diag::enabled())
         trace_header();
     iptv_native_set_volume(static_cast<unsigned>(settings.volume));
+    iptv_native_set_audio_normalization(settings.audio_normalization);
     iptv_remote_set_volume(static_cast<unsigned>(settings.volume));
     iptv_remote_set_volume_handler(
         [](unsigned volume, void *context) -> bool
@@ -1300,6 +1303,7 @@ int main()
             settings = ptv::load_settings(tv::storage::config_dir());
             ptv::diag::set_enabled(settings.diagnostics);
             iptv_native_set_volume(static_cast<unsigned>(settings.volume));
+            iptv_native_set_audio_normalization(settings.audio_normalization);
             iptv_remote_set_volume(static_cast<unsigned>(settings.volume));
             menu_notice = std::move(storage_result);
             last = {};

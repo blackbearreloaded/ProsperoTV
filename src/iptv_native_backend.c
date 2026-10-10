@@ -10,6 +10,7 @@
 #include "iptv_mp2.h"
 #include "iptv_audio_frame.h"
 #include "iptv_audio_decode.h"
+#include "iptv_audio_normalize.h"
 #define MINIMP3_IMPLEMENTATION
 #include "../vendor/minimp3/minimp3.h"
 
@@ -25,6 +26,17 @@
 #include <time.h>
 
 static atomic_uint master_volume = 100;
+static atomic_uint audio_normalization = 0;
+
+void iptv_native_set_audio_normalization(unsigned enabled)
+{
+    atomic_store_explicit(&audio_normalization, enabled != 0, memory_order_relaxed);
+}
+
+unsigned iptv_native_get_audio_normalization(void)
+{
+    return atomic_load_explicit(&audio_normalization, memory_order_relaxed);
+}
 
 void iptv_native_set_volume(unsigned percent)
 {
@@ -257,6 +269,7 @@ typedef struct audio_sink
 {
     int32_t handle;
     int applied_volume;
+    iptv_audio_normalizer_t normalizer;
     uint32_t input_rate;
     uint32_t channels;
     uint64_t input_index;
@@ -859,8 +872,23 @@ static int32_t audio_sink_open(backend_state_t *state, uint32_t input_rate, uint
     state->audio_sink.input_rate = input_rate;
     state->audio_sink.channels = channels;
     state->audio_sink.applied_volume = -1;
+    iptv_audio_normalizer_reset(&state->audio_sink.normalizer);
     result = audio_sink_volume(&state->audio_sink);
     return result < 0 ? result : 0;
+}
+
+static void audio_normalize_block(backend_state_t *state)
+{
+    audio_sink_t *sink = &state->audio_sink;
+    iptv_audio_normalizer_process(&sink->normalizer, sink->block, AUDIO_OUT_GRAIN,
+                                  (int)iptv_native_get_audio_normalization());
+    state->telemetry.audio_normalization_enabled = (uint32_t)sink->normalizer.enabled;
+    state->telemetry.audio_normalization_gain_millidb =
+        (int32_t)(sink->normalizer.gain_db * 1000.0);
+    state->telemetry.audio_normalization_loudness_millilufs =
+        sink->normalizer.meter_valid ? (int32_t)(sink->normalizer.loudness_lufs * 1000.0)
+                                     : INT32_MIN;
+    state->telemetry.audio_normalization_limited_blocks = sink->normalizer.limited_blocks;
 }
 
 static int32_t audio_output_frame(backend_state_t *state, int16_t left, int16_t right)
@@ -878,6 +906,7 @@ static int32_t audio_output_frame(backend_state_t *state, int16_t left, int16_t 
     result = audio_sink_volume(sink);
     if (result < 0)
         return result;
+    audio_normalize_block(state);
     result = sceAudioOutOutput(sink->handle, sink->block);
     elapsed = monotonic_us() - started;
     state->telemetry.audio_output_total_us += elapsed;
@@ -968,6 +997,7 @@ static int32_t audio_drain(backend_state_t *state)
     {
         memset(sink->block + sink->pending, 0,
                (AUDIO_OUT_GRAIN * 2u - sink->pending) * sizeof(int16_t));
+        audio_normalize_block(state);
         result = sceAudioOutOutput(sink->handle, sink->block);
         if (result < 0)
         {
@@ -1417,6 +1447,7 @@ int32_t iptv_native_backend_init(iptv_native_backend_t *backend)
     reset_allocation(&state->input_allocation);
     reset_allocation(&state->frame_allocation);
     state->telemetry.state = state->state;
+    state->telemetry.audio_normalization_loudness_millilufs = INT32_MIN;
     return 0;
 }
 
@@ -2699,6 +2730,7 @@ static void *audio_worker_entry(void *argument)
             state->audio_sink.have_previous = 0;
             state->audio_sink.input_index = 0;
             state->audio_sink.next_output_position = 0;
+            iptv_audio_normalizer_reset(&state->audio_sink.normalizer);
             state->audio_generation = generation;
             sync_started = 0;
         }

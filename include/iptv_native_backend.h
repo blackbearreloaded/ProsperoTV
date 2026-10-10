@@ -14,9 +14,12 @@ extern "C"
 {
 #endif
 
-    /* App-wide gain, 0 = mute and 100 = the stream's original level. */
+    /* User volume after optional normalization; 0 = mute, 100 = no attenuation. */
     void iptv_native_set_volume(unsigned percent);
     unsigned iptv_native_get_volume(void);
+    /* Optional playback loudness leveling; off by default. */
+    void iptv_native_set_audio_normalization(unsigned enabled);
+    unsigned iptv_native_get_audio_normalization(void);
 
 #define IPTV_NATIVE_BACKEND_STORAGE_BYTES (64u * 1024u)
 #if IPTV_PROBE
@@ -142,6 +145,10 @@ extern "C"
         uint64_t decoded_audio_frames;
         uint64_t audio_output_grains;
         uint64_t audio_output_errors;
+        uint32_t audio_normalization_enabled;
+        int32_t audio_normalization_gain_millidb;
+        int32_t audio_normalization_loudness_millilufs; /* INT32_MIN until acquired. */
+        uint64_t audio_normalization_limited_blocks;
         uint64_t audio_output_total_us;
         uint64_t audio_output_max_us;
         uint32_t audio_queue_max_frames;
