@@ -55,8 +55,6 @@ you, [open an issue](https://github.com/blackbearreloaded/ProsperoTV/issues).
 
 ## Sources
 
-- [ ] **Radio stations.** Showing a playlist's radio stations as radio, with
-  their artwork instead of a black picture.
 - [ ] **Playlists from a USB drive.** Loading a playlist from a file, not
   only from an address.
 - [ ] **Request settings for a source.** Its user agent, referrer and other
