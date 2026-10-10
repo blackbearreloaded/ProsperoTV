@@ -46,6 +46,7 @@ enum FormRow : int
     kRowChannels,
     kRowUpdate,
     kRowVolume,
+    kRowAudioNormalization,
     kRowPair,
     kRowForgetPhones,
     kRowPhones,
@@ -175,6 +176,11 @@ App::App(Model &model, const ui::Fonts &fonts, std::uint32_t glass_texture,
         .add_choice(kRowResolution, tr("Menu sharpness"), {tr("Best for this TV"), "1080p"},
                     settings.resolution)
         .description = tr("Takes effect the next time the menu opens. Video keeps its own size.");
+    form_.add_header(tr("AUDIO"));
+    form_
+        .add_toggle(kRowAudioNormalization, tr("Normalize channel volume"),
+                    settings.audio_normalization)
+        .description = tr("Gradually balances channel volume and limits loud peaks.");
     form_.add_header(tr("PHONE REMOTE"));
     form_.add_action(kRowPair, tr("Pair a phone")).chevron = true;
     form_.add_value(kRowPhones, tr("Remembered phones"), "0");
@@ -242,6 +248,12 @@ void App::set_volume(int volume)
 {
     shared_.settings.volume = std::clamp(volume, 0, 100);
     form_.set_slider(kRowVolume, static_cast<float>(shared_.settings.volume));
+}
+
+void App::set_audio_normalization(bool enabled)
+{
+    shared_.settings.audio_normalization = enabled;
+    form_.set_toggle(kRowAudioNormalization, enabled);
 }
 
 void App::set_profile_name(std::string name)
@@ -461,6 +473,7 @@ void App::apply_settings()
     next.reduced_motion = form_.toggle_value(kRowMotion);
     next.sounds = form_.toggle_value(kRowSounds);
     next.volume = static_cast<int>(form_.slider_value(kRowVolume));
+    next.audio_normalization = form_.toggle_value(kRowAudioNormalization);
     next.resolution = form_.choice_index(kRowResolution) == Settings::kFullHd ? Settings::kFullHd
                                                                               : Settings::kBest;
     next.diagnostics = form_.toggle_value(kRowDiagnostics);
@@ -478,9 +491,10 @@ void App::apply_settings()
         diag::event("diagnostic log turned on in Settings");
     shared_.settings = next;
     settings_changed_ = true;
-    diag::event("settings: reduce motion=%d sounds=%d volume=%d menu sharpness=%d diagnostics=%d",
+    diag::event("settings: reduce motion=%d sounds=%d volume=%d menu sharpness=%d diagnostics=%d "
+                "normalization=%d",
                 next.reduced_motion ? 1 : 0, next.sounds ? 1 : 0, next.volume, next.resolution,
-                next.diagnostics ? 1 : 0);
+                next.diagnostics ? 1 : 0, next.audio_normalization ? 1 : 0);
 }
 
 void App::handle_screen(const InputFrame &input, ui::Feedback &feedback)

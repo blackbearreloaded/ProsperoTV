@@ -344,6 +344,8 @@ void SaveReceipt(const char *channel_name, std::uint64_t duration_ms, int result
         "audio_decoded_frames=%llu\naudio_output_grains=%llu\n"
         "audio_output_total_us=%llu\naudio_output_max_us=%llu\n"
         "audio_queue_max_frames=%u\naudio_queue_underruns=%llu\n"
+        "audio_normalization_enabled=%u\naudio_normalization_gain_millidb=%d\n"
+        "audio_normalization_loudness_millilufs=%d\naudio_normalization_limited_blocks=%llu\n"
         "video_queue_max_frames=%u\nvideo_queue_max_bytes=%llu\n"
         "video_queue_underruns=%llu\nactual_frame_rate_x100=%u\nbitrate_kbps=%u\n"
         "native_audio_disabled=%u\nnative_audio_result=%d\n"
@@ -401,6 +403,9 @@ void SaveReceipt(const char *channel_name, std::uint64_t duration_ms, int result
         static_cast<unsigned long long>(native.audio_output_total_us),
         static_cast<unsigned long long>(native.audio_output_max_us), native.audio_queue_max_frames,
         static_cast<unsigned long long>(native.audio_queue_underruns),
+        native.audio_normalization_enabled, native.audio_normalization_gain_millidb,
+        native.audio_normalization_loudness_millilufs,
+        static_cast<unsigned long long>(native.audio_normalization_limited_blocks),
         native.video_queue_max_frames,
         static_cast<unsigned long long>(native.video_queue_max_bytes),
         static_cast<unsigned long long>(native.video_queue_underruns),

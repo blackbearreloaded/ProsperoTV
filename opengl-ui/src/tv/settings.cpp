@@ -40,6 +40,8 @@ Settings load_settings(const std::string &data_dir)
             settings.live_preview = value != 0;
         else if (std::sscanf(line, "volume=%d", &value) == 1)
             settings.volume = std::clamp(value, 0, 100);
+        else if (std::sscanf(line, "audio_normalization=%d", &value) == 1)
+            settings.audio_normalization = value != 0;
         else if (std::sscanf(line, "resolution=%d", &value) == 1)
             settings.resolution = value == Settings::kFullHd ? Settings::kFullHd : Settings::kBest;
         else if (std::sscanf(line, "diagnostics=%d", &value) == 1)
@@ -62,6 +64,7 @@ bool save_settings(const std::string &data_dir, const Settings &settings)
     std::fprintf(file, "hide_failed=%d\nresume_last=%d\n", settings.hide_failed ? 1 : 0,
                  settings.resume_last ? 1 : 0);
     std::fprintf(file, "live_preview=%d\n", settings.live_preview ? 1 : 0);
+    std::fprintf(file, "audio_normalization=%d\n", settings.audio_normalization ? 1 : 0);
     const bool written = std::ferror(file) == 0 && std::fflush(file) == 0;
     const bool closed = std::fclose(file) == 0;
     if (!written || !closed)
