@@ -62,4 +62,20 @@ static inline size_t iptv_audio_frame_info(uint32_t type, const uint8_t *p, size
     const size_t frame_bytes = 2u * (1u + ((size_t)(p[2] & 7u) << 8) + p[3]);
     return frame_bytes >= 7u ? frame_bytes : 0;
 }
+
+/* Channels an AC-3 or E-AC-3 header announces, the low-frequency one included. Zero when the
+ * header does not say (AAC-LATM) or is not one. */
+static inline uint32_t iptv_audio_frame_channels(uint32_t type, const uint8_t *p, size_t bytes)
+{
+    static const uint8_t full_range[] = {2, 1, 2, 3, 3, 4, 4, 5};
+    if (type == 0x11u || !p || bytes < 7 || p[0] != 0x0bu || p[1] != 0x77u)
+        return 0;
+    if ((p[5] >> 3) > 10u)
+        return full_range[(p[4] >> 1) & 7u] + (p[4] & 1u);
+    const unsigned mode = p[6] >> 5;
+    /* The mix levels that follow the mode are two bits each, and present only for some modes. */
+    const unsigned skipped = ((mode & 1u) && mode != 1u ? 2u : 0u) + ((mode & 4u) ? 2u : 0u) +
+                             (mode == 2u ? 2u : 0u);
+    return full_range[mode] + ((p[6] >> (4u - skipped)) & 1u);
+}
 #endif
