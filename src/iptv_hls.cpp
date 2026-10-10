@@ -4,6 +4,7 @@
 
 #include "iptv_hls.h"
 
+#include <algorithm>
 #include <cstring>
 
 namespace
@@ -978,6 +979,8 @@ extern "C" iptv_hls_result_t iptv_hls_parse(const char *data, size_t data_bytes,
     bool pending_segment = false;
     bool pending_discontinuity = false;
     bool segments_seen = false;
+    /* A live playlist may list hours of segments: only the newest ones are kept, in a ring. */
+    uint64_t total_segments = 0;
     uint32_t pending_duration_ms = 0;
     iptv_hls_variant_t variant{};
     uint64_t current_discontinuity = 0;
@@ -1052,14 +1055,15 @@ extern "C" iptv_hls_result_t iptv_hls_parse(const char *data, size_t data_bytes,
             continue;
         }
 
-        if (pending_variant || pending_segment)
+        /* Tags such as EXT-X-PROGRAM-DATE-TIME may sit between EXTINF and the address. */
+        if (pending_variant || (pending_segment && line.data[0] != '#'))
         {
             if (line.data[0] == '#')
                 return fail(playlist, IPTV_HLS_MALFORMED, line_number);
             if (!valid_url_bytes(line))
                 return fail(playlist, IPTV_HLS_INVALID_URL, line_number);
-            char *destination =
-                pending_variant ? variant.url : playlist->segments[playlist->segment_count].url;
+            const uint32_t slot = static_cast<uint32_t>(total_segments % limits.max_segments);
+            char *destination = pending_variant ? variant.url : playlist->segments[slot].url;
             const iptv_hls_result_t url_result =
                 iptv_hls_resolve_url(playlist_url, playlist_url_bytes, line.data, line.size,
                                      destination, IPTV_HLS_URL_BYTES);
@@ -1077,14 +1081,16 @@ extern "C" iptv_hls_result_t iptv_hls_parse(const char *data, size_t data_bytes,
             {
                 if (has_fmp4_extension(destination))
                     return fail(playlist, IPTV_HLS_UNSUPPORTED_FMP4, line_number);
-                if (playlist->media_sequence > UINT64_MAX - playlist->segment_count)
+                if (playlist->media_sequence > UINT64_MAX - total_segments)
                     return fail(playlist, IPTV_HLS_MALFORMED, line_number);
-                iptv_hls_segment_t &segment = playlist->segments[playlist->segment_count];
-                segment.sequence = playlist->media_sequence + playlist->segment_count;
+                iptv_hls_segment_t &segment = playlist->segments[slot];
+                segment.sequence = playlist->media_sequence + total_segments;
                 segment.duration_ms = pending_duration_ms;
                 segment.discontinuity = pending_discontinuity ? 1u : 0u;
                 segment.discontinuity_sequence = current_discontinuity;
-                ++playlist->segment_count;
+                ++total_segments;
+                if (playlist->segment_count < limits.max_segments)
+                    ++playlist->segment_count;
                 pending_segment = false;
                 pending_discontinuity = false;
                 segments_seen = true;
@@ -1135,8 +1141,6 @@ extern "C" iptv_hls_result_t iptv_hls_parse(const char *data, size_t data_bytes,
             if (master_seen || pending_segment)
                 return fail(playlist, IPTV_HLS_MALFORMED, line_number);
             media_seen = true;
-            if (playlist->segment_count >= limits.max_segments)
-                return fail(playlist, IPTV_HLS_OUTPUT_LIMIT, line_number);
             if (!parse_duration_ms(value, &pending_duration_ms))
                 return fail(playlist, IPTV_HLS_MALFORMED, line_number);
             pending_segment = true;
@@ -1210,6 +1214,18 @@ extern "C" iptv_hls_result_t iptv_hls_parse(const char *data, size_t data_bytes,
         playlist->kind = IPTV_HLS_KIND_MEDIA;
         if (!playlist->target_duration_ms || !playlist->segment_count)
             return fail(playlist, IPTV_HLS_MALFORMED, line_number);
+        if (total_segments > playlist->segment_count)
+        {
+            /* A finished programme cannot lose its beginning. */
+            if (!playlist->is_live)
+                return fail(playlist, IPTV_HLS_OUTPUT_LIMIT, line_number);
+            iptv_hls_segment_t *const first = playlist->segments;
+            std::rotate(first, first + total_segments % playlist->segment_count,
+                        first + playlist->segment_count);
+            playlist->media_sequence = first->sequence;
+            playlist->discontinuity_sequence =
+                first->discontinuity_sequence - (first->discontinuity ? 1u : 0u);
+        }
         return IPTV_HLS_OK;
     }
     return fail(playlist, IPTV_HLS_MALFORMED, line_number);
