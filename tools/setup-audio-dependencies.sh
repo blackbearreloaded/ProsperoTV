@@ -59,6 +59,17 @@ if [[ $target == ps5 ]]; then
     # context. Optional FreeBSD thread naming functions are not PS5 imports.
     sed -i -E 's/^(#define HAVE_PTHREAD_SET_?NAME_NP) 1$/\1 0/' config.h
 fi
-make -j"${BUILD_JOBS:-4}"
+# USE_CCACHE=1 compiles through ccache when it is installed. configure keeps the
+# plain compiler: its probes are throwaway files that would only fill the cache.
+compile=()
+if [[ ${USE_CCACHE:-0} != 0 ]] && command -v ccache >/dev/null; then
+    compiler=$(sed -n 's/^CC=//p' ffbuild/config.mak)
+    compile=(CC="ccache $compiler")
+    # The SDK's compiler is a script, so ccache is told which Clang is behind it.
+    if [[ $target == ps5 ]]; then
+        export CCACHE_COMPILERCHECK="string:$("$compiler" --version | sed -n 1p)"
+    fi
+fi
+make -j"${BUILD_JOBS:-4}" "${compile[@]}"
 make install
 printf '%s\n' "$stamp" > "$prefix/.complete"
