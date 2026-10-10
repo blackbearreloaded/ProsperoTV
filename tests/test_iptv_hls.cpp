@@ -6,6 +6,7 @@
 
 #include <gtest/gtest.h>
 
+#include <cstdint>
 #include <cstring>
 #include <memory>
 #include <string>
@@ -208,6 +209,78 @@ TEST(IptvHlsTest, BoundsRenditionsAndAllowsSameNameInDifferentGroups)
         EXPECT_EQ(result, i == IPTV_HLS_MAX_RENDITIONS ? IPTV_HLS_OUTPUT_LIMIT : IPTV_HLS_OK);
         EXPECT_LE(playlist->rendition_count, IPTV_HLS_MAX_RENDITIONS);
     }
+}
+
+std::string LongWindow(unsigned segments, bool finished)
+{
+    std::string text = "#EXTM3U\n#EXT-X-TARGETDURATION:10\n#EXT-X-MEDIA-SEQUENCE:5000\n";
+    for (unsigned i = 0; i < segments; ++i)
+    {
+        if (i == segments - 2u)
+            text += "#EXT-X-DISCONTINUITY\n";
+        text += "#EXTINF:10.0,\nseg" + std::to_string(5000u + i) + ".ts\n";
+    }
+    return text + (finished ? "#EXT-X-ENDLIST\n" : "");
+}
+
+TEST(IptvHlsTest, KeepsTheNewestSegmentsOfALongLiveWindow)
+{
+    const char *base = "http://fixture.test/live/media.m3u8";
+    auto playlist = std::make_unique<iptv_hls_playlist_t>();
+    const unsigned listed = 2880u;
+    const std::string live = LongWindow(listed, false);
+    ASSERT_EQ(
+        iptv_hls_parse(live.data(), live.size(), base, std::strlen(base), nullptr, playlist.get()),
+        IPTV_HLS_OK);
+    ASSERT_EQ(playlist->segment_count, IPTV_HLS_MAX_SEGMENTS);
+    const std::uint64_t first = 5000u + listed - IPTV_HLS_MAX_SEGMENTS;
+    EXPECT_EQ(playlist->media_sequence, first);
+    for (unsigned i = 0; i < IPTV_HLS_MAX_SEGMENTS; ++i)
+    {
+        const auto &segment = playlist->segments[i];
+        EXPECT_EQ(segment.sequence, first + i);
+        const std::string url = "http://fixture.test/live/seg" + std::to_string(first + i) + ".ts";
+        EXPECT_STREQ(segment.url, url.c_str());
+        EXPECT_EQ(segment.discontinuity, i == IPTV_HLS_MAX_SEGMENTS - 2u ? 1u : 0u);
+        EXPECT_EQ(segment.discontinuity_sequence, i >= IPTV_HLS_MAX_SEGMENTS - 2u ? 1u : 0u);
+    }
+    EXPECT_EQ(playlist->discontinuity_sequence, 0u);
+
+    const std::string exact = LongWindow(IPTV_HLS_MAX_SEGMENTS, true);
+    EXPECT_EQ(iptv_hls_parse(exact.data(), exact.size(), base, std::strlen(base), nullptr,
+                             playlist.get()),
+              IPTV_HLS_OK);
+    EXPECT_EQ(playlist->media_sequence, 5000u);
+    const std::string film = LongWindow(IPTV_HLS_MAX_SEGMENTS + 1u, true);
+    EXPECT_EQ(
+        iptv_hls_parse(film.data(), film.size(), base, std::strlen(base), nullptr, playlist.get()),
+        IPTV_HLS_OUTPUT_LIMIT);
+}
+
+TEST(IptvHlsTest, AcceptsTagsBetweenTheDurationAndTheAddress)
+{
+    const char *base = "http://fixture.test/radio/media.m3u8";
+    const char *text = "#EXTM3U\n#EXT-X-VERSION:3\n#EXT-X-TARGETDURATION:2\n"
+                       "#EXT-X-MEDIA-SEQUENCE:430273\n"
+                       "#EXTINF:2.000000,\n"
+                       "#EXT-X-PROGRAM-DATE-TIME:2026-10-10T03:09:35.399+0000\n"
+                       "out_430273.ts?session=abc\n"
+                       "#EXTINF:2.000000,\n"
+                       "#EXT-X-PROGRAM-DATE-TIME:2026-10-10T03:09:37.399+0000\n"
+                       "out_430274.ts?session=abc\n";
+    auto playlist = std::make_unique<iptv_hls_playlist_t>();
+    ASSERT_EQ(
+        iptv_hls_parse(text, std::strlen(text), base, std::strlen(base), nullptr, playlist.get()),
+        IPTV_HLS_OK);
+    ASSERT_EQ(playlist->segment_count, 2u);
+    EXPECT_EQ(playlist->segments[1].sequence, 430274u);
+    EXPECT_EQ(playlist->segments[1].duration_ms, 2000u);
+    EXPECT_STREQ(playlist->segments[1].url, "http://fixture.test/radio/out_430274.ts?session=abc");
+
+    const char *twice = "#EXTM3U\n#EXT-X-TARGETDURATION:2\n#EXTINF:2.0,\n#EXTINF:2.0,\na.ts\n";
+    EXPECT_EQ(
+        iptv_hls_parse(twice, std::strlen(twice), base, std::strlen(base), nullptr, playlist.get()),
+        IPTV_HLS_MALFORMED);
 }
 
 } // namespace
