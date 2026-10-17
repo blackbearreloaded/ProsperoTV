@@ -116,8 +116,8 @@ class HdrShaderTest(unittest.TestCase):
             for rgb in colors:
                 with self.subTest(mode=mode, rgb=rgb):
                     actual, expected = execute(rgb, mode), reference(rgb, mode)
-                    if mode not in (2, 4):
-                        expected = expected[::-1] # SDR output is B8G8R8A8.
+                    # Both VideoOut formats are BGR: blue in the low component in every mode.
+                    expected = expected[::-1]
                     for a, b in zip(actual, expected):
                         self.assertAlmostEqual(a, b, delta=0.0001)
                     self.assertTrue(all(0 <= x <= 1 for x in actual))

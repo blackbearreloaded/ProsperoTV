@@ -166,7 +166,10 @@ peak remains below 94 MiB, with no allocation failures observed.
 
 This completes the HDR rendering implementation. Physical HDMI luminance/gamut
 measurements and custom mastering metadata forwarding remain unverified; the
-application retains that metadata in its per-picture state and receipts.
+application retains that metadata in its per-picture state and receipts. The
+colour order of HDR10 and HLG output is checked on a console and an HDR
+television; the native readback comparison must take red from bits 20-29 of
+an HDR word.
 
 ## Live pause and rewind foundations
 
