@@ -64,6 +64,8 @@ Settings load_settings(const std::string &data_dir)
             settings.resolution = value == Settings::kFullHd ? Settings::kFullHd : Settings::kBest;
         else if (std::sscanf(line, "diagnostics=%d", &value) == 1)
             settings.diagnostics = value != 0;
+        else if (std::sscanf(line, "stats_line=%d", &value) == 1)
+            settings.stats_line = value != 0;
     }
     std::fclose(file);
     return settings;
@@ -82,6 +84,7 @@ bool save_settings(const std::string &data_dir, const Settings &settings)
     std::fprintf(file, "hide_failed=%d\nresume_last=%d\n", settings.hide_failed ? 1 : 0,
                  settings.resume_last ? 1 : 0);
     std::fprintf(file, "live_preview=%d\n", settings.live_preview ? 1 : 0);
+    std::fprintf(file, "stats_line=%d\n", settings.stats_line ? 1 : 0);
     std::fprintf(file, "audio_normalization=%d\n", settings.audio_normalization ? 1 : 0);
     std::fprintf(file, "audio_surround=%d\n", settings.audio_surround ? 1 : 0);
     std::fprintf(file, "interface_language=%d\n", std::clamp(settings.interface_language, 0, 9));

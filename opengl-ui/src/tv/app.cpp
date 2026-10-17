@@ -78,6 +78,7 @@ enum FormRow : int
     kRowShare,
     kRowLanguage,
     kRowAudioOutput,
+    kRowStatsLine,
 };
 
 constexpr unsigned kAllowances[] = {0, 15, 30, 60, 90, 120, 180};
@@ -239,6 +240,8 @@ App::App(Model &model, const ui::Fonts &fonts, std::uint32_t glass_texture,
     form_.add_toggle(kRowDiagnostics, tr("Diagnostic log"), settings.diagnostics).description =
         std::string(tr("Records playback and decoder details for a problem report.")) + " " +
         diag::destination();
+    form_.add_toggle(kRowStatsLine, tr("Stats line"), settings.stats_line).description =
+        tr("Keeps the codec and performance line on screen during playback.");
     form_.add_action(kRowReport, tr("Export failure report to USB")).description =
         tr("Saves the most recent playback failure or crash without account details or stream "
            "addresses.");
@@ -330,6 +333,12 @@ void App::set_audio_surround(bool enabled)
 {
     shared_.settings.audio_surround = enabled;
     form_.set_choice(kRowAudioOutput, enabled ? 1 : 0);
+}
+
+void App::set_stats_line(bool always)
+{
+    shared_.settings.stats_line = always;
+    form_.set_toggle(kRowStatsLine, always);
 }
 
 void App::set_profile_name(std::string name)
@@ -576,6 +585,7 @@ void App::apply_settings()
     next.resolution = form_.choice_index(kRowResolution) == Settings::kFullHd ? Settings::kFullHd
                                                                               : Settings::kBest;
     next.diagnostics = form_.toggle_value(kRowDiagnostics);
+    next.stats_line = form_.toggle_value(kRowStatsLine);
     next.hide_failed = form_.toggle_value(kRowHideFailed);
     next.resume_last = form_.toggle_value(kRowResume);
     next.live_preview = form_.toggle_value(kRowPreview);

@@ -1074,6 +1074,22 @@ bool traced(const std::string &part)
     return false;
 }
 
+TEST_F(AppTest, TheStatsLineIsASwitchInSettingsOffByDefault)
+{
+    EXPECT_FALSE(app_->settings().stats_line);
+    press(Action::page_next);
+    press(Action::page_next);
+    press(Action::page_next);
+    press(Action::page_next);
+    EXPECT_EQ(app_->tab(), 5);
+    settings_row("Stats line");
+    press(Action::confirm);
+    EXPECT_TRUE(app_->settings().stats_line);
+    EXPECT_TRUE(app_->take_settings_changed());
+    press(Action::confirm);
+    EXPECT_FALSE(app_->settings().stats_line);
+    EXPECT_TRUE(app_->take_settings_changed());
+}
 TEST_F(AppTest, TheDiagnosticLogIsASwitchInSettingsOffByDefault)
 {
     g_traced.clear();

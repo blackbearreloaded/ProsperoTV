@@ -153,7 +153,8 @@
 - Codec, resolution, frame rate, and bitrate appear for five seconds when playback
   starts, with the sound's format, channels, and whether the console's decoder
   (HW) or software (SW) is decoding it, then disappear like the bottom playback
-  banner. Press **Touchpad + R1** to show them again for five seconds.
+  banner. Press **Touchpad + R1** to show them again for five seconds, or turn
+  on **Stats line** under Troubleshooting in Settings to keep them on screen.
 
 ### Picture and sound
 

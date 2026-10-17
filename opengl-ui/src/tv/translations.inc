@@ -57,6 +57,8 @@
 {"Export failure report to USB", {"Exportar informe de error a USB", "Exporter le rapport d’erreur sur USB", "Fehlerbericht auf USB exportieren", "Esporta rapporto errori su USB", "Exportar relatório de falha para USB", "Foutrapport naar USB exporteren"}},
 {"Troubleshooting", {"Solución de problemas", "Dépannage", "Fehlerbehebung", "Risoluzione problemi", "Solução de problemas", "Problemen oplossen"}},
 {"Diagnostic log", {"Registro de diagnóstico", "Journal de diagnostic", "Diagnoseprotokoll", "Registro diagnostico", "Registro de diagnóstico", "Diagnoselogboek"}},
+{"Stats line", {"Línea de estadísticas", "Ligne de statistiques", "Statistikzeile", "Riga delle statistiche", "Linha de estatísticas", "Statistiekregel"}},
+{"Keeps the codec and performance line on screen during playback.", {"Mantiene la línea de códec y rendimiento en pantalla durante la reproducción.", "Garde la ligne codec et performances à l’écran pendant la lecture.", "Lässt die Codec- und Leistungszeile während der Wiedergabe auf dem Bildschirm.", "Mantiene la riga di codec e prestazioni sullo schermo durante la riproduzione.", "Mantém a linha de codec e desempenho na tela durante a reprodução.", "Houdt de codec- en prestatieregel tijdens het afspelen op het scherm."}},
 {"Diagnostic log on", {"Registro de diagnóstico activo", "Journal de diagnostic activé", "Diagnoseprotokoll aktiv", "Registro diagnostico attivo", "Registro de diagnóstico ativo", "Diagnoselogboek actief"}},
 {"Download it again now", {"Volver a descargar ahora", "Télécharger à nouveau", "Jetzt erneut herunterladen", "Scarica di nuovo ora", "Baixar novamente agora", "Nu opnieuw downloaden"}},
 {"All", {"Todos", "Tout", "Alle", "Tutti", "Todos", "Alles"}},

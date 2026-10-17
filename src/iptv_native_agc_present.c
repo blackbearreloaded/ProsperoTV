@@ -233,6 +233,7 @@ void iptv_native_agc_hold_frame(int hold)
 static uint64_t render_sequence;
 static _Atomic int present_cancelled;
 static _Atomic uint64_t overlay_until = UINT64_MAX;
+static _Atomic int overlay_always;
 static _Atomic unsigned picture_mode;
 
 void iptv_native_agc_set_picture_mode(unsigned mode)
@@ -1522,8 +1523,15 @@ void iptv_native_agc_set_overlay_enabled(int enabled)
     atomic_store_explicit(&overlay_until, enabled ? UINT64_MAX : 0, memory_order_relaxed);
 }
 
+void iptv_native_agc_set_overlay_always(int always)
+{
+    atomic_store_explicit(&overlay_always, always != 0, memory_order_relaxed);
+}
+
 static int overlay_visible_at(uint64_t now)
 {
+    if (atomic_load_explicit(&overlay_always, memory_order_relaxed))
+        return 1;
     uint64_t until = atomic_load_explicit(&overlay_until, memory_order_relaxed);
     if (until == UINT64_MAX)
     {
@@ -1986,6 +1994,11 @@ int main(void)
     assert(overlay_visible_at(108999999));
     assert(!overlay_visible_at(109000000));
     iptv_native_agc_set_overlay_enabled(0);
+    assert(!overlay_visible_at(110000000));
+    iptv_native_agc_set_overlay_always(1);
+    assert(overlay_visible_at(110000000));
+    assert(overlay_visible_at(999000000));
+    iptv_native_agc_set_overlay_always(0);
     assert(!overlay_visible_at(110000000));
     iptv_native_agc_set_overlay_enabled(1);
     presenter.ready = 1;

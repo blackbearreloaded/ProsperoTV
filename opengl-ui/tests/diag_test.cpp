@@ -104,6 +104,10 @@ TEST_F(DiagTest, TheSettingIsOffByDefaultAndRemembered)
     ASSERT_TRUE(ptv::save_settings(dir, settings));
     EXPECT_TRUE(ptv::load_settings(dir).diagnostics);
     EXPECT_EQ(ptv::load_settings(dir).volume, 40);
+    EXPECT_FALSE(ptv::load_settings(dir).stats_line);
+    settings.stats_line = true;
+    ASSERT_TRUE(ptv::save_settings(dir, settings));
+    EXPECT_TRUE(ptv::load_settings(dir).stats_line);
     // A file written before the switch existed leaves it off.
     std::ofstream(dir + "/prosperotv-interface-v1.txt") << "reduced_motion=1\nsounds=1\n";
     EXPECT_FALSE(ptv::load_settings(dir).diagnostics);

@@ -88,6 +88,8 @@ extern "C"
     int32_t iptv_native_agc_loading_start(void);
     void iptv_native_agc_loading_stop(void);
     void iptv_native_agc_set_overlay_enabled(int enabled);
+    /* The stats line stays on screen instead of going after five seconds. */
+    void iptv_native_agc_set_overlay_always(int always);
     int iptv_native_agc_overlay_enabled(void);
     int32_t iptv_native_agc_present_drain(void);
     void iptv_native_agc_present_set_cancelled(int cancelled);

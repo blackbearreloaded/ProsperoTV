@@ -37,6 +37,8 @@ struct Settings
     int resolution = kBest;
     // The diagnostic log (tv/diag.hpp). Off unless the viewer turns it on.
     bool diagnostics = false;
+    // The playback stats line stays on screen instead of going after five seconds.
+    bool stats_line = false;
 
     bool operator==(const Settings &) const = default;
 };
