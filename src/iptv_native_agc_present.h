@@ -30,6 +30,8 @@ extern "C"
          * decoder or 2 for software in bits 8-15, the source's channels from bit 16; 0 for
          * none. */
         uint32_t audio;
+        /* Mean picture-against-sound offset in ms (below zero: sound ahead); INT32_MIN unknown. */
+        int32_t sync_ms;
     } iptv_native_video_overlay_t;
 
     /* Register only between foreground sessions; the player joins its workers

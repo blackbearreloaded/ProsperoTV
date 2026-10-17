@@ -14,6 +14,7 @@
 extern "C"
 {
 #include <libavcodec/avcodec.h>
+#include <libavutil/crc.h>
 #include <libavutil/imgutils.h>
 }
 
@@ -759,6 +760,84 @@ TEST(Media, PreservesBothLanguagesAndSwitchesRealAudioWithoutReopeningVideo)
         EXPECT_EQ(counts.videos, 25u);
         EXPECT_GT(counts.audios, 25u);
         EXPECT_EQ(counts.switches, 1u);
+        EXPECT_EQ(session.telemetry.continuity_errors, 0u);
+        EXPECT_EQ(iptv_stream_cleanup(&session), 0);
+    }
+}
+TEST(Media, DtsSoundIsLabelledSoTheTransportParserPlaysIt)
+{
+    for (const auto *name : {"h264-dts.mkv", "h264-dts.mp4"})
+    {
+        SCOPED_TRACE(name);
+        Memory memory(name);
+        ASSERT_FALSE(memory.bytes.empty());
+        std::string error;
+        ASSERT_EQ(memory.run(&error), 0) << error;
+        // Every programme table carries the registration once, with a valid CRC.
+        unsigned tables = 0;
+        for (std::size_t at = 0; at + 188 <= memory.transport.size(); at += 188)
+        {
+            const auto *packet = memory.transport.data() + at;
+            const unsigned pid = static_cast<unsigned>((packet[1] & 0x1f) << 8 | packet[2]);
+            if (pid <= 0x1f || !(packet[1] & 0x40) || packet[5] != 0x02)
+                continue;
+            ++tables;
+            const auto *section = packet + 5;
+            const std::size_t length =
+                static_cast<std::size_t>((section[1] & 0x0f) << 8 | section[2]);
+            const std::size_t info =
+                static_cast<std::size_t>((section[10] & 0x0f) << 8 | section[11]);
+            EXPECT_EQ(info, 6u);
+            EXPECT_EQ(std::memcmp(section + 12, "\x05\x04HDMV", 6), 0);
+            const std::uint32_t crc = av_crc(av_crc_get_table(AV_CRC_32_IEEE), UINT32_MAX, section,
+                                             static_cast<int>(length - 1));
+            for (unsigned i = 0; i < 4; ++i)
+                EXPECT_EQ(section[length - 1 + i], static_cast<std::uint8_t>(crc >> (8 * i)));
+        }
+        EXPECT_GE(tables, 1u);
+        struct Counts
+        {
+            unsigned videos = 0, audios = 0;
+            std::uint32_t audio_type = 0;
+        } counts;
+        iptv_stream_backend_t backend{};
+        backend.context = &counts;
+        backend.open = [](void *p, const iptv_stream_format_t *format)
+        {
+            static_cast<Counts *>(p)->audio_type = format->audio_stream_type;
+            return 0;
+        };
+        backend.submit_video = [](void *p, const std::uint8_t *, std::size_t, std::uint64_t)
+        {
+            ++static_cast<Counts *>(p)->videos;
+            return 0;
+        };
+        backend.submit_audio = [](void *p, const std::uint8_t *, std::size_t, std::uint64_t)
+        {
+            ++static_cast<Counts *>(p)->audios;
+            return 0;
+        };
+        backend.select_audio = [](void *, std::uint32_t) { return 0; };
+        backend.disable_audio = [](void *) { return 0; };
+        backend.drain = [](void *) { return 0; };
+        backend.close = [](void *) {};
+        iptv_stream_session_t session{};
+        iptv_stream_init(&session);
+        ASSERT_EQ(iptv_stream_open(&session, nullptr, &backend), 0);
+        ASSERT_EQ(iptv_stream_start(&session), 0);
+        for (std::size_t at = 0; at < memory.transport.size(); at += 188)
+            ASSERT_EQ(iptv_stream_push(&session, memory.transport.data() + at,
+                                       std::min<std::size_t>(188, memory.transport.size() - at)),
+                      0)
+                << session.telemetry.last_error;
+        iptv_stream_audio_track_t tracks[2]{};
+        std::uint32_t selected = 0;
+        ASSERT_EQ(iptv_stream_audio_tracks(&session, tracks, 2, &selected), 1u);
+        EXPECT_EQ(tracks[0].stream_type, 0x82u);
+        EXPECT_EQ(iptv_stream_stop(&session), 0);
+        EXPECT_EQ(counts.audio_type, 0x82u);
+        EXPECT_EQ(counts.videos, 25u);
+        EXPECT_GT(counts.audios, 25u);
         EXPECT_EQ(session.telemetry.continuity_errors, 0u);
         EXPECT_EQ(iptv_stream_cleanup(&session), 0);
     }

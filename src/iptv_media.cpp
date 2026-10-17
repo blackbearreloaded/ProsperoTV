@@ -5,8 +5,15 @@
 extern "C"
 {
 #include <libavformat/avformat.h>
+#include <libavutil/crc.h>
 #include <libavutil/mem.h>
 #include <libavutil/opt.h>
+}
+extern "C"
+{
+    // The interface's diagnostic log; absent in the tests.
+    __attribute__((weak)) int tv_diag_enabled(void);
+    __attribute__((weak)) void tv_diag_line(const char *line);
 }
 #include <algorithm>
 #include <cerrno>
@@ -57,6 +64,61 @@ std::string vtt_timestamp(std::int64_t ms)
                   static_cast<long long>(ms / 3600000), static_cast<long long>(ms / 60000 % 60),
                   static_cast<long long>(ms / 1000 % 60), static_cast<long long>(ms % 1000));
     return text;
+}
+constexpr int kTsPacketBytes = 188;
+// Whole transport packets per write, so a programme table is never split across two.
+constexpr int kMuxBufferBytes = kBufferBytes / kTsPacketBytes * kTsPacketBytes;
+// FFmpeg's muxer gives DTS the Blu-ray stream type 0x82 without the "HDMV" registration, and
+// the parser then takes 0x82 for SCTE-27 subtitles. Adds the registration to a PMT packet.
+bool label_dts_programme(std::uint8_t *packet)
+{
+    if (packet[0] != 0x47 || !(packet[1] & 0x40) || (packet[3] & 0xc0))
+        return false;
+    const unsigned pid = static_cast<unsigned>((packet[1] & 0x1f) << 8 | packet[2]);
+    if (pid <= 0x1f)
+        return false; // PAT, SDT, NIT and the other reserved tables
+    std::size_t at = 4;
+    if (packet[3] & 0x20)
+        at += 1u + packet[4];
+    if (!(packet[3] & 0x10) || at >= kTsPacketBytes)
+        return false;
+    at += 1u + packet[at]; // the pointer field
+    if (at + 16 > kTsPacketBytes || packet[at] != 0x02)
+        return false;
+    std::uint8_t *section = packet + at;
+    const std::size_t room = kTsPacketBytes - at;
+    std::size_t length = static_cast<std::size_t>((section[1] & 0x0f) << 8 | section[2]);
+    std::size_t total = 3 + length; // with the CRC
+    std::size_t info = static_cast<std::size_t>((section[10] & 0x0f) << 8 | section[11]);
+    const std::uint8_t registration[6] = {0x05, 0x04, 'H', 'D', 'M', 'V'};
+    if (total < 16 || total + sizeof(registration) > room || 12 + info + 4 > total)
+        return false;
+    for (std::size_t d = 12; d + 2 <= 12 + info; d += 2u + section[d + 1])
+        if (section[d] == 0x05 && section[d + 1] >= 4 &&
+            std::memcmp(section + d + 2, "HDMV", 4) == 0)
+            return false; // labelled already
+    bool dts = false;
+    for (std::size_t e = 12 + info; e + 5 <= total - 4;
+         e += 5u + static_cast<std::size_t>((section[e + 3] & 0x0f) << 8 | section[e + 4]))
+        dts |= section[e] == 0x82;
+    if (!dts)
+        return false;
+    std::memmove(section + 12 + info + sizeof(registration), section + 12 + info,
+                 total - 4 - (12 + info));
+    std::memcpy(section + 12 + info, registration, sizeof(registration));
+    info += sizeof(registration);
+    length += sizeof(registration);
+    total += sizeof(registration);
+    section[10] = static_cast<std::uint8_t>((section[10] & 0xf0) | (info >> 8));
+    section[11] = static_cast<std::uint8_t>(info & 0xff);
+    section[1] = static_cast<std::uint8_t>((section[1] & 0xf0) | (length >> 8));
+    section[2] = static_cast<std::uint8_t>(length & 0xff);
+    // The CRC as the muxer writes it: the MPEG-2 CRC-32 of the section before it.
+    const std::uint32_t crc =
+        av_crc(av_crc_get_table(AV_CRC_32_IEEE), UINT32_MAX, section, static_cast<int>(total - 4));
+    for (unsigned i = 0; i < 4; ++i)
+        section[total - 4 + i] = static_cast<std::uint8_t>(crc >> (8 * i));
+    return true;
 }
 struct Reader;
 bool reader_gives_way(Reader &reader);
@@ -198,6 +260,7 @@ struct Reader
     AVPacket *packet = nullptr;
     std::vector<std::unique_ptr<Resource>> resources{};
     bool reading = false, gave_way = false;
+    bool label_dts = false; // a DTS track goes out: its programme table needs the label
     ~Reader()
     {
         av_packet_free(&packet);
@@ -277,10 +340,26 @@ struct Reader
         auto &r = *static_cast<Reader *>(self);
         if (r.cancelled())
             return AVERROR_EXIT;
-        return count >= 0 &&
-                       r.output.write(r.output.context, bytes, static_cast<std::size_t>(count))
-                   ? count
-                   : AVERROR(EIO);
+        if (count < 0)
+            return AVERROR(EIO);
+        const auto out = [&](const std::uint8_t *from, std::size_t size)
+        { return !size || r.output.write(r.output.context, from, size); };
+        if (!r.label_dts || count % kTsPacketBytes)
+            return out(bytes, static_cast<std::size_t>(count)) ? count : AVERROR(EIO);
+        std::size_t written = 0;
+        for (std::size_t at = 0; at + kTsPacketBytes <= static_cast<std::size_t>(count);
+             at += kTsPacketBytes)
+        {
+            std::uint8_t packet[kTsPacketBytes];
+            std::memcpy(packet, bytes + at, sizeof(packet));
+            if (!label_dts_programme(packet))
+                continue;
+            if (!out(bytes + written, at - written) || !out(packet, sizeof(packet)))
+                return AVERROR(EIO);
+            written = at + kTsPacketBytes;
+        }
+        return out(bytes + written, static_cast<std::size_t>(count) - written) ? count
+                                                                               : AVERROR(EIO);
     }
     static int deny_open(AVFormatContext *, AVIOContext **, const char *, int, AVDictionary **)
     {
@@ -780,11 +859,11 @@ int ReadMedia(const MediaInput &input, const MediaOutput &output, std::string *e
             return "The video transport could not start.";
         r.mux->output_ts_offset = timestamp_offset;
         r.mux->avoid_negative_ts = AVFMT_AVOID_NEG_TS_DISABLED;
-        auto *output_buffer = static_cast<std::uint8_t *>(av_malloc(kBufferBytes));
+        auto *output_buffer = static_cast<std::uint8_t *>(av_malloc(kMuxBufferBytes));
         if (!output_buffer)
             return "Not enough memory to open this video.";
-        r.out =
-            avio_alloc_context(output_buffer, kBufferBytes, 1, &r, nullptr, Reader::write, nullptr);
+        r.out = avio_alloc_context(output_buffer, kMuxBufferBytes, 1, &r, nullptr, Reader::write,
+                                   nullptr);
         if (!r.out)
         {
             av_free(output_buffer);
@@ -801,6 +880,7 @@ int ReadMedia(const MediaInput &input, const MediaOutput &output, std::string *e
                 return "The video's tracks could not be prepared.";
             stream->codecpar->codec_tag = 0;
             stream->id = 0x100 + stream->index;
+            r.label_dts |= stream->codecpar->codec_id == AV_CODEC_ID_DTS;
             stream->time_base = r.demux->streams[index]->time_base;
             stream->disposition = r.demux->streams[index]->disposition;
             if (const auto *language =
@@ -825,6 +905,28 @@ int ReadMedia(const MediaInput &input, const MediaOutput &output, std::string *e
     };
     if (const char *message = open_mux())
         return fail(message);
+    // For the lip-sync diagnostics: what each track's timeline starts with.
+    const auto diag_enabled = [] { return tv_diag_enabled && tv_diag_line && tv_diag_enabled(); };
+    const auto to_ms = [](std::int64_t stamp, AVRational base) -> long long
+    { return stamp == AV_NOPTS_VALUE ? -1 : av_rescale_q(stamp, base, AVRational{1, 1000}); };
+    if (diag_enabled())
+    {
+        for (const int index : tracks)
+        {
+            const auto *stream = r.demux->streams[index];
+            const auto *p = stream->codecpar;
+            char line[256];
+            std::snprintf(line, sizeof(line),
+                          "[player] media track %d: %s %s, %d Hz %d ch, starts %lld ms, priming "
+                          "%d samples, container start %lld ms",
+                          index, p->codec_type == AVMEDIA_TYPE_VIDEO ? "video" : "sound",
+                          avcodec_get_name(p->codec_id), p->sample_rate, p->ch_layout.nb_channels,
+                          to_ms(stream->start_time, stream->time_base), p->initial_padding,
+                          (long long)(origin / 1000));
+            tv_diag_line(line);
+        }
+    }
+    std::vector<char> first_packet_traced(r.demux->nb_streams, 0);
     std::vector<MediaAudioTrack> audio_metadata;
     for (std::size_t k = 1; k < tracks.size(); ++k)
     {
@@ -1017,6 +1119,25 @@ int ReadMedia(const MediaInput &input, const MediaOutput &output, std::string *e
         }
         if (mapping[source] >= 0)
         {
+            if (!first_packet_traced[source] && diag_enabled())
+            {
+                first_packet_traced[source] = 1;
+                std::size_t skip_bytes = 0;
+                const auto *skip =
+                    av_packet_get_side_data(r.packet, AV_PKT_DATA_SKIP_SAMPLES, &skip_bytes);
+                const unsigned skipped = skip && skip_bytes >= 4
+                                             ? skip[0] | (unsigned)skip[1] << 8 |
+                                                   (unsigned)skip[2] << 16 | (unsigned)skip[3] << 24
+                                             : 0;
+                const auto base = r.demux->streams[source]->time_base;
+                char line[200];
+                std::snprintf(line, sizeof(line),
+                              "[player] media track %d first packet: pts %lld ms, dts %lld ms, "
+                              "%u samples to skip",
+                              source, to_ms(r.packet->pts, base), to_ms(r.packet->dts, base),
+                              skipped);
+                tv_diag_line(line);
+            }
             if (source == video && first_video)
             {
                 first_video = false;

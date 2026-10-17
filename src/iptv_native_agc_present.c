@@ -719,6 +719,15 @@ static void draw_video_overlay(void *source, size_t source_bytes, uint32_t pitch
             if (more > 0)
                 bytes =
                     (size_t)(bytes + more) < sizeof(text) ? bytes + more : (int)sizeof(text) - 1;
+            /* And the measured lip sync: the pictures against the sound, in milliseconds. */
+            if (overlay->sync_ms != INT32_MIN && (size_t)bytes < sizeof(text))
+            {
+                const int sync = snprintf(text + bytes, sizeof(text) - (size_t)bytes, "  AV %+dMS",
+                                          (int)overlay->sync_ms);
+                if (sync > 0)
+                    bytes = (size_t)(bytes + sync) < sizeof(text) ? bytes + sync
+                                                                  : (int)sizeof(text) - 1;
+            }
         }
         if (bytes > 0 && x < visible_width && y < visible_height)
         {

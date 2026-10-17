@@ -17,6 +17,9 @@ ffmpeg -hide_banner -loglevel error -y -i "$output/h264-aac.mp4" -c copy "$outpu
 ffmpeg -hide_banner -loglevel error -y -i "$output/h264-aac.mp4" -c copy -movflags +faststart "$output/h264-aac-fast.mp4"
 ffmpeg -hide_banner -loglevel error -y -i "$output/h264-aac.mp4" -f lavfi -i sine=frequency=880:sample_rate=48000 -t 1 -map 0:v -map 0:a -map 1:a -c:v copy -c:a aac -b:a 64k -metadata:s:a:0 language=eng -metadata:s:a:1 language=spa "$output/two-audio.mp4"
 ffmpeg -hide_banner -loglevel error -y -i "$output/two-audio.mp4" -map 0 -c copy "$output/two-audio.mkv"
+# DTS sound, which the transport muxer labels with the Blu-ray stream type.
+ffmpeg -hide_banner -loglevel error -y -i "$output/h264-aac.mp4" -map 0:v -map 0:a -c:v copy -c:a dca -strict -2 -b:a 256k "$output/h264-dts.mkv"
+ffmpeg -hide_banner -loglevel error -y -i "$output/h264-dts.mkv" -map 0 -c copy -strict -2 "$output/h264-dts.mp4"
 for format in mpegts fmp4 ranged; do
     dir="$output/hls-$format"
     mkdir -p "$dir"

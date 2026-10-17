@@ -105,6 +105,14 @@ unsigned iptv_native_get_volume(void)
 #define PACE_SOUND_LEAD_US UINT64_C(15000)
 #define PACE_SOUND_LEAD_MAX_US UINT64_C(60000)
 #define PACE_SOUND_BEHIND_US UINT64_C(100000)
+// The sound's way out, which the clock allows for: a block the port takes plays after the
+// ones queued ahead of it (counted at each start from the calls that return at once; three
+// on a console), then the console's own output path, measured with a camera against the
+// console's own player.
+#define AUDIO_OUT_GRAIN_US (AUDIO_OUT_GRAIN * UINT64_C(1000000) / AUDIO_OUT_RATE)
+#define AUDIO_OUTPUT_PATH_US UINT64_C(14000)
+#define AUDIO_PORT_QUEUE_DEFAULT 3u
+#define AUDIO_PORT_QUEUE_MAX 8u
 // The longest the sound waits for the first picture before it starts without it.
 #define AUDIO_FIRST_PICTURE_WAIT_US UINT64_C(2000000)
 #define CONTROLS_OVERLAY_US UINT64_C(5000000)
@@ -304,11 +312,16 @@ typedef struct audio_sink
     uint32_t pending;
     uint8_t have_previous;
     uint8_t drained;
+    // How many blocks the port holds, once measured; AUDIO_PORT_QUEUE_DEFAULT until then.
+    uint8_t port_queue_measured;
+    uint32_t port_queue;
+    uint32_t immediate_calls;
     // The stream time of the input frame being output from (`previous`), and of the block's
     // first frame; UINT64_MAX when unknown.
     uint64_t frame_pts_us;
     uint64_t block_pts_us;
-    int16_t block[AUDIO_OUT_GRAIN * 8u];
+    // The block the port is given; it played silence off an 8-byte boundary.
+    _Alignas(16) int16_t block[AUDIO_OUT_GRAIN * 8u];
 } audio_sink_t;
 
 typedef struct audio_queue_item
@@ -399,6 +412,8 @@ typedef struct backend_state
     // How long pictures take from hand-over to the screen, averaged over the last few, and
     // when the picture now on its way was handed over; zero before the first is measured.
     uint64_t display_latency_us;
+    // audio_output_latency_us() of the open port, for the thread that reads the clock.
+    _Atomic uint32_t audio_output_latency_us;
     uint64_t pending_handover_us;
     // From playback starting to its first picture, for the diagnostic log: when it began, the
     // frames given to the decoder since, and when the decoder gave a picture back.
@@ -408,6 +423,25 @@ typedef struct backend_state
     uint32_t start_output_frames;
     int64_t av_offset_min_us;
     int64_t av_offset_max_us;
+    int64_t av_offset_sum_us;
+    uint32_t av_offset_count;
+    // The mean of the last report, for the statistics overlay; INT32_MIN before the first.
+    _Atomic int32_t av_offset_mean_ms;
+    // Lip-sync diagnostics, for the diagnostic log only.
+    uint32_t sync_trace_packets;
+    uint32_t sync_trace_samples_out;
+    uint64_t sync_trace_first_pts_us;
+    char sync_trace_first[160];
+    uint32_t sync_trace_grains;
+    uint64_t sync_trace_grain_us[8];
+    uint64_t sync_trace_report_us;
+    uint64_t sync_trace_report_pts_us;
+    uint64_t sync_trace_out_min_us;
+    uint64_t sync_trace_out_max_us;
+    uint64_t sync_trace_out_total_us;
+    uint32_t sync_trace_out_count;
+    uint64_t sync_waited_us;
+    uint32_t sync_dropped;
     video_queue_item_t *video_queue;
     void *video_thread;
     _Atomic uint32_t video_queue_read;
@@ -913,6 +947,30 @@ static void publish_audio_clock(backend_state_t *state, uint64_t pts)
     atomic_store_explicit(&state->audio_clock_time_us, monotonic_us(), memory_order_release);
 }
 
+// Each call that returned at once before the first that waited found room in the port.
+static void note_output_call(audio_sink_t *sink, uint64_t elapsed_us)
+{
+    if (sink->port_queue_measured)
+        return;
+    if (elapsed_us < AUDIO_OUT_GRAIN_US / 2u && ++sink->immediate_calls < AUDIO_PORT_QUEUE_MAX)
+        return;
+    sink->port_queue = sink->immediate_calls;
+    sink->port_queue_measured = 1;
+}
+
+// From the port taking a block to the viewer hearing it.
+static uint64_t audio_output_latency_us(const audio_sink_t *sink)
+{
+    const uint32_t queued = sink->port_queue_measured ? sink->port_queue : AUDIO_PORT_QUEUE_DEFAULT;
+    return AUDIO_OUTPUT_PATH_US + (queued ? queued - 1u : 0u) * AUDIO_OUT_GRAIN_US;
+}
+
+static void sync_trace_reset(backend_state_t *state);
+static void trace_sound_packet(backend_state_t *state, uint64_t pts_us, uint32_t samples_out);
+static void trace_sound_output(backend_state_t *state, uint64_t elapsed_us);
+int tv_diag_enabled(void);
+void tv_diag_line(const char *line);
+
 static int32_t audio_sink_volume(audio_sink_t *sink)
 {
     const unsigned percent = iptv_native_get_volume();
@@ -957,7 +1015,12 @@ static int32_t audio_sink_open(backend_state_t *state, uint32_t input_rate, uint
     state->telemetry.audio_pcm_channels = channels;
     state->telemetry.audio_output_channels = state->audio_sink.output_channels;
     state->audio_sink.applied_volume = -1;
+    state->audio_sink.immediate_calls = 0;
+    state->audio_sink.port_queue_measured = 0;
+    atomic_store(&state->audio_output_latency_us,
+                 (uint32_t)audio_output_latency_us(&state->audio_sink));
     iptv_audio_normalizer_reset(&state->audio_sink.normalizer);
+    sync_trace_reset(state);
     result = audio_sink_volume(&state->audio_sink);
     return result < 0 ? result : 0;
 }
@@ -1040,10 +1103,12 @@ static int32_t audio_submit_block(backend_state_t *state)
     }
     ++state->telemetry.audio_output_grains;
     sink->pending = 0;
-    // The output takes a block once the one before it has played, so this block's first frame
-    // is what plays now. Stamping the clock here, rather than once a whole decoded frame had
-    // gone out, kept it 5 to 30 ms behind the sound, by how long the format's frames are.
+    // The stamp is the block the port has just taken; audio_clock_now allows for the way out.
+    // Stamping per decoded frame instead kept the clock 5 to 30 ms behind the sound.
+    note_output_call(sink, elapsed);
+    atomic_store(&state->audio_output_latency_us, (uint32_t)audio_output_latency_us(sink));
     publish_audio_clock(state, sink->block_pts_us);
+    trace_sound_output(state, elapsed);
     return 0;
 }
 
@@ -1313,13 +1378,19 @@ static int audio_clock_now(const backend_state_t *state, uint64_t now, uint64_t 
         atomic_load(&state->paused) ||
         atomic_load(&state->audio_clock_generation) != state->video_generation)
         return 0;
+    // What the viewer hears now is behind the stamp by the way out.
+    const uint64_t behind =
+        media_elapsed(atomic_load(&state->audio_output_latency_us), playback_speed(state));
     if (now < at)
     {
-        const uint64_t back = media_elapsed(at - now, playback_speed(state));
+        const uint64_t back = media_elapsed(at - now, playback_speed(state)) + behind;
         *pts_us = pts > back ? pts - back : 0;
     }
     else
-        *pts_us = pts + media_elapsed(now - at, playback_speed(state));
+    {
+        const uint64_t ahead = media_elapsed(now - at, playback_speed(state));
+        *pts_us = pts + ahead > behind ? pts + ahead - behind : 0;
+    }
     return 1;
 }
 
@@ -1666,6 +1737,7 @@ int32_t iptv_native_backend_init(iptv_native_backend_t *backend)
     reset_allocation(&state->frame_allocation);
     state->telemetry.state = state->state;
     state->telemetry.audio_normalization_loudness_millilufs = INT32_MIN;
+    atomic_store(&state->av_offset_mean_ms, INT32_MIN);
     return 0;
 }
 
@@ -2094,6 +2166,7 @@ static int32_t present_video_output(backend_state_t *state, const videodec2_fram
             state->telemetry.software_video,
             fields.color,
             atomic_load(&state->audio_overlay),
+            atomic_load(&state->av_offset_mean_ms),
         };
         if (state->config.picture)
         {
@@ -2444,29 +2517,186 @@ static void trace_av_offset(backend_state_t *state, uint64_t pts_us, uint64_t no
     {
         state->av_report_us = now;
         state->av_offset_min_us = state->av_offset_max_us = offset;
+        state->av_offset_sum_us = 0;
+        state->av_offset_count = 0;
     }
     if (offset < state->av_offset_min_us)
         state->av_offset_min_us = offset;
     if (offset > state->av_offset_max_us)
         state->av_offset_max_us = offset;
+    state->av_offset_sum_us += offset;
+    ++state->av_offset_count;
     if (now - state->av_report_us < UINT64_C(5000000))
         return;
+    const int64_t mean = state->av_offset_sum_us / (int64_t)state->av_offset_count;
+    atomic_store(&state->av_offset_mean_ms, (int32_t)(mean / 1000));
     if (tv_diag_enabled())
     {
-        char line[256];
+        char line[320];
         snprintf(line, sizeof(line),
-                 "[player] picture against sound on the screen: %lld to %lld ms (below zero: the "
-                 "sound is ahead); pictures shown %llu.%llu ms after hand-over; late frames %llu, "
-                 "pace restarts %llu",
+                 "[player] picture against sound on the screen: %lld to %lld ms, mean %+lld.%llu "
+                 "over %u pictures (below zero: the sound is ahead); pictures shown %llu.%llu ms "
+                 "after hand-over; sound delay %+d ms; late frames %llu, pace restarts %llu",
                  (long long)(state->av_offset_min_us / 1000),
-                 (long long)(state->av_offset_max_us / 1000),
+                 (long long)(state->av_offset_max_us / 1000), (long long)(mean / 1000),
+                 (unsigned long long)(mean < 0 ? -mean : mean) % 1000 / 100, state->av_offset_count,
                  (unsigned long long)(state->display_latency_us / 1000),
                  (unsigned long long)(state->display_latency_us % 1000 / 100),
+                 (int)atomic_load(&state->audio_delay_ms),
                  (unsigned long long)state->telemetry.pacing_late_frames,
                  (unsigned long long)state->telemetry.pacing_resets);
         tv_diag_line(line);
     }
     state->av_report_us = 0;
+}
+
+static const char *audio_type_name(uint32_t type)
+{
+    return type == 0x0fu                    ? "AAC"
+           : type == 0x11u                  ? "AAC-LATM"
+           : type == 0x81u                  ? "AC-3"
+           : type == 0x87u                  ? "E-AC-3"
+           : type == 0x82u                  ? "DTS"
+           : type == 0x03u || type == 0x04u ? "MP2"
+                                            : "sound";
+}
+
+// The sound (re)started: the first packets and the first output blocks are traced again.
+static void sync_trace_reset(backend_state_t *state)
+{
+    state->sync_trace_packets = 0;
+    state->sync_trace_samples_out = 0;
+    state->sync_trace_first_pts_us = UINT64_MAX;
+    state->sync_trace_first[0] = '\0';
+    state->sync_trace_grains = 0;
+    state->sync_trace_report_us = 0;
+    state->sync_trace_out_count = 0;
+}
+
+#define SYNC_TRACE_PACKETS 6u
+#define SYNC_TRACE_GRAINS 8u
+
+// The first packets after a (re)start with the samples each returned: a decoder that holds
+// one back shows here.
+static void trace_sound_packet(backend_state_t *state, uint64_t pts_us, uint32_t samples_out)
+{
+    if (!tv_diag_enabled() || state->sync_trace_packets >= SYNC_TRACE_PACKETS)
+        return;
+    const unsigned index = state->sync_trace_packets++;
+    if (index == 0)
+        state->sync_trace_first_pts_us = pts_us;
+    const size_t used = strlen(state->sync_trace_first);
+    snprintf(state->sync_trace_first + used, sizeof(state->sync_trace_first) - used, "%s%llu->%u",
+             index ? ", " : "", pts_us == UINT64_MAX ? 0ull : (unsigned long long)(pts_us / 1000),
+             samples_out);
+    if (index + 1 < SYNC_TRACE_PACKETS)
+    {
+        state->sync_trace_samples_out += samples_out;
+        return;
+    }
+    const uint32_t rate = state->audio_info.sampling_frequency;
+    const uint64_t advanced = pts_us != UINT64_MAX &&
+                                      state->sync_trace_first_pts_us != UINT64_MAX &&
+                                      pts_us >= state->sync_trace_first_pts_us
+                                  ? pts_us - state->sync_trace_first_pts_us
+                                  : 0;
+    char line[320];
+    snprintf(
+        line, sizeof(line),
+        "[player] sound decoder: %s %s, the first packets (pts ms -> samples out): %s; the "
+        "first %u packets' timestamps advanced %llu ms and their sound lasts %llu ms",
+        audio_type_name(state->config.audio_stream_type),
+        ((atomic_load(&state->audio_overlay) >> 8) & 0xffu) == 1u ? "HW" : "SW",
+        state->sync_trace_first, SYNC_TRACE_PACKETS - 1u, (unsigned long long)(advanced / 1000),
+        (unsigned long long)(rate ? (uint64_t)state->sync_trace_samples_out * 1000u / rate : 0));
+    tv_diag_line(line);
+}
+
+// The first output calls' times (the port's depth), then every five seconds the calls'
+// times and the clock's drift against the wall.
+static void trace_sound_output(backend_state_t *state, uint64_t elapsed_us)
+{
+    if (!tv_diag_enabled())
+        return;
+    const uint64_t now = monotonic_us();
+    const unsigned index = state->sync_trace_grains++;
+    char line[320];
+    if (index == 0)
+    {
+        const uint32_t overlay = atomic_load(&state->audio_overlay);
+        const uint64_t picture = atomic_load(&state->presented_pts_us);
+        snprintf(line, sizeof(line),
+                 "[player] sound started: %s %s, %u Hz %u ch into the %u-channel port, the "
+                 "clock at %llu ms with the picture at %llu ms; waited %llu ms for the picture, "
+                 "dropped %u frames",
+                 audio_type_name(state->config.audio_stream_type),
+                 ((overlay >> 8) & 0xffu) == 1u ? "HW" : "SW", state->audio_sink.input_rate,
+                 state->audio_sink.channels, state->audio_sink.output_channels,
+                 (unsigned long long)(atomic_load(&state->audio_clock_pts_us) / 1000),
+                 picture == UINT64_MAX ? 0ull : (unsigned long long)(picture / 1000),
+                 (unsigned long long)(state->sync_waited_us / 1000), state->sync_dropped);
+        tv_diag_line(line);
+    }
+    if (index < SYNC_TRACE_GRAINS)
+        state->sync_trace_grain_us[index] = elapsed_us;
+    if (index + 1 == SYNC_TRACE_GRAINS)
+    {
+        int used = snprintf(line, sizeof(line), "[player] sound output: the first %u blocks took",
+                            SYNC_TRACE_GRAINS);
+        for (unsigned i = 0; i < SYNC_TRACE_GRAINS && used > 0 && (size_t)used < sizeof(line); ++i)
+            used += snprintf(line + used, sizeof(line) - (size_t)used, " %llu.%llu",
+                             (unsigned long long)(state->sync_trace_grain_us[i] / 1000),
+                             (unsigned long long)(state->sync_trace_grain_us[i] % 1000 / 100));
+        if (used > 0 && (size_t)used < sizeof(line))
+            snprintf(line + used, sizeof(line) - (size_t)used,
+                     " ms (one block is %u.%u ms of sound); the port holds %u blocks, so the "
+                     "clock allows %u ms for the way out",
+                     AUDIO_OUT_GRAIN * 1000u / AUDIO_OUT_RATE,
+                     AUDIO_OUT_GRAIN * 10000u / AUDIO_OUT_RATE % 10u,
+                     state->audio_sink.port_queue_measured ? state->audio_sink.port_queue
+                                                           : AUDIO_PORT_QUEUE_DEFAULT,
+                     atomic_load(&state->audio_output_latency_us) / 1000u);
+        tv_diag_line(line);
+    }
+    if (!state->sync_trace_out_count)
+    {
+        state->sync_trace_out_min_us = state->sync_trace_out_max_us = elapsed_us;
+        state->sync_trace_out_total_us = 0;
+    }
+    else if (elapsed_us < state->sync_trace_out_min_us)
+        state->sync_trace_out_min_us = elapsed_us;
+    else if (elapsed_us > state->sync_trace_out_max_us)
+        state->sync_trace_out_max_us = elapsed_us;
+    state->sync_trace_out_total_us += elapsed_us;
+    ++state->sync_trace_out_count;
+    if (!state->sync_trace_report_us)
+    {
+        state->sync_trace_report_us = now;
+        state->sync_trace_report_pts_us = atomic_load(&state->audio_clock_pts_us);
+        return;
+    }
+    if (now - state->sync_trace_report_us < UINT64_C(5000000))
+        return;
+    const uint64_t clock = atomic_load(&state->audio_clock_pts_us);
+    const int64_t drift =
+        (int64_t)(clock - state->sync_trace_report_pts_us) -
+        (int64_t)media_elapsed(now - state->sync_trace_report_us, playback_speed(state));
+    const uint64_t average = state->sync_trace_out_total_us / state->sync_trace_out_count;
+    snprintf(line, sizeof(line),
+             "[player] sound output: %u blocks in %llu ms, a call took %llu.%llu to %llu.%llu ms, "
+             "%llu.%llu on average; the clock drifted %+lld ms against the wall",
+             state->sync_trace_out_count,
+             (unsigned long long)((now - state->sync_trace_report_us) / 1000),
+             (unsigned long long)(state->sync_trace_out_min_us / 1000),
+             (unsigned long long)(state->sync_trace_out_min_us % 1000 / 100),
+             (unsigned long long)(state->sync_trace_out_max_us / 1000),
+             (unsigned long long)(state->sync_trace_out_max_us % 1000 / 100),
+             (unsigned long long)(average / 1000), (unsigned long long)(average % 1000 / 100),
+             (long long)(drift / 1000));
+    tv_diag_line(line);
+    state->sync_trace_report_us = now;
+    state->sync_trace_report_pts_us = clock;
+    state->sync_trace_out_count = 0;
 }
 
 // Once per start: where the time from playback starting to its first picture went.
@@ -2562,7 +2792,8 @@ static int32_t pause_video(backend_state_t *state)
                                                          state->pause_field,
                                                          state->telemetry.software_video,
                                                          picture->color,
-                                                         atomic_load(&state->audio_overlay)};
+                                                         atomic_load(&state->audio_overlay),
+                                                         atomic_load(&state->av_offset_mean_ms)};
             result = iptv_native_agc_present_yuv_deferred(
                 picture->data, picture->bytes, picture->pitch, picture->surface_height,
                 picture->width, picture->height, picture->bit_depth, &overlay);
@@ -2970,6 +3201,11 @@ static int32_t decode_audio_frame(backend_state_t *state, const void *adts_frame
                                                 decoder << 8 | (source_channels & 0xffu) << 16);
     ++state->telemetry.submitted_audio_frames;
     state->telemetry.last_audio_pts_us = pts_us;
+    trace_sound_packet(state, pts_us,
+                       result < 0 || !state->audio_info.channel_count
+                           ? 0
+                           : state->audio_pcm_item.length /
+                                 (uint32_t)(sizeof(int16_t) * state->audio_info.channel_count));
     if (result < 0)
         goto failed;
     if (state->audio_pcm_item.length == 0)
@@ -3124,6 +3360,7 @@ static void *audio_worker_entry(void *argument)
             state->audio_sink.next_output_position = 0;
             iptv_audio_normalizer_reset(&state->audio_sink.normalizer);
             state->audio_generation = generation;
+            sync_trace_reset(state);
             sync_started = 0;
         }
         if (!atomic_load_explicit(&state->playback_started, memory_order_acquire) &&
@@ -3139,7 +3376,10 @@ static void *audio_worker_entry(void *argument)
         {
             const uint64_t now = monotonic_us();
             if (!sync_started)
+            {
                 sync_started = now;
+                state->sync_dropped = 0;
+            }
             // Track changes reach the demuxer ahead of the displayed picture.
             // Wait for video to catch up, bounded for broken/missing timestamps.
             const int sync = audio_sync_action(state, item->pts_us, now - sync_started);
@@ -3150,9 +3390,11 @@ static void *audio_worker_entry(void *argument)
             }
             if (sync < 0)
             {
+                ++state->sync_dropped;
                 atomic_store_explicit(&state->audio_queue_read, read + 1u, memory_order_release);
                 continue;
             }
+            state->sync_waited_us = now - sync_started;
             atomic_store(&state->audio_sync_pending, 0);
         }
         const int32_t result = decode_audio_frame(state, item->data, item->bytes, item->pts_us);
@@ -4082,6 +4324,42 @@ int main(void)
         assert(audio_clock_now(&latency, 990000, &sound) && sound == 4990000);
         assert(audio_clock_now(&latency, 1010000, &sound) && sound == 5010000);
         assert(!audio_clock_now(&latency, 700000, &sound));
+        /* What the viewer hears is behind the stamp by the way out, at the playback speed. */
+        atomic_store(&latency.audio_output_latency_us, 70000);
+        assert(audio_clock_now(&latency, 1010000, &sound) && sound == 4940000);
+        assert(audio_clock_now(&latency, 990000, &sound) && sound == 4920000);
+        latency.config.speed_percent = 200;
+        assert(audio_clock_now(&latency, 1010000, &sound) && sound == 4880000);
+        latency.config.speed_percent = 0;
+        atomic_store(&latency.audio_clock_pts_us, 50000);
+        assert(audio_clock_now(&latency, 1000000, &sound) && sound == 0);
+        atomic_store(&latency.audio_output_latency_us, 0);
+    }
+    /* The port's depth, from the calls that return at once before the first that waits. */
+    {
+        audio_sink_t port = {0};
+        assert(audio_output_latency_us(&port) ==
+               AUDIO_OUTPUT_PATH_US + (AUDIO_PORT_QUEUE_DEFAULT - 1u) * AUDIO_OUT_GRAIN_US);
+        note_output_call(&port, 10);
+        note_output_call(&port, 40);
+        note_output_call(&port, 0);
+        assert(!port.port_queue_measured);
+        note_output_call(&port, 10500);
+        assert(port.port_queue_measured && port.port_queue == 3);
+        assert(audio_output_latency_us(&port) == AUDIO_OUTPUT_PATH_US + 2u * AUDIO_OUT_GRAIN_US);
+        note_output_call(&port, 0); /* measured once per start */
+        assert(port.port_queue == 3);
+        audio_sink_t waits = {0}; /* a port with no room at all */
+        note_output_call(&waits, 5300);
+        assert(waits.port_queue_measured && waits.port_queue == 0);
+        assert(audio_output_latency_us(&waits) == AUDIO_OUTPUT_PATH_US);
+        audio_sink_t deep = {0}; /* never waits: at least AUDIO_PORT_QUEUE_MAX */
+        for (unsigned i = 0; i < AUDIO_PORT_QUEUE_MAX + 2u; ++i)
+            note_output_call(&deep, 0);
+        assert(deep.port_queue_measured && deep.port_queue == AUDIO_PORT_QUEUE_MAX);
+        backend_state_t opened = {0};
+        assert(audio_sink_open(&opened, 48000, 2) == 0);
+        assert(atomic_load(&opened.audio_output_latency_us) == audio_output_latency_us(&port));
     }
     /* The sound clock follows the blocks the output takes: each is stamped with its first
      * frame's time, the stream running at the playback speed. */
