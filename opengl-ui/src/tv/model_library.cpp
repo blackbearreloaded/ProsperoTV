@@ -25,8 +25,8 @@ bool Model::export_shared_library(SharedLibrary &out)
         if (source.kind == 1 && usb_playlist_path(source.url))
             ++out.skipped_local;
         else if (portable_source(source))
-            out.sources.push_back({source, library_.guide_url(source.id),
-                                   library_.guide_mapping(source.id)});
+            out.sources.push_back(
+                {source, library_.guide_url(source.id), library_.guide_mapping(source.id)});
     }
     out.favorites = user_.favorite_ids;
     for (const auto &folder : library_.folders())
@@ -111,6 +111,7 @@ void Model::select_source_record(const SavedSource &source)
                    source.extra_headers);
     if (source.kind == 1)
         vod_.configure_playlist(&catalog_);
+    refresh_counts();
     if (changed)
     {
         view.vod_kind = -1;

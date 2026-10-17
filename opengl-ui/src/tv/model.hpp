@@ -333,6 +333,16 @@ class Model
     {
         return static_cast<unsigned>(catalog_.size());
     }
+    // What the source holds: its live channels, and its films and shows when known.
+    struct CatalogCounts
+    {
+        unsigned channels = 0;
+        std::optional<unsigned> movies, shows;
+    };
+    const CatalogCounts &counts() const
+    {
+        return counts_;
+    }
     // A channel as the catalog holds it: read it and let it go (the texts are
     // the catalog's own, and a download replaces the catalog).
     iptv::ChannelView channel(unsigned index) const
@@ -767,6 +777,9 @@ class Model
     bool next_home_episode(const PlayRequest &request);
     VodLibrary search_movies_, search_shows_;
     bool searching_ = false, vod_overview_ = false;
+    CatalogCounts counts_;
+    bool vod_was_busy_ = false;
+    void refresh_counts();
     bool search_busy() const
     {
         return search_movies_.busy() || search_shows_.busy();

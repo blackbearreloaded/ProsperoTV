@@ -388,6 +388,66 @@ TEST_F(VodTest, UnifiedSearchLoadsBothKindsWithoutChangingBrowseAndRoutesSafely)
     model.close();
 }
 
+TEST_F(VodTest, SourceCountsCoverChannelsFilmsAndShows)
+{
+    ptv::Model model(dir);
+    ASSERT_TRUE(model.open());
+    ASSERT_TRUE(settle(model));
+    EXPECT_EQ(model.counts().channels, 1u);
+    EXPECT_FALSE(model.counts().movies.has_value()); // no saved lists yet
+    EXPECT_FALSE(model.counts().shows.has_value());
+    model.set_vod_overview(true);
+    for (int i = 0; i < 600 && model.search_loading(); ++i)
+    {
+        model.poll();
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+    ASSERT_FALSE(model.search_loading()) << model.search_status();
+    model.poll();
+    EXPECT_EQ(model.counts().movies, 2u);
+    EXPECT_EQ(model.counts().shows, 1u);
+    model.close();
+    // The saved lists count on the next start, without being read in full.
+    ptv::Model again(dir);
+    ASSERT_TRUE(again.open());
+    EXPECT_EQ(again.counts().movies, 2u);
+    EXPECT_EQ(again.counts().shows, 1u);
+    again.close();
+}
+TEST_F(VodTest, PlaylistCountsItsLiveChannelsFilmsAndShows)
+{
+    const std::string playlist = dir + "/plus.m3u";
+    std::ofstream(playlist) << "#EXTM3U\n"
+                               "#EXTINF:-1 group-title=\"News\",Live\n"
+                               "https://provider.invalid/sub/user/pass/1.ts\n"
+                               "#EXTINF:-1 group-title=\"Movies\",Film one\n"
+                               "https://provider.invalid/sub/movie/user/pass/42.mkv\n"
+                               "#EXTINF:-1 group-title=\"Movies\",Film two\n"
+                               "https://provider.invalid/sub/movie/user/pass/43.mkv\n"
+                               "#EXTINF:-1 group-title=\"Series\",Show A S01E01\n"
+                               "https://provider.invalid/sub/series/user/pass/501.mkv\n"
+                               "#EXTINF:-1 group-title=\"Series\",Show A S01E02\n"
+                               "https://provider.invalid/sub/series/user/pass/502.mkv\n"
+                               "#EXTINF:-1 group-title=\"Series\",Show B S01E01\n"
+                               "https://provider.invalid/sub/series/user/pass/601.mkv\n";
+    const std::string url = "https://provider.invalid/sub/get.php?username=user&password=pass";
+    host::set_network_response(url, playlist);
+    {
+        ptv::Library library;
+        ASSERT_TRUE(library.open(dir + "/prosperotv-library.sqlite3"));
+        ptv::SavedSource source{4, 1, "Plus", url, {}, {}, {}, ptv::RefreshSchedule::manual};
+        ASSERT_TRUE(library.save_source(&source));
+        ASSERT_TRUE(library.select_source(4));
+    }
+    ptv::Model model(dir);
+    ASSERT_TRUE(model.open());
+    ASSERT_TRUE(settle(model));
+    EXPECT_EQ(model.channel_count(), 6u);
+    EXPECT_EQ(model.counts().channels, 1u);
+    EXPECT_EQ(model.counts().movies, 2u);
+    EXPECT_EQ(model.counts().shows, 2u);
+    model.close();
+}
 TEST_F(VodTest, OpenSearchFollowsInitialAndReplacementPlaylistDownloads)
 {
     const std::string url = "https://provider.invalid/list.m3u";
@@ -1056,7 +1116,8 @@ TEST_F(VodTest, DetailsAskedWhileTheListUpdatesArriveInsteadOfBeingDropped)
     // downloaded, were dropped, and the panel said the provider gave no synopsis.
     std::string info;
     ASSERT_TRUE(iptv::BuildXtreamApiUrl(account, "get_vod_info", &info));
-    reply(info + "&vod_id=10", R"({"info":{"plot":"Arrives anyway"},"movie_data":{"stream_id":10}})");
+    reply(info + "&vod_id=10",
+          R"({"info":{"plot":"Arrives anyway"},"movie_data":{"stream_id":10}})");
     ptv::Model model(dir);
     ASSERT_TRUE(model.open());
     model.vod().select(ptv::VodKind::movies);
@@ -1089,12 +1150,11 @@ TEST_F(VodTest, PlaylistFilmsFromAnXtreamServerGetTheirDetailsFromIt)
     // M3U Plus from an Xtream server names each film <server>/movie/<user>/<password>/<id>.<ext>;
     // the same server answers get_vod_info for it with that account.
     const std::string playlist = dir + "/plus.m3u";
-    std::ofstream(playlist)
-        << "#EXTM3U\n"
-           "#EXTINF:-1 group-title=\"Movies\",Film\n"
-           "https://provider.invalid/sub/movie/user%40home/p%26ss/42.mkv\n"
-           "#EXTINF:-1 group-title=\"Movies\",Elsewhere\n"
-           "https://cdn.invalid/films/elsewhere.mp4\n";
+    std::ofstream(playlist) << "#EXTM3U\n"
+                               "#EXTINF:-1 group-title=\"Movies\",Film\n"
+                               "https://provider.invalid/sub/movie/user%40home/p%26ss/42.mkv\n"
+                               "#EXTINF:-1 group-title=\"Movies\",Elsewhere\n"
+                               "https://cdn.invalid/films/elsewhere.mp4\n";
     const std::string url =
         "https://provider.invalid/sub/get.php?username=user%40home&password=p%26ss&type=m3u_plus";
     host::set_network_response(url, playlist);

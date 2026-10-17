@@ -649,6 +649,75 @@ StoreStatus LoadCatalog(const std::string &path, Catalog *catalog, const StoreLi
     return StoreStatus::ok;
 }
 
+StoreStatus InspectCatalog(const std::string &path, StoreReport *report, std::uint64_t *source_id)
+{
+    SetReport(report, StoreStatus::invalid_argument, 0, 0);
+    if (source_id)
+        *source_id = 0;
+    if (path.empty())
+        return StoreStatus::invalid_argument;
+    const std::size_t bytes = FileSize(path);
+    if (bytes == std::numeric_limits<std::size_t>::max())
+    {
+        SetReport(report, StoreStatus::not_found, 0, 0);
+        return StoreStatus::not_found;
+    }
+    sqlite3 *database = nullptr;
+    const int result = sqlite3_open_v2(path.c_str(), &database,
+                                       SQLITE_OPEN_READONLY | SQLITE_OPEN_FULLMUTEX, nullptr);
+    if (result != SQLITE_OK)
+    {
+        if (database)
+            sqlite3_close_v2(database);
+        const StoreStatus status = MapSqlite(result);
+        SetReport(report, status, 0, bytes);
+        return status;
+    }
+    sqlite3_busy_timeout(database, 2000);
+    sqlite3_stmt *statement = nullptr;
+    bool ok = Prepare(database, "PRAGMA user_version", &statement) &&
+              sqlite3_step(statement) == SQLITE_ROW;
+    const int version = ok ? sqlite3_column_int(statement, 0) : 0;
+    sqlite3_finalize(statement);
+    if (!ok || version < kOldestSchemaVersion || version > kSchemaVersion)
+    {
+        sqlite3_close_v2(database);
+        const StoreStatus status = ok ? StoreStatus::unsupported_version : StoreStatus::corrupt;
+        SetReport(report, status, 0, bytes);
+        return status;
+    }
+    std::uint64_t saved_unix = 0, source = 0;
+    statement = nullptr;
+    if (Prepare(database, "SELECT value FROM metadata WHERE key='source_id'", &statement) &&
+        sqlite3_step(statement) == SQLITE_ROW)
+        source = static_cast<std::uint64_t>(sqlite3_column_int64(statement, 0));
+    sqlite3_finalize(statement);
+    statement = nullptr;
+    if (Prepare(database, "SELECT value FROM metadata WHERE key='saved_unix'", &statement) &&
+        sqlite3_step(statement) == SQLITE_ROW && sqlite3_column_int64(statement, 0) > 0)
+        saved_unix = static_cast<std::uint64_t>(sqlite3_column_int64(statement, 0));
+    sqlite3_finalize(statement);
+    std::size_t count = 0;
+    statement = nullptr;
+    ok = Prepare(database, "SELECT count(*) FROM channels", &statement) &&
+         sqlite3_step(statement) == SQLITE_ROW;
+    if (ok)
+        count = static_cast<std::size_t>(sqlite3_column_int64(statement, 0));
+    sqlite3_finalize(statement);
+    sqlite3_close_v2(database);
+    if (!ok)
+    {
+        SetReport(report, StoreStatus::corrupt, 0, bytes);
+        return StoreStatus::corrupt;
+    }
+    SetReport(report, StoreStatus::ok, count, bytes, saved_unix);
+    if (report)
+        report->catalog_version = static_cast<unsigned>(version);
+    if (source_id)
+        *source_id = source;
+    return StoreStatus::ok;
+}
+
 StoreStatus RecordPlaybackResult(const std::string &path, std::uint64_t source_id,
                                  const std::string &channel_id, bool playable, int result)
 {

@@ -52,6 +52,10 @@ class VodLibrary
     // unused source_line so a large list costs nothing more; 0 when the provider did not say.
     std::uint32_t added(unsigned index) const;
     void request_details(unsigned index);
+    // The saved list file of one kind for this library's source.
+    std::string cache_file(VodKind kind) const;
+    // A playlist's films, and its shows as the Series list groups them.
+    static void playlist_counts(const iptv::Catalog &playlist, unsigned *movies, unsigned *shows);
     bool available() const
     {
         return playlist_ != nullptr || iptv::ValidateXtreamCredentials(account_);

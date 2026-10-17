@@ -385,10 +385,20 @@ void SourcesScreen::draw(ui::Canvas &canvas) const
     }
     if (id == model.selected_source_id())
     {
-        ui::text(draw, fonts.semibold, group_digits(model.channel_count()) + tr(" channels"), left,
-                 735, 28, theme.text);
-        ui::paragraph(draw, fonts.regular, model.source_detail(), left, 785, 22, width, 31,
-                      theme.text_muted, 3);
+        const auto &counts = model.counts();
+        float y = 724;
+        const auto count = [&](const std::string &text)
+        {
+            ui::text(draw, fonts.semibold, text, left, y, 26, theme.text);
+            y += 32;
+        };
+        count(group_digits(counts.channels) + tr(" channels"));
+        if (counts.movies)
+            count(group_digits(*counts.movies) + tr(" movies"));
+        if (counts.shows)
+            count(group_digits(*counts.shows) + tr(" TV shows"));
+        ui::paragraph(draw, fonts.regular, model.source_detail(), left, y + 10, 22, width, 31,
+                      theme.text_muted, 2);
     }
     else
     {
