@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "tv/model.hpp"
 #include "tv/i18n.hpp"
+#include "iptv_store.h"
 
 namespace ptv
 {
@@ -62,6 +63,36 @@ std::optional<unsigned> Model::vod_count(VodKind kind) const
         if (search_vod_allowed(item))
             ++count;
     return count;
+}
+void Model::refresh_counts()
+{
+    counts_ = {};
+    for (const auto channel : catalog_)
+        if (channel.media_kind == iptv::MediaKind::live)
+            ++counts_.channels;
+    if (!vod_.available())
+        return;
+    if (active_source_ == iptv::SourceKind::Custom)
+    {
+        unsigned movies = 0, shows = 0;
+        VodLibrary::playlist_counts(catalog_, &movies, &shows);
+        counts_.movies = movies;
+        counts_.shows = shows;
+        return;
+    }
+    // Xtream lists are counted from their saved files, so a long list is never read for it.
+    const auto saved = [&](VodKind kind) -> std::optional<unsigned>
+    {
+        iptv::StoreReport report;
+        std::uint64_t source = 0;
+        if (iptv::InspectCatalog(vod_.cache_file(kind), &report, &source) !=
+                iptv::StoreStatus::ok ||
+            report.catalog_version < 5 || source != iptv::XtreamSourceId(xtream_))
+            return std::nullopt;
+        return static_cast<unsigned>(report.records);
+    };
+    counts_.movies = saved(VodKind::movies);
+    counts_.shows = saved(VodKind::series);
 }
 bool Model::channel_visible(unsigned index) const
 {

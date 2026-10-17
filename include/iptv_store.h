@@ -58,6 +58,10 @@ StoreStatus SaveCatalog(const std::string &path, const Catalog &catalog,
 StoreStatus LoadCatalog(const std::string &path, Catalog *catalog,
                         const StoreLimits &limits = StoreLimits{}, StoreReport *report = nullptr);
 
+// A saved catalog's record count, save time, version and source without reading its rows.
+StoreStatus InspectCatalog(const std::string &path, StoreReport *report,
+                           std::uint64_t *source_id = nullptr);
+
 StoreStatus RecordPlaybackResult(const std::string &path, std::uint64_t source_id,
                                  const std::string &channel_id, bool playable, int result);
 

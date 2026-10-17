@@ -455,6 +455,11 @@ void Model::poll()
     search_shows_.poll(!home_waiting_ && (searching_ || vod_overview_) && !refreshing() &&
                        !guide_thread_ && !vod_.busy() && !vod_.requested() &&
                        !search_movies_.busy() && !search_movies_.requested());
+    // A finished On Demand download may have changed the saved lists' sizes.
+    const bool vod_busy = vod_.busy() || search_busy();
+    if (vod_was_busy_ && !vod_busy)
+        refresh_counts();
+    vod_was_busy_ = vod_busy;
     if (!home_waiting_ && !vod_.busy() && !vod_.requested() && !search_busy() && !search_pending())
         poll_guide();
     const auto now = platform::unix_time();
@@ -512,6 +517,7 @@ void Model::adopt_catalog()
     vod_.playlist_updated();
     search_movies_.playlist_updated();
     search_shows_.playlist_updated();
+    refresh_counts();
     if (!catalog_.empty())
         (void)library_.observe_channels(selected_source_id_, catalog_, platform::unix_time());
     channel_history_ = library_.channel_history(selected_source_id_, catalog_);
@@ -1475,8 +1481,7 @@ void Model::run_refresh()
     if (pending_network_ == iptv::http::Status::ok && !stopping())
     {
         const iptv::http::RequestControl control{
-            [](void *context)
-            {
+            [](void *context) {
                 return static_cast<const Model *>(context)->stop_requested_.load(
                     std::memory_order_acquire);
             },
@@ -1748,7 +1753,7 @@ void Model::consume_refresh()
         if (has_failure_)
             failure_.can_retry = catalog_.Find(failure_.channel_id) != iptv::Catalog::npos;
         health_[source] = pending_saved_ ? SourceHealth::ready : SourceHealth::stale;
-        const std::string count = group_digits(channel_count()) + tr(" channels");
+        const std::string count = group_digits(counts_.channels) + tr(" channels");
         set_status(pending_saved_ ? tr("Up to date") : tr("Not saved"),
                    pending_saved_ ? Level::ready : Level::warning);
         set_source_text(pending_saved_ ? tr("Up to date") : tr("Downloaded, but not saved"),
@@ -1774,7 +1779,7 @@ void Model::consume_refresh()
             health_[source] = SourceHealth::stale;
             set_status(tr("Saved copy"), Level::warning);
             set_source_text(tr("The update failed"), problem + tr(" Showing the ") +
-                                                         group_digits(channel_count()) +
+                                                         group_digits(counts_.channels) +
                                                          tr(" channels saved on this console."));
             notify(Level::warning, tr("The channel list could not be updated"), problem);
         }

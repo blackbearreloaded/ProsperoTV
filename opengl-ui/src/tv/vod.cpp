@@ -198,15 +198,13 @@ std::string unescape(std::string_view text)
 }
 // <server>/movie/<username>/<password>/<id>.<extension>: how an Xtream server's playlist
 // names a film. The details come from the same server, with the same account.
-bool xtream_movie_address(std::string_view url, iptv::XtreamCredentials *account,
-                          std::string *id)
+bool xtream_movie_address(std::string_view url, iptv::XtreamCredentials *account, std::string *id)
 {
     if (const auto query = url.find_first_of("?#"); query != std::string_view::npos)
         url = url.substr(0, query);
     const auto scheme = url.find("://");
     const auto movie = url.rfind("/movie/");
-    if (scheme == std::string_view::npos || movie == std::string_view::npos ||
-        movie <= scheme + 3)
+    if (scheme == std::string_view::npos || movie == std::string_view::npos || movie <= scheme + 3)
         return false;
     auto rest = url.substr(movie + 7);
     const auto user_end = rest.find('/');
@@ -634,11 +632,34 @@ static std::string playlist_show(std::string_view name)
     }
     return std::string(name);
 }
+void VodLibrary::playlist_counts(const iptv::Catalog &playlist, unsigned *movies, unsigned *shows)
+{
+    unsigned films = 0;
+    std::unordered_set<std::string> series;
+    for (std::size_t i = 0; i < playlist.size(); ++i)
+    {
+        const auto entry = playlist[i];
+        if (entry.media_kind == iptv::MediaKind::movie)
+            ++films;
+        else if (entry.media_kind == iptv::MediaKind::episode)
+            series.insert(std::string(entry.group_title) + "\n" + playlist_show(entry.name));
+    }
+    *movies = films;
+    *shows = static_cast<unsigned>(series.size());
+}
+// The provider ID never becomes a path component.
+static std::string vod_file(const std::string &cache, VodKind kind, const std::string &series)
+{
+    return cache + ".vod-" + std::to_string(static_cast<int>(kind)) + "-" +
+           std::to_string(iptv::CustomSourceId(series)) + ".sqlite3";
+}
 std::string VodLibrary::file() const
 {
-    // The provider ID never becomes a path component.
-    return cache_ + ".vod-" + std::to_string(static_cast<int>(kind_)) + "-" +
-           std::to_string(iptv::CustomSourceId(series_)) + ".sqlite3";
+    return vod_file(cache_, kind_, series_);
+}
+std::string VodLibrary::cache_file(VodKind kind) const
+{
+    return vod_file(cache_, kind, {});
 }
 void VodLibrary::note_scripts()
 {
@@ -877,8 +898,7 @@ void *VodLibrary::work(void *self)
                     v.error_ = tr("The provider metadata cache is full.");
                 }
                 else // a playlist's titles are rebuilt from it: their details stay in memory
-                    v.saved_ok_ =
-                        v.playlist_ || save_vod_metadata(v.file(), v.pending_metadata_);
+                    v.saved_ok_ = v.playlist_ || save_vod_metadata(v.file(), v.pending_metadata_);
             }
             else
                 v.error_ = tr("Title details could not be downloaded.");

@@ -174,6 +174,21 @@ TEST_F(IptvStoreTest, RoundTripsMediaKindsAndReadsVersionFiveAsLive)
     EXPECT_EQ(report.catalog_version, 7u);
 }
 
+TEST_F(IptvStoreTest, InspectsASavedCatalogWithoutReadingItsRows)
+{
+    iptv::StoreReport report;
+    std::uint64_t source = 1;
+    EXPECT_EQ(iptv::InspectCatalog(path_.string(), &report, &source), iptv::StoreStatus::not_found);
+    EXPECT_EQ(source, 0u);
+    ASSERT_EQ(iptv::SaveCatalog(path_.string(), MakeCatalog(5)), iptv::StoreStatus::ok);
+    ASSERT_EQ(iptv::InspectCatalog(path_.string(), &report, &source), iptv::StoreStatus::ok);
+    EXPECT_EQ(report.records, 5u);
+    EXPECT_EQ(report.catalog_version, 7u);
+    EXPECT_GT(report.saved_unix, 0u);
+    EXPECT_EQ(source, kSourceId);
+    EXPECT_EQ(iptv::InspectCatalog("", &report), iptv::StoreStatus::invalid_argument);
+}
+
 TEST_F(IptvStoreTest, ReadsVersionSixWithoutInventingProviderNumbers)
 {
     ASSERT_EQ(iptv::SaveCatalog(path_.string(), MakeCatalog(1)), iptv::StoreStatus::ok);
