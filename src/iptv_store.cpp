@@ -476,9 +476,10 @@ static StoreStatus LoadCatalogFile(const std::string &path, Catalog *catalog,
         return StoreStatus::too_large;
     }
 
+    // One thread reads this connection: no per-call mutex.
     sqlite3 *database = nullptr;
     int result = sqlite3_open_v2(path.c_str(), &database,
-                                 SQLITE_OPEN_READONLY | SQLITE_OPEN_FULLMUTEX, nullptr);
+                                 SQLITE_OPEN_READONLY | SQLITE_OPEN_NOMUTEX, nullptr);
     if (result != SQLITE_OK)
     {
         if (database)
@@ -608,7 +609,7 @@ static StoreStatus LoadCatalogFile(const std::string &path, Catalog *catalog,
     }
     ok = ok && LoadAlternates(database, version, true, limits, &loaded) &&
          LoadAlternates(database, version, false, limits, &loaded);
-    if (ok)
+    if (ok && limits.quick_check)
         ok = QuickCheck(database);
     result = ok ? SQLITE_OK : sqlite3_errcode(database);
     sqlite3_close_v2(database);
@@ -701,7 +702,7 @@ StoreStatus LoadPlaybackResults(const std::string &path, std::uint64_t source_id
 
     sqlite3 *database = nullptr;
     int sqlite_result = sqlite3_open_v2(path.c_str(), &database,
-                                        SQLITE_OPEN_READONLY | SQLITE_OPEN_FULLMUTEX, nullptr);
+                                        SQLITE_OPEN_READONLY | SQLITE_OPEN_NOMUTEX, nullptr);
     if (sqlite_result != SQLITE_OK)
     {
         if (database)

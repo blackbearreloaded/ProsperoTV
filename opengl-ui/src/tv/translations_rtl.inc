@@ -498,6 +498,7 @@
     {"Choose an Xtream account in Sources to browse its movies and TV shows.", {"اختر حساب Xtream من المصادر لتصفح أفلامه ومسلسلاته.", "בחר חשבון Xtream במקורות כדי לעיין בסרטים ובסדרות שלו."}},
     {"Updating the saved list…", {"جارٍ تحديث القائمة المحفوظة…", "מעדכן את הרשימה השמורה…"}},
     {"Loading the provider's list…", {"جارٍ تحميل قائمة المزوّد…", "טוען את רשימת הספק…"}},
+    {"Loading the saved list…", {"جارٍ تحميل القائمة المحفوظة…", "טוען את הרשימה השמורה…"}},
     {"The provider has no titles in this list.", {"لا توجد عناوين لدى المزوّد في هذه القائمة.", "לספק אין כותרים ברשימה זו."}},
     {"The first %u titles of a longer list", {"أول %u عنوان من قائمة أطول", "%u הכותרים הראשונים מרשימה ארוכה יותר"}},
     {"Saved on-demand list", {"قائمة محتوى حسب الطلب محفوظة", "רשימת תוכן לפי דרישה שמורה"}},

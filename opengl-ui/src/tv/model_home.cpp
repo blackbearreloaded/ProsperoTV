@@ -167,12 +167,13 @@ bool Model::play_home(std::string_view id, bool on_demand)
             home_playback_ = item;
             home_source_ = selected_source_id_;
             home_fingerprint_ = source_id(active_source_);
-            if (!home_series_.loaded() && home_series_.requested())
+            if (!home_series_.loaded() && (home_series_.requested() || home_series_.loading()))
             {
+                // A read of the saved episodes is waited for in silence; a download is announced.
                 home_waiting_ = true;
                 home_deadline_ = home_clock() + 10000;
-                notify(Level::busy, tr("Loading episodes before playback"),
-                       tr("Press Circle to cancel."));
+                home_notified_ = false;
+                notify_home_download();
                 return true;
             }
             home_series_.stop();
@@ -187,10 +188,18 @@ bool Model::play_home(std::string_view id, bool on_demand)
     }
     return false;
 }
+void Model::notify_home_download()
+{
+    if (home_notified_ || !home_waiting_ || !home_series_.requested())
+        return;
+    home_notified_ = true;
+    notify(Level::busy, tr("Loading episodes before playback"), tr("Press Circle to cancel."));
+}
 void Model::clear_home_playback()
 {
     home_series_.configure({}, {}, RefreshSchedule::manual);
     home_waiting_ = false;
+    home_notified_ = false;
     home_playback_ = {};
     home_source_ = 0;
     home_fingerprint_ = 0;
@@ -216,6 +225,7 @@ void Model::poll_home_playback()
         home_series_.stop();
     else
         home_series_.poll(!refreshing() && !guide_thread_ && !vod_.busy() && !search_busy());
+    notify_home_download();
     if (home_series_.busy() || home_series_.requested())
         return;
     home_waiting_ = false;

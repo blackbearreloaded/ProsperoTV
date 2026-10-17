@@ -568,6 +568,13 @@ bool VodLibrary::details_loading(std::string_view id) const
 VodLibrary::~VodLibrary()
 {
     stop();
+    if (thread_)
+    {
+        while (!done_.load())
+            platform::sleep_ms(1);
+        platform::thread_join(thread_);
+        thread_ = nullptr;
+    }
 }
 void VodLibrary::configure(iptv::XtreamCredentials account, std::string cache,
                            RefreshSchedule schedule, std::string user_agent, std::string referrer,
@@ -589,6 +596,9 @@ void VodLibrary::configure(iptv::XtreamCredentials account, std::string cache,
     key_.clear();
     catalog_.Clear();
     metadata_.clear();
+    summary_ = {};
+    parked_ = {};
+    light_ = false;
     detail_id_.clear();
     east_asian_ = korean_ = false;
     loaded_ = false;
@@ -694,6 +704,9 @@ void VodLibrary::note_scripts()
         ptv::note_scripts(detail.genre, &east_asian_, &korean_);
     }
 }
+static bool read_vod_cache(const std::string &path, std::uint64_t source_id, iptv::Catalog *catalog,
+                           VodMetadata *metadata, std::uint64_t *saved,
+                           unsigned *catalog_ms = nullptr, unsigned *details_ms = nullptr);
 void VodLibrary::select(VodKind kind, std::string series, bool force)
 {
     if (!available())
@@ -741,41 +754,145 @@ void VodLibrary::select(VodKind kind, std::string series, bool force)
         ++revision_;
         return;
     }
-    if (key == key_ && busy())
-        return;
-    if (key != key_)
+    if (key == key_ && !light_)
     {
+        if (loading())
+        {
+            force_after_load_ |= force;
+            return;
+        }
+        if (busy())
+            return;
+    }
+    else
+    {
+        // The saved list is read on the worker; the interface thread opens no file.
         stop();
+        // Park the list being left in case it is wanted next.
+        Parked leaving;
+        if (loaded_ && !light_ && kind_ != VodKind::episodes)
+        {
+            leaving.key = key_;
+            leaving.kind = kind_;
+            leaving.catalog = std::move(catalog_);
+            leaving.metadata = std::move(metadata_);
+            leaving.summary = std::move(summary_);
+            leaving.saved = saved_;
+            leaving.truncated = truncated_;
+        }
         kind_ = kind;
         series_ = std::move(series);
         key_ = key;
-        iptv::StoreReport report;
-        loaded_ = iptv::LoadCatalog(file(), &catalog_, {.allow_empty = true}, &report) ==
-                      iptv::StoreStatus::ok &&
-                  report.catalog_version >= 5 &&
-                  catalog_.source_id == iptv::XtreamSourceId(account_);
-        if (!loaded_)
-            catalog_.Clear();
-        metadata_ = loaded_ ? load_vod_metadata(file(), catalog_) : VodMetadata{};
-        saved_ = loaded_ ? report.saved_unix : 0;
+        light_ = false;
+        catalog_.Clear();
+        metadata_.clear();
+        summary_ = {};
+        loaded_ = false;
+        saved_ = 0;
+        truncated_ = false;
+        detail_id_.clear();
+        detail_provider_id_.clear();
         note_scripts();
+        const bool parked_wanted = !parked_.key.empty() && parked_.key == key;
+        if (parked_wanted)
+        {
+            catalog_ = std::move(parked_.catalog);
+            metadata_ = std::move(parked_.metadata);
+            summary_ = std::move(parked_.summary);
+            saved_ = parked_.saved;
+            truncated_ = parked_.truncated;
+            loaded_ = true;
+        }
+        parked_ = std::move(leaving);
+        if (parked_wanted)
+        {
+            note_scripts();
+            if (force)
+            {
+                detail_id_.clear();
+                detail_provider_id_.clear();
+            }
+            settle_status(force);
+            ++revision_;
+            diag::event("on-demand parked list back in use: %u titles; heap %zu MB",
+                        static_cast<unsigned>(catalog_.size()), platform::heap_live_bytes() >> 20);
+            return;
+        }
+        load_pending_ = true;
+        force_after_load_ = force;
+        status_ = tr("Loading the saved list…");
         ++revision_;
-        if (loaded_)
-            diag::event("on-demand saved list in use: %u titles, %zu with details; heap %zu MB",
-                        static_cast<unsigned>(catalog_.size()), metadata_.size(),
-                        platform::heap_live_bytes() >> 20);
+        return;
     }
     if (force)
     {
         detail_id_.clear();
         detail_provider_id_.clear();
     }
+    settle_status(force);
+}
+// Once a list is in place (or found missing): whether it is refreshed now, and what to say.
+void VodLibrary::settle_status(bool force)
+{
     if (force || !loaded_ || refresh_due(schedule_, saved_, platform::unix_time()))
         requested_ = true;
+    const bool empty = light_ ? summary_.titles == 0 : catalog_.empty();
     status_ = requested_
                   ? (loaded_ ? tr("Updating the saved list…") : tr("Loading the provider's list…"))
-              : catalog_.empty() ? tr("The provider has no titles in this list.")
-                                 : tr("Saved on-demand list");
+              : empty ? tr("The provider has no titles in this list.")
+                      : tr("Saved on-demand list");
+}
+void VodLibrary::select_counts(VodKind kind, bool force)
+{
+    if (!available())
+        return;
+    if (playlist_)
+    {
+        select(kind, {}, force);
+        summary_ = vod_summary(catalog_, 0);
+        return;
+    }
+    const auto key = std::to_string(static_cast<int>(kind)) + ":";
+    if (key == key_ && light_)
+    {
+        if (busy())
+            return;
+    }
+    else
+    {
+        // A list held in full gives its summary before it goes; otherwise the cache does.
+        const bool held = key == key_ && loaded_ && !loading();
+        if (held)
+            summary_ = vod_summary(catalog_, saved_);
+        stop();
+        kind_ = kind;
+        series_.clear();
+        key_ = key;
+        light_ = true;
+        catalog_.Clear();
+        metadata_.clear();
+        parked_ = {};
+        detail_id_.clear();
+        detail_provider_id_.clear();
+        east_asian_ = korean_ = false;
+        if (!held)
+        {
+            // A file read, however small: the worker.
+            summary_ = {};
+            loaded_ = false;
+            saved_ = 0;
+            load_pending_ = true;
+            force_after_load_ = force;
+            ++revision_;
+            return;
+        }
+        loaded_ = summary_.valid && summary_.source_id == iptv::XtreamSourceId(account_);
+        if (!loaded_)
+            summary_ = {};
+        saved_ = loaded_ ? summary_.saved_unix : 0;
+        ++revision_;
+    }
+    settle_status(force);
 }
 void VodLibrary::poll(bool can_download)
 {
@@ -783,39 +900,61 @@ void VodLibrary::poll(bool can_download)
     {
         platform::thread_join(thread_);
         thread_ = nullptr;
-        if (ok_)
-        {
-            metadata_ = std::move(pending_metadata_);
-            if (detail_id_.empty())
-                catalog_ = std::move(pending_);
-            loaded_ = true;
-            note_scripts();
-            if (detail_id_.empty())
-            {
-                saved_ = platform::unix_time();
-                truncated_ = pending_truncated_;
-            }
-            status_ = catalog_.empty() ? tr("The provider has no titles in this list.")
-                      : saved_ok_      ? tr("On-demand list up to date")
-                                       : tr("List loaded, but it could not be saved.");
-            if (truncated_ && !catalog_.empty())
-            {
-                char text[160];
-                std::snprintf(text, sizeof(text), tr("The first %u titles of a longer list"),
-                              static_cast<unsigned>(catalog_.size()));
-                status_ = text;
-            }
-        }
+        if (load_from_disk_)
+            finish_load();
         else
-            status_ = error_ + (loaded_ ? tr(" Showing the saved titles.") : "");
-        pending_.Clear();
-        pending_metadata_.clear();
-        detail_id_.clear();
-        detail_provider_id_.clear();
-        ++revision_;
-        diag::event("on-demand download finished: %s; %u titles, %zu with details; heap %zu MB",
-                    status_.c_str(), static_cast<unsigned>(catalog_.size()), metadata_.size(),
-                    platform::heap_live_bytes() >> 20);
+        {
+            if (ok_)
+            {
+                if (light_)
+                {
+                    // The counts alone are kept; the list is in the cache.
+                    summary_ = vod_summary(pending_, platform::unix_time());
+                    saved_ = summary_.saved_unix;
+                }
+                else
+                {
+                    metadata_ = std::move(pending_metadata_);
+                    if (detail_id_.empty())
+                        catalog_ = std::move(pending_);
+                    note_scripts();
+                    if (detail_id_.empty())
+                    {
+                        saved_ = platform::unix_time();
+                        truncated_ = pending_truncated_;
+                        summary_ = vod_summary(catalog_, saved_);
+                    }
+                }
+                loaded_ = true;
+                const bool empty = light_ ? summary_.titles == 0 : catalog_.empty();
+                status_ = empty       ? tr("The provider has no titles in this list.")
+                          : saved_ok_ ? tr("On-demand list up to date")
+                                      : tr("List loaded, but it could not be saved.");
+                if (truncated_ && !light_ && !catalog_.empty())
+                {
+                    char text[160];
+                    std::snprintf(text, sizeof(text), tr("The first %u titles of a longer list"),
+                                  static_cast<unsigned>(catalog_.size()));
+                    status_ = text;
+                }
+            }
+            else
+                status_ = error_ + (loaded_ ? tr(" Showing the saved titles.") : "");
+            pending_.Clear();
+            pending_metadata_.clear();
+            detail_id_.clear();
+            detail_provider_id_.clear();
+            ++revision_;
+            diag::event("on-demand download finished: %s; %u titles, %zu with details; heap %zu MB",
+                        status_.c_str(),
+                        light_ ? summary_.titles : static_cast<unsigned>(catalog_.size()),
+                        metadata_.size(), platform::heap_live_bytes() >> 20);
+        }
+    }
+    if (load_pending_ && !thread_)
+    {
+        start_load();
+        return;
     }
     if (thread_)
         return;
@@ -845,6 +984,8 @@ void VodLibrary::start()
     ok_ = saved_ok_ = false;
     stop_.store(false);
     done_.store(false);
+    if (detail_id_.empty())
+        parked_ = {}; // room for the list on its way
     diag::event("on-demand download starting: %s%s",
                 detail_id_.empty() ? (kind_ == VodKind::movies   ? "films"
                                       : kind_ == VodKind::series ? "shows"
@@ -864,10 +1005,23 @@ void VodLibrary::stop()
 {
     requested_ = false;
     wanted_id_.clear();
+    load_pending_ = false;
+    force_after_load_ = false;
     if (!thread_)
     {
         detail_id_.clear();
         detail_provider_id_.clear();
+        return;
+    }
+    if (load_from_disk_)
+    {
+        // A cache read cannot be interrupted: wait for it and let its result go.
+        while (!done_.load())
+            platform::sleep_ms(1);
+        platform::thread_join(thread_);
+        thread_ = nullptr;
+        abandon_load_ = true;
+        finish_load();
         return;
     }
     diag::event("on-demand download stopped before it finished");
@@ -879,9 +1033,122 @@ void VodLibrary::stop()
     }
     poll(false);
 }
+// The saved list and its details; false when missing, too old, or another source's.
+static bool read_vod_cache(const std::string &path, std::uint64_t source_id, iptv::Catalog *catalog,
+                           VodMetadata *metadata, std::uint64_t *saved, unsigned *catalog_ms,
+                           unsigned *details_ms)
+{
+    iptv::StoreReport report;
+    catalog->Clear();
+    metadata->clear();
+    const auto started = platform::monotonic_us();
+    const bool ok = iptv::LoadCatalog(path, catalog, {.allow_empty = true, .quick_check = false},
+                                      &report) == iptv::StoreStatus::ok &&
+                    report.catalog_version >= 5 && catalog->source_id == source_id;
+    const auto read = platform::monotonic_us();
+    if (ok)
+        *metadata = load_vod_metadata(path, *catalog);
+    else
+        catalog->Clear();
+    *saved = ok ? report.saved_unix : 0;
+    if (catalog_ms)
+        *catalog_ms = static_cast<unsigned>((read - started) / 1000);
+    if (details_ms)
+        *details_ms = static_cast<unsigned>((platform::monotonic_us() - read) / 1000);
+    return ok;
+}
+void VodLibrary::start_load()
+{
+    load_pending_ = false;
+    load_from_disk_ = true;
+    abandon_load_ = false;
+    load_path_ = file();
+    load_source_id_ = iptv::XtreamSourceId(account_);
+    ok_ = saved_ok_ = false;
+    stop_.store(false);
+    done_.store(false);
+    thread_ = platform::thread_start(work, this, 2u * 1024u * 1024u, "ptv-vod");
+    if (!thread_)
+    {
+        load_from_disk_ = false;
+        status_ = tr("The on-demand download could not start.");
+        ++revision_;
+    }
+}
+void VodLibrary::finish_load()
+{
+    load_from_disk_ = false;
+    const bool abandoned = abandon_load_;
+    abandon_load_ = false;
+    if (!abandoned && light_)
+    {
+        // The counts alone were read.
+        summary_ = ok_ ? std::move(pending_summary_) : VodSummary{};
+        loaded_ = ok_;
+        saved_ = loaded_ ? summary_.saved_unix : 0;
+        settle_status(force_after_load_);
+        force_after_load_ = false;
+        if (loaded_)
+            diag::event("on-demand %s counted from the saved list: %u titles in %zu categories",
+                        kind_ == VodKind::movies ? "films" : "shows", summary_.titles,
+                        summary_.categories.size());
+        pending_summary_ = {};
+        ++revision_;
+        return;
+    }
+    if (!abandoned)
+    {
+        if (ok_)
+        {
+            catalog_ = std::move(pending_);
+            metadata_ = std::move(pending_metadata_);
+            loaded_ = true;
+            saved_ = pending_saved_;
+            summary_ = vod_summary(catalog_, saved_);
+        }
+        else
+        {
+            catalog_.Clear();
+            metadata_.clear();
+            loaded_ = false;
+            saved_ = 0;
+            summary_ = {};
+        }
+        note_scripts();
+        if (force_after_load_)
+        {
+            detail_id_.clear();
+            detail_provider_id_.clear();
+        }
+        settle_status(force_after_load_);
+        force_after_load_ = false;
+        if (loaded_)
+            diag::event("on-demand saved list in use: %u titles, %zu with details, read in %u + "
+                        "%u ms; heap %zu MB",
+                        static_cast<unsigned>(catalog_.size()), metadata_.size(), load_catalog_ms_,
+                        load_details_ms_, platform::heap_live_bytes() >> 20);
+    }
+    pending_.Clear();
+    pending_metadata_.clear();
+    ++revision_;
+}
 void *VodLibrary::work(void *self)
 {
     auto &v = *static_cast<VodLibrary *>(self);
+    if (v.load_from_disk_)
+    {
+        if (v.light_)
+        {
+            v.pending_summary_ = load_vod_summary(v.load_path_);
+            v.ok_ = v.pending_summary_.valid && v.pending_summary_.source_id == v.load_source_id_;
+        }
+        else
+            v.ok_ =
+                read_vod_cache(v.load_path_, v.load_source_id_, &v.pending_, &v.pending_metadata_,
+                               &v.pending_saved_, &v.load_catalog_ms_, &v.load_details_ms_);
+        v.done_.store(true);
+        return nullptr;
+    }
     const iptv::http::RequestControl control{
         [](void *self) { return static_cast<VodLibrary *>(self)->stop_.load(); }, &v};
     if (platform::network_init() == iptv::http::Status::ok)
@@ -967,9 +1234,11 @@ void *VodLibrary::work(void *self)
                         ++it;
                     }
                 }
-                v.saved_ok_ = iptv::SaveCatalog(v.file(), v.pending_, {.allow_empty = true}) ==
-                                  iptv::StoreStatus::ok &&
-                              save_vod_metadata(v.file(), v.pending_metadata_);
+                v.saved_ok_ =
+                    iptv::SaveCatalog(v.file(), v.pending_, {.allow_empty = true}) ==
+                        iptv::StoreStatus::ok &&
+                    save_vod_metadata(v.file(), v.pending_metadata_) &&
+                    save_vod_summary(v.file(), vod_summary(v.pending_, platform::unix_time()));
             }
         }
         platform::network_shutdown();

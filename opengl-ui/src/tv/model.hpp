@@ -760,8 +760,9 @@ class Model
     ResumeItem home_playback_;
     std::int64_t home_source_ = 0;
     std::uint64_t home_fingerprint_ = 0;
-    bool home_waiting_ = false;
+    bool home_waiting_ = false, home_notified_ = false;
     std::uint64_t home_deadline_ = 0;
+    void notify_home_download();
     void clear_home_playback();
     void poll_home_playback();
     bool next_home_episode(const PlayRequest &request);

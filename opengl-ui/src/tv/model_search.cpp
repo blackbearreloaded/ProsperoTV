@@ -11,8 +11,7 @@ void Model::begin_search()
     if (searching_)
         return;
     searching_ = true;
-    if (vod_overview_)
-        return;
+    // A search needs the lists themselves.
     search_movies_.configure_like(vod_);
     search_shows_.configure_like(vod_);
     search_movies_.select(VodKind::movies);
@@ -22,7 +21,12 @@ void Model::end_search()
 {
     searching_ = false;
     if (vod_overview_)
+    {
+        // Back to the counts alone.
+        search_movies_.select_counts(VodKind::movies);
+        search_shows_.select_counts(VodKind::series);
         return;
+    }
     search_movies_.stop();
     search_shows_.stop();
 }
@@ -42,10 +46,19 @@ void Model::set_vod_overview(bool active, bool force)
     }
     if (!searching_ || force)
     {
+        // The browser may have refreshed a shared cache: read the summaries again.
         search_movies_.configure_like(vod_, true);
         search_shows_.configure_like(vod_, true);
-        search_movies_.select(VodKind::movies, {}, force);
-        search_shows_.select(VodKind::series, {}, force);
+        if (searching_)
+        {
+            search_movies_.select(VodKind::movies, {}, force);
+            search_shows_.select(VodKind::series, {}, force);
+        }
+        else
+        {
+            search_movies_.select_counts(VodKind::movies, force);
+            search_shows_.select_counts(VodKind::series, force);
+        }
     }
 }
 std::optional<unsigned> Model::vod_count(VodKind kind) const
@@ -55,6 +68,26 @@ std::optional<unsigned> Model::vod_count(VodKind kind) const
     if (active_source_ == iptv::SourceKind::Custom && !has_catalog())
         return std::nullopt;
     const auto &library = kind == VodKind::movies ? search_movies_ : search_shows_;
+    if (library.summary().valid)
+    {
+        // Hidden categories and the parental rules apply per category.
+        unsigned count = 0;
+        for (const auto &category : library.summary().categories)
+        {
+            if (category_hidden(category.name))
+                continue;
+            iptv::ChannelView view{};
+            view.group_title = category.name;
+            view.media_kind =
+                kind == VodKind::movies ? iptv::MediaKind::movie : iptv::MediaKind::episode;
+            if (content_allowed(view))
+                count += category.titles - category.adult;
+            view.adult = true;
+            if (category.adult && content_allowed(view))
+                count += category.adult;
+        }
+        return count;
+    }
     if (!library.loaded())
         return std::nullopt;
     unsigned count = 0;

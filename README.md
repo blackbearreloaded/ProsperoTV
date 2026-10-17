@@ -126,6 +126,9 @@
 - See the provider's newest movies and shows first in every category, by the
   date an Xtream provider added them; titles it gives no date follow by title,
   so an M3U playlist is listed by title.
+- Open Movies or TV shows from the saved copy, read in the background while
+  the status line says so; the On demand menu counts both without loading
+  either, and switching between them keeps the list left at hand.
 - Play H.264 and HEVC in MP4 or Matroska, up to 4K.
 
 ### While watching

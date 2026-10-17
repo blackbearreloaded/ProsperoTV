@@ -9,6 +9,7 @@
 #include <atomic>
 #include <string>
 #include <map>
+#include <unordered_map>
 
 namespace ptv
 {
@@ -23,9 +24,26 @@ struct VodDetails
     std::string plot, cast, genre, year, rating, poster;
     bool complete = false;
 };
-using VodMetadata = std::map<std::string, VodDetails>;
+using VodMetadata = std::unordered_map<std::string, VodDetails>;
 bool save_vod_metadata(const std::string &path, const VodMetadata &metadata);
 VodMetadata load_vod_metadata(const std::string &path, const iptv::Catalog &catalog);
+// A list's titles per category, adult ones apart: the On Demand menu counts from this.
+struct VodSummary
+{
+    struct Category
+    {
+        std::string name;
+        unsigned titles = 0, adult = 0;
+    };
+    std::vector<Category> categories;
+    unsigned titles = 0;
+    std::uint64_t saved_unix = 0, source_id = 0;
+    bool valid = false;
+};
+VodSummary vod_summary(const iptv::Catalog &catalog, std::uint64_t saved_unix);
+// Saved beside the catalog in its cache file.
+bool save_vod_summary(const std::string &path, const VodSummary &summary);
+VodSummary load_vod_summary(const std::string &path);
 std::vector<std::string> vod_genres(std::string_view genres);
 // Past the limit (the catalog's default, or `limit` if smaller) the first titles are kept.
 bool load_vod(const iptv::XtreamCredentials &account, VodKind kind, std::string_view series,
@@ -46,9 +64,20 @@ class VodLibrary
     void configure_like(const VodLibrary &source, bool reload = false);
     std::size_t find_series(std::string_view series, std::uint64_t source) const;
     void playlist_updated();
+    // The list itself, read from its cache on the worker (loading() until in place).
     void select(VodKind kind, std::string series = {}, bool force = false);
+    // The counts only: the summary from the cache, or a download that leaves just that.
+    void select_counts(VodKind kind, bool force = false);
     void poll(bool can_download);
     void stop();
+    const VodSummary &summary() const
+    {
+        return summary_;
+    }
+    bool loading() const
+    {
+        return load_pending_ || (thread_ != nullptr && load_from_disk_);
+    }
     const VodDetails &details(std::string_view id) const;
     // When the provider added a movie or show (Unix seconds), kept in the row's otherwise
     // unused source_line so a large list costs nothing more; 0 when the provider did not say.
@@ -60,7 +89,7 @@ class VodLibrary
     }
     bool busy() const
     {
-        return thread_ != nullptr;
+        return thread_ != nullptr || load_pending_;
     }
     bool requested() const
     {
@@ -105,6 +134,27 @@ class VodLibrary
     static void *work(void *);
     std::string file() const;
     void note_scripts();
+    void start_load();
+    void finish_load();
+    void settle_status(bool force);
+    VodSummary summary_, pending_summary_;
+    // The list last left for another; dropped when a download starts.
+    struct Parked
+    {
+        std::string key;
+        VodKind kind = VodKind::movies;
+        iptv::Catalog catalog;
+        VodMetadata metadata;
+        VodSummary summary;
+        std::uint64_t saved = 0;
+        bool truncated = false;
+    };
+    Parked parked_;
+    std::string load_path_;
+    std::uint64_t load_source_id_ = 0, pending_saved_ = 0;
+    unsigned load_catalog_ms_ = 0, load_details_ms_ = 0;
+    bool light_ = false, load_pending_ = false, load_from_disk_ = false, abandon_load_ = false,
+         force_after_load_ = false;
     iptv::XtreamCredentials account_;
     const iptv::Catalog *playlist_ = nullptr;
     std::string cache_, series_, key_, status_, user_agent_, referrer_, extra_headers_;

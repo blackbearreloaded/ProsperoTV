@@ -89,6 +89,27 @@ class VodTest : public ::testing::Test
         }
         return false;
     }
+    // The menu's counts come from summaries read on the worker.
+    void settle_counts(ptv::Model &model)
+    {
+        for (int i = 0; i < 500 && model.search_loading(); ++i)
+        {
+            model.poll();
+            std::this_thread::sleep_for(std::chrono::milliseconds(2));
+        }
+    }
+    // Home's resume reads a show's episodes on the worker before it asks for playback.
+    bool await_play(ptv::Model &model, ptv::PlayRequest *request)
+    {
+        for (int i = 0; i < 500; ++i)
+        {
+            if (model.take_play_request(request))
+                return true;
+            model.poll();
+            std::this_thread::sleep_for(std::chrono::milliseconds(2));
+        }
+        return false;
+    }
     const iptv::XtreamCredentials account{"https://provider.invalid/sub", "user@home", "p&ss"};
     std::string dir;
     int number = 0;
@@ -176,7 +197,7 @@ TEST_F(VodTest, HomeEpisodesRetainTheirShowsParentalPolicyAcrossRestart)
     EXPECT_EQ(model.view.vod_series_group, "Another category");
     EXPECT_FALSE(model.view.vod_series_adult);
     ptv::PlayRequest resumed;
-    ASSERT_TRUE(model.take_play_request(&resumed));
+    ASSERT_TRUE(await_play(model, &resumed));
     EXPECT_EQ(resumed.series_id, "20");
     model.parental_action(ptv::Model::ParentalAction::set_pin);
     model.poll();
@@ -211,10 +232,11 @@ TEST_F(VodTest, ColdHomeEpisodeAutoplayUsesIndependentSavedSeries)
     ptv::Model model(dir);
     ASSERT_TRUE(model.open());
     model.vod().select(ptv::VodKind::movies);
+    ASSERT_TRUE(settle(model)); // the saved list is read on the worker
     ASSERT_EQ(model.vod().catalog().size(), 2u);
     ASSERT_TRUE(model.play_home(id, true));
     ptv::PlayRequest request;
-    ASSERT_TRUE(model.take_play_request(&request));
+    ASSERT_TRUE(await_play(model, &request));
     EXPECT_EQ(request.start_position_us, 12000000u);
     EXPECT_EQ(model.vod().catalog()[0].name, "Alpha movie");
     model.close(); // Foreground playback closes the menu workers.
@@ -542,6 +564,82 @@ TEST_F(VodTest, LeavesOutAnEntryTheReaderRefusesAndKeepsTheRest)
     EXPECT_EQ(catalog[1].name, "Third");
 }
 
+TEST_F(VodTest, CountsComeFromTheSavedSummaryAndTheListIsReadOnTheWorker)
+{
+    response("get_vod_categories", R"([{"category_id":3,"category_name":"Movies"}])");
+    response(
+        "get_vod_streams",
+        R"([{"stream_id":10,"name":"First","category_id":3},{"stream_id":11,"name":"Second","category_id":3,"is_adult":"1"}])");
+    const auto settle = [](ptv::VodLibrary &library)
+    {
+        for (int i = 0; i < 2000 && (library.busy() || library.requested()); ++i)
+        {
+            library.poll(true);
+            std::this_thread::sleep_for(std::chrono::milliseconds(2));
+        }
+        return !library.busy() && !library.requested();
+    };
+    ptv::VodLibrary counts;
+    counts.configure(account, dir + "/prosperotv-xtream-catalog.sqlite3",
+                     ptv::RefreshSchedule::manual);
+    counts.select_counts(ptv::VodKind::movies);
+    EXPECT_FALSE(counts.summary().valid); // nothing saved yet: the download brings the counts
+    ASSERT_TRUE(settle(counts));
+    ASSERT_TRUE(counts.summary().valid);
+    EXPECT_EQ(counts.summary().titles, 2u);
+    ASSERT_EQ(counts.summary().categories.size(), 1u);
+    EXPECT_EQ(counts.summary().categories[0].name, "Movies");
+    EXPECT_EQ(counts.summary().categories[0].adult, 1u);
+    EXPECT_TRUE(counts.catalog().empty()); // the list itself is not held
+    EXPECT_TRUE(counts.loaded());
+    // Another library finds the summary in the cache without reading the list.
+    ptv::VodLibrary again;
+    again.configure(account, dir + "/prosperotv-xtream-catalog.sqlite3",
+                    ptv::RefreshSchedule::manual);
+    again.select_counts(ptv::VodKind::movies);
+    EXPECT_TRUE(again.loading()); // the summary is a file read too: the worker
+    ASSERT_TRUE(settle(again));
+    EXPECT_TRUE(again.summary().valid);
+    EXPECT_EQ(again.summary().titles, 2u);
+    EXPECT_FALSE(again.requested());
+    // The list itself is read on the worker: loading() first, then in place.
+    again.select(ptv::VodKind::movies);
+    EXPECT_TRUE(again.loading());
+    EXPECT_FALSE(again.loaded());
+    ASSERT_TRUE(settle(again));
+    EXPECT_TRUE(again.loaded());
+    ASSERT_EQ(again.catalog().size(), 2u);
+    EXPECT_EQ(again.catalog()[1].name, "Second");
+    EXPECT_EQ(again.summary().titles, 2u);
+    // Back to the counts: the list goes, the summary stays.
+    again.select_counts(ptv::VodKind::movies);
+    EXPECT_TRUE(again.catalog().empty());
+    EXPECT_EQ(again.summary().titles, 2u);
+    EXPECT_FALSE(again.requested());
+    // Films, then shows, then films again: the films were parked and come back at once.
+    response("get_series_categories", R"([{"category_id":5,"category_name":"Shows"}])");
+    response("get_series", R"([{"series_id":20,"name":"A show","category_id":5}])");
+    again.select_counts(ptv::VodKind::series); // the shows' cache, so no download follows
+    ASSERT_TRUE(settle(again));
+    EXPECT_EQ(again.summary().titles, 1u);
+    again.select(ptv::VodKind::movies);
+    ASSERT_TRUE(settle(again));
+    ASSERT_EQ(again.catalog().size(), 2u);
+    again.select(ptv::VodKind::series);
+    EXPECT_TRUE(again.loading());
+    ASSERT_TRUE(settle(again));
+    ASSERT_EQ(again.catalog().size(), 1u);
+    EXPECT_EQ(again.catalog()[0].name, "A show");
+    again.select(ptv::VodKind::movies);
+    EXPECT_FALSE(again.loading());
+    EXPECT_TRUE(again.loaded());
+    ASSERT_EQ(again.catalog().size(), 2u);
+    EXPECT_EQ(again.catalog()[0].name, "First");
+    again.select(ptv::VodKind::series);
+    EXPECT_FALSE(again.loading());
+    ASSERT_EQ(again.catalog().size(), 1u);
+}
+
 TEST_F(VodTest, LoadsBomPrefixedListsAndIndexedSeasonArrays)
 {
     response("get_vod_categories",
@@ -651,6 +749,7 @@ TEST_F(VodTest, OverviewCountsTitlesAndDisablesOnlyConfirmedEmptyLists)
     ASSERT_TRUE(model.vod().catalog().empty()) << model.vod().status();
     ASSERT_TRUE(screen.back());
     ASSERT_EQ(model.view.vod_kind, -1);
+    settle_counts(model);
     EXPECT_EQ(model.vod_count(ptv::VodKind::movies), 0u);
     model.use_saved_source(1);
     screen.update();
@@ -695,6 +794,7 @@ TEST_F(VodTest, OverviewFailureIsUnknownAndRefreshCanRecoverFromEmpty)
     model.begin_search();
     model.end_search();
     EXPECT_FALSE(model.searching());
+    settle_counts(model);
     EXPECT_EQ(model.vod_count(ptv::VodKind::series), 1u);
     model.close();
 }
@@ -764,13 +864,23 @@ TEST_F(VodTest, KeepsManualCachesAcrossRestartAndRetainsThemAfterMalformedRefres
         ASSERT_EQ(model.vod().catalog().size(), 2u);
         model.close();
     }
-    const auto requests = host::requests().size();
+    // The programme guide may download once the list is in place; only on-demand requests count.
+    const auto vod_requests = []
+    {
+        std::size_t count = 0;
+        for (const auto &record : host::requests())
+            if (record.url.find("xmltv") == std::string::npos)
+                ++count;
+        return count;
+    };
+    const auto requests = vod_requests();
     ptv::Model again(dir);
     ASSERT_TRUE(again.open());
     again.vod().select(ptv::VodKind::movies);
+    ASSERT_TRUE(settle(again)); // the saved list is read on the worker
     EXPECT_FALSE(again.vod().requested());
     EXPECT_EQ(again.vod().catalog().size(), 2u);
-    EXPECT_EQ(host::requests().size(), requests);
+    EXPECT_EQ(vod_requests(), requests);
     response("get_vod_streams", "[{\"stream_id\":1,");
     again.vod().select(ptv::VodKind::movies, {}, true);
     ASSERT_TRUE(settle(again));
@@ -1589,7 +1699,7 @@ TEST_F(VodTest, HomeInheritsNewLoadedParentPolicyAndKeepsItOffline)
         host::set_keyboard_text("123456");
         model.poll();
         ASSERT_TRUE(model.play_home(id, true));
-        ASSERT_TRUE(model.take_play_request(&request));
+        ASSERT_TRUE(await_play(model, &request));
         model.finish_vod(request, 12000000, 100000000, false);
         model.close();
     }
