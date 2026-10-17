@@ -324,6 +324,11 @@ std::uint64_t unix_time()
     return set != 0 ? set : static_cast<std::uint64_t>(std::time(nullptr));
 }
 
+std::size_t heap_live_bytes()
+{
+    return 0; // the PC has no bounded heap of its own
+}
+
 std::uint64_t monotonic_us()
 {
     const auto set = g_monotonic_us.load();

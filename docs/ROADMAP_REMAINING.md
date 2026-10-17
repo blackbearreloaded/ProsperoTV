@@ -179,7 +179,7 @@ network writes from replacing data still being parsed. Expired positions are
 reported explicitly.
 
 History storage now uses its own bounded anonymous mapping instead of allocating
-512 MiB from the application's 512 MiB heap. Its lifetime remains scoped to the
+512 MiB from the application's own heap (now 1 GiB). Its lifetime remains scoped to the
 history owner, and allocation failure leaves it unavailable. All six existing
 history tests pass under ASan/UBSan with the mapped storage, and the native
 application build passes. Foreground integration and hardware acceptance remain

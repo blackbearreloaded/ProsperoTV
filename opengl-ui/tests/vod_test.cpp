@@ -498,6 +498,50 @@ TEST_F(VodTest, DownloadsNestedCategoriesAndEscapesMovieAndEpisodeCredentials)
     EXPECT_NE(catalog[0].id, movie_id);
 }
 
+TEST_F(VodTest, KeepsTheFirstTitlesOfAListLongerThanTheLimit)
+{
+    response("get_vod_categories", R"([{"category_id":3,"category_name":"Movies"}])");
+    response(
+        "get_vod_streams",
+        R"([{"stream_id":10,"name":"First","category_id":3},{"stream_id":11,"name":"Second","category_id":3},{"stream_id":12,"name":"Third","category_id":3}])");
+    iptv::Catalog catalog;
+    std::string error;
+    bool truncated = true;
+    ASSERT_TRUE(ptv::load_vod(account, ptv::VodKind::movies, {}, &catalog, nullptr, &error, nullptr,
+                              nullptr, &truncated, 2))
+        << error;
+    EXPECT_TRUE(truncated);
+    ASSERT_EQ(catalog.size(), 2u);
+    EXPECT_EQ(catalog[0].name, "First");
+    EXPECT_EQ(catalog[1].name, "Second");
+    EXPECT_TRUE(error.empty());
+    ASSERT_TRUE(ptv::load_vod(account, ptv::VodKind::movies, {}, &catalog, nullptr, &error, nullptr,
+                              nullptr, &truncated, 3))
+        << error;
+    EXPECT_FALSE(truncated);
+    EXPECT_EQ(catalog.size(), 3u);
+}
+
+TEST_F(VodTest, LeavesOutAnEntryTheReaderRefusesAndKeepsTheRest)
+{
+    response("get_vod_categories", R"([{"category_id":3,"category_name":"Movies"}])");
+    const std::string oversized(iptv::kDefaultMaxFieldBytes + 1, 'k');
+    response("get_vod_streams", R"([{"stream_id":10,"name":"First","category_id":3},)"
+                                R"({"stream_id":11,"name":")" +
+                                    oversized + R"(","category_id":3},)" +
+                                    R"({"stream_id":12,"name":"Third","category_id":3}])");
+    iptv::Catalog catalog;
+    std::string error;
+    bool truncated = true;
+    ASSERT_TRUE(ptv::load_vod(account, ptv::VodKind::movies, {}, &catalog, nullptr, &error, nullptr,
+                              nullptr, &truncated))
+        << error;
+    EXPECT_FALSE(truncated);
+    ASSERT_EQ(catalog.size(), 2u);
+    EXPECT_EQ(catalog[0].name, "First");
+    EXPECT_EQ(catalog[1].name, "Third");
+}
+
 TEST_F(VodTest, LoadsBomPrefixedListsAndIndexedSeasonArrays)
 {
     response("get_vod_categories",

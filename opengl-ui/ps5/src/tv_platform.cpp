@@ -4,6 +4,9 @@
 
 #include "tv/platform.hpp"
 
+extern "C" void hui_heap_stats(std::size_t *live_bytes, std::size_t *peak_bytes,
+                               std::size_t *blocks, std::size_t *failures);
+
 #include <ctime>
 #include <limits>
 #include <mutex>
@@ -66,6 +69,13 @@ std::uint64_t unix_time()
 {
     const std::time_t now = std::time(nullptr);
     return now > 0 ? static_cast<std::uint64_t>(now) : 0u;
+}
+
+std::size_t heap_live_bytes()
+{
+    std::size_t live = 0, peak = 0, blocks = 0, failures = 0;
+    hui_heap_stats(&live, &peak, &blocks, &failures);
+    return live;
 }
 
 std::uint64_t monotonic_us()

@@ -540,6 +540,11 @@ warning.
 - A source may hold up to 250,000 channels; a larger one loads its first
   250,000 and says so. A list of that size takes about 75 MiB of memory and
   a minute or more to download from a slow provider.
+- An On Demand list (movies, or shows) may hold up to 250,000 titles; a
+  longer one keeps its first 250,000 and says so. A list of 200,000 films
+  takes about 300 MiB of memory while it is open and a minute and a half
+  to download; an entry the provider sends malformed is left out rather
+  than failing the list.
 - Catalog metadata describes a channel but cannot guarantee that its current
   stream is online, correctly labeled, or compatible with the PS5 decoder.
 

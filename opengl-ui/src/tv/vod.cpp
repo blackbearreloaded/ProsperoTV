@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "tv/i18n.hpp"
 #include "tv/vod.hpp"
+#include "tv/diag.hpp"
 #include "tv/platform.hpp"
 #include "tv/catalog_index.hpp"
 #include "iptv_json.h"
@@ -21,7 +22,8 @@ namespace ptv
 namespace
 {
 using namespace iptv::json;
-constexpr std::size_t kLimit = 100000;
+// The catalog's default; a longer list keeps its first titles and says so.
+constexpr std::size_t kLimit = iptv::kDefaultMaxChannels;
 std::string identifier(std::uint64_t source, VodKind kind, std::string_view id)
 {
     char prefix[48];
@@ -254,8 +256,10 @@ struct Parser
     iptv::Catalog &catalog;
     std::unordered_map<std::string, iptv::XtreamCategory> categories;
     std::unordered_set<std::string> ids;
+    std::size_t limit = kLimit;
     std::size_t text_bytes = 0;
-    bool full = false;
+    std::size_t skipped = 0; // entries the reader refused (a 25 KB title, say): left out
+    bool full = false;       // the list went on past the limit: the titles so far are kept
     VodMetadata *metadata = nullptr;
     std::size_t metadata_bytes = 0;
     VodDetails series_details{};
@@ -336,10 +340,10 @@ struct Parser
         }
         const auto bytes = item.id.size() + item.name.size() + item.url.size() +
                            item.tvg_logo.size() + item.group_title.size();
-        if (catalog.size() >= kLimit || bytes > 96u * 1024u * 1024u - text_bytes)
+        if (full || catalog.size() >= limit || bytes > 96u * 1024u * 1024u - text_bytes)
         {
             full = true;
-            return false;
+            return true;
         }
         text_bytes += bytes;
         fill_missing(details, series_details);
@@ -361,10 +365,13 @@ struct Parser
 
 bool load_vod(const iptv::XtreamCredentials &account, VodKind kind, std::string_view series,
               iptv::Catalog *catalog, const iptv::http::RequestControl *control, std::string *error,
-              VodMetadata *metadata, const iptv::http::RequestHeaders *headers)
+              VodMetadata *metadata, const iptv::http::RequestHeaders *headers, bool *truncated,
+              std::size_t limit)
 {
     if (metadata)
         metadata->clear();
+    if (truncated)
+        *truncated = false;
     if (!catalog || !error)
         return false;
     catalog->Clear();
@@ -377,8 +384,14 @@ bool load_vod(const iptv::XtreamCredentials &account, VodKind kind, std::string_
     catalog->source_id = iptv::XtreamSourceId(account);
     Parser parser{account, kind, *catalog, {}, {}};
     parser.metadata = metadata;
+    if (limit)
+        parser.limit = std::min(limit, kLimit);
     std::string url, reply;
     bool ok = false;
+    const auto started = platform::monotonic_us();
+    iptv::http::FetchResult list_result{};
+    const char *step = "the series";
+    bool categories_ok = true;
     if (kind == VodKind::episodes)
     {
         if (iptv::BuildXtreamSeriesUrl(account, series, &url) &&
@@ -427,9 +440,12 @@ bool load_vod(const iptv::XtreamCredentials &account, VodKind kind, std::string_
         iptv::BuildXtreamApiUrl(
             account, kind == VodKind::movies ? "get_vod_categories" : "get_series_categories",
             &url);
-        if (fetch(url, &reply, control, headers) &&
-            iptv::ParseXtreamCategories(reply, &categories) == iptv::XtreamStatus::ok)
+        step = "the categories";
+        categories_ok = fetch(url, &reply, control, headers) &&
+                        iptv::ParseXtreamCategories(reply, &categories) == iptv::XtreamStatus::ok;
+        if (categories_ok)
         {
+            step = "the list";
             for (const auto &category : categories)
                 parser.categories.emplace(category.id, category);
             iptv::BuildXtreamApiUrl(
@@ -444,18 +460,26 @@ bool load_vod(const iptv::XtreamCredentials &account, VodKind kind, std::string_
                 [](void *self, const char *bytes, std::size_t count)
                 {
                     auto &s = *static_cast<State *>(self);
+                    // An entry the reader refuses is left out; the list goes on.
                     return s.splitter.Feed({bytes, count},
                                            [&](std::string_view item)
                                            {
                                                JsonReader reader(item);
-                                               return s.parser.item(&reader) && reader.Finished();
+                                               if (!s.parser.item(&reader) || !reader.Finished())
+                                                   ++s.parser.skipped;
+                                               return true;
                                            });
                 },
                 &state};
             const auto response = platform::fetch_list(url.c_str(), sink, iptv::http::kMaxListBytes,
                                                        control, headers);
+            list_result = response;
             ok = response.status == iptv::http::Status::ok && splitter.complete() &&
                  splitter.found();
+            if (!ok)
+                step = response.status != iptv::http::Status::ok ? "the list download"
+                       : !splitter.found()                       ? "the list (no list in the reply)"
+                                                                 : "the list (an entry refused)";
         }
     }
     if (ok && metadata && kind == VodKind::episodes)
@@ -474,16 +498,33 @@ bool load_vod(const iptv::XtreamCredentials &account, VodKind kind, std::string_
             }
         }
     }
-    if (control && control->cancelled && control->cancelled(control->context))
+    const bool cancelled = control && control->cancelled && control->cancelled(control->context);
+    if (cancelled)
         ok = false;
+    diag::event("on-demand %s: %s%s after %llu ms; %u titles%s, %zu entries refused, %zu bytes, "
+                "http %d, status %d, native 0x%08x%s; heap %zu MB",
+                kind == VodKind::movies   ? "films"
+                : kind == VodKind::series ? "shows"
+                                          : "episodes",
+                ok ? "loaded" : "failed at ", ok ? "" : step,
+                static_cast<unsigned long long>((platform::monotonic_us() - started) / 1000),
+                static_cast<unsigned>(catalog->size()),
+                parser.full ? " (the first of a longer list)" : "", parser.skipped,
+                list_result.bytes, list_result.http_status, static_cast<int>(list_result.status),
+                static_cast<unsigned>(list_result.native_error),
+                cancelled       ? ", cancelled"
+                : categories_ok ? ""
+                                : ", categories refused",
+                platform::heap_live_bytes() >> 20);
     if (!ok)
     {
         catalog->Clear();
         if (metadata)
             metadata->clear();
-        *error = parser.full ? tr("This on-demand list is too large to load.")
-                             : tr("The provider's on-demand list could not be downloaded.");
+        *error = tr("The provider's on-demand list could not be downloaded.");
     }
+    else if (truncated)
+        *truncated = parser.full;
     return ok;
 }
 
@@ -719,6 +760,10 @@ void VodLibrary::select(VodKind kind, std::string series, bool force)
         saved_ = loaded_ ? report.saved_unix : 0;
         note_scripts();
         ++revision_;
+        if (loaded_)
+            diag::event("on-demand saved list in use: %u titles, %zu with details; heap %zu MB",
+                        static_cast<unsigned>(catalog_.size()), metadata_.size(),
+                        platform::heap_live_bytes() >> 20);
     }
     if (force)
     {
@@ -746,10 +791,20 @@ void VodLibrary::poll(bool can_download)
             loaded_ = true;
             note_scripts();
             if (detail_id_.empty())
+            {
                 saved_ = platform::unix_time();
+                truncated_ = pending_truncated_;
+            }
             status_ = catalog_.empty() ? tr("The provider has no titles in this list.")
                       : saved_ok_      ? tr("On-demand list up to date")
                                        : tr("List loaded, but it could not be saved.");
+            if (truncated_ && !catalog_.empty())
+            {
+                char text[160];
+                std::snprintf(text, sizeof(text), tr("The first %u titles of a longer list"),
+                              static_cast<unsigned>(catalog_.size()));
+                status_ = text;
+            }
         }
         else
             status_ = error_ + (loaded_ ? tr(" Showing the saved titles.") : "");
@@ -758,6 +813,9 @@ void VodLibrary::poll(bool can_download)
         detail_id_.clear();
         detail_provider_id_.clear();
         ++revision_;
+        diag::event("on-demand download finished: %s; %u titles, %zu with details; heap %zu MB",
+                    status_.c_str(), static_cast<unsigned>(catalog_.size()), metadata_.size(),
+                    platform::heap_live_bytes() >> 20);
     }
     if (thread_)
         return;
@@ -787,6 +845,12 @@ void VodLibrary::start()
     ok_ = saved_ok_ = false;
     stop_.store(false);
     done_.store(false);
+    diag::event("on-demand download starting: %s%s",
+                detail_id_.empty() ? (kind_ == VodKind::movies   ? "films"
+                                      : kind_ == VodKind::series ? "shows"
+                                                                 : "episodes")
+                                   : "title details",
+                loaded_ ? " (a saved list is shown meanwhile)" : "");
     thread_ = platform::thread_start(work, this, 2u * 1024u * 1024u, "ptv-vod");
     if (!thread_)
     {
@@ -806,6 +870,7 @@ void VodLibrary::stop()
         detail_provider_id_.clear();
         return;
     }
+    diag::event("on-demand download stopped before it finished");
     stop_.store(true);
     while (!done_.load())
     {
@@ -886,7 +951,7 @@ void *VodLibrary::work(void *self)
         else
         {
             v.ok_ = load_vod(v.account_, v.kind_, v.series_, &v.pending_, &control, &v.error_,
-                             &v.pending_metadata_, &headers);
+                             &v.pending_metadata_, &headers, &v.pending_truncated_);
             if (v.ok_)
             {
                 std::size_t bytes = 0;

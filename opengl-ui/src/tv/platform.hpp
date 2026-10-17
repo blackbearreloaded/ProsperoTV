@@ -30,6 +30,8 @@ void sleep_ms(unsigned milliseconds);
 // Seconds since 1970, or 0 when the clock is not set.
 std::uint64_t unix_time();
 std::uint64_t monotonic_us();
+// Bytes in use on the app's own heap, for the diagnostic log; 0 where there is no such heap.
+std::size_t heap_live_bytes();
 // Copy calendar fields while holding the platform's libc conversion lock.
 bool calendar_time(std::uint64_t seconds, bool local, std::tm &result);
 
